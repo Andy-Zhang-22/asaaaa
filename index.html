@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>電話推廣名單系統</title>
+<meta name="description" content="把電話推廣名單 PDF 轉成可搜尋、可撥號、可追蹤的工作台。資料只存在本機瀏覽器。">
+<meta name="theme-color" content="#0f172a">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>">
+<link rel="stylesheet" href="assets/css/app.css">
+</head>
+<body data-theme="auto">
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">📞</span>
+    <div>
+      <h1>電話推廣名單系統</h1>
+      <p class="brand-sub" id="brandSub">尚未匯入名單</p>
+    </div>
+  </div>
+
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="搜尋公司、統編、負責人、電話、地址、訪談內容…" autocomplete="off">
+    <kbd>/</kbd>
+  </div>
+
+  <div class="topbar-actions">
+    <button id="btnImport" class="btn btn-primary">匯入名單</button>
+    <button id="btnMenu" class="btn btn-ghost" aria-haspopup="true" title="更多">⋯</button>
+    <div id="menu" class="menu" hidden>
+      <button data-act="export-csv">匯出 CSV（含通話紀錄）</button>
+      <button data-act="export-json">下載備份 JSON</button>
+      <button data-act="import-json">還原備份 JSON</button>
+      <hr>
+      <button data-act="theme">切換深色／淺色</button>
+      <button data-act="manage">管理已匯入名單</button>
+      <button data-act="wipe" class="danger">清除所有資料</button>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab is-active" data-tab="today">今日待打 <span class="pill" id="countToday">0</span></button>
+  <button class="tab" data-tab="all">全部名單 <span class="pill" id="countAll">0</span></button>
+  <button class="tab" data-tab="stats">統計</button>
+  <button id="btnFilters" class="tab tab-filters" aria-expanded="false">篩選 ▾</button>
+</nav>
+
+<main class="layout">
+  <aside class="filters" id="filters">
+    <div class="filter-head">
+      <h2>篩選</h2>
+      <button id="btnResetFilters" class="btn btn-tiny">清除</button>
+    </div>
+    <div class="filter-group">
+      <label>聯絡時程</label>
+      <div class="chips" id="fltDue"></div>
+    </div>
+    <div class="filter-group">
+      <label>名單來源</label>
+      <div class="chips" id="fltSource"></div>
+    </div>
+    <div class="filter-group">
+      <label>分級</label>
+      <div class="chips" id="fltGrade"></div>
+    </div>
+    <div class="filter-group">
+      <label>洽談狀態</label>
+      <div class="chips" id="fltOutcome"></div>
+    </div>
+    <div class="filter-group">
+      <label>縣市</label>
+      <div class="chips" id="fltCity"></div>
+    </div>
+    <div class="filter-group">
+      <label>產業別</label>
+      <input id="fltIndustry" type="search" list="industryList" placeholder="輸入產業關鍵字">
+      <datalist id="industryList"></datalist>
+    </div>
+    <div class="filter-group">
+      <label>排序</label>
+      <select id="sortBy">
+        <option value="next">依下次聯絡日</option>
+        <option value="last">依最近聯絡日（新到舊）</option>
+        <option value="grade">依分級</option>
+        <option value="capital">依資本額（高到低）</option>
+        <option value="company">依公司名稱</option>
+      </select>
+    </div>
+  </aside>
+
+  <section class="content">
+    <div id="paneList">
+      <div class="list-head">
+        <span id="listSummary">—</span>
+        <label class="only-open"><input type="checkbox" id="hideBlocked" checked> 隱藏「禁止推廣」</label>
+      </div>
+      <div id="cards" class="cards"></div>
+      <div id="emptyState" class="empty" hidden></div>
+      <button id="btnMore" class="btn btn-block" hidden>載入更多</button>
+    </div>
+
+    <div id="paneStats" class="stats" hidden></div>
+  </section>
+</main>
+
+<!-- 詳細資料抽屜 -->
+<div id="drawer" class="drawer" hidden>
+  <div class="drawer-backdrop" data-close></div>
+  <div class="drawer-panel" role="dialog" aria-modal="true" aria-label="客戶詳細資料">
+    <button class="drawer-close" data-close aria-label="關閉">✕</button>
+    <div id="drawerBody"></div>
+  </div>
+</div>
+
+<!-- 匯入對話框 -->
+<div id="importer" class="drawer" hidden>
+  <div class="drawer-backdrop" data-close></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="匯入名單">
+    <button class="drawer-close" data-close aria-label="關閉">✕</button>
+    <h2>匯入電話推廣名單</h2>
+    <p class="muted">選擇 Google 雲端硬碟「電話推廣名單」資料夾裡的 PDF（可一次多選）。系統會自動還原表格欄位，資料只留在這台裝置。也可以改丟試算表匯出的 CSV。</p>
+    <div id="dropzone" class="dropzone">
+      <strong>把 PDF 拖進來</strong>
+      <span>或</span>
+      <button id="btnPick" class="btn btn-primary">選擇檔案</button>
+      <input id="filePick" type="file" accept="application/pdf,.pdf,text/csv,.csv" multiple hidden>
+    </div>
+    <div id="importLog" class="import-log"></div>
+  </div>
+</div>
+
+<input id="jsonPick" type="file" accept="application/json,.json" hidden>
+<div id="toast" class="toast" hidden></div>
+
+<script src="assets/vendor/pdfjs/pdf.min.js"></script>
+<script src="assets/js/pdf-table.js"></script>
+<script src="assets/js/normalize.js"></script>
+<script src="assets/js/store.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
