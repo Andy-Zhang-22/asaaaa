@@ -277,6 +277,193 @@
     return { rows: out, dropped };
   }
 
+  /* ------------------------------------------------------------------
+   * 內容型態驗證
+   *
+   * 只靠欄位位置對應是脆弱的：PDF 少偵測到一條直線、或表格有合併儲存格，
+   * 整列就會整個平移，訪談內容就跑到「成立年」底下。所以每個欄位都要能
+   * 自己驗證「這格看起來像不像我」，不像就去別格找。
+   * ------------------------------------------------------------------ */
+
+  const COUNTRIES = /^(台灣|臺灣|中國|大陸|中國大陸|香港|澳門|越南|美國|日本|韓國|新加坡|馬來西亞|泰國|印尼|菲律賓|印度|德國|英國|法國|加拿大|澳洲)$/;
+
+  /** 這格是不是「只有日期」（最多兩個日期，沒有別的內容）。 */
+  function dateOnly(text) {
+    const s = squash(toHalfWidth(text));
+    if (!s || s.length > 26) return null;
+    if (!/^[\d\/\-.年月日]+$/.test(s)) return null;
+    return parseDate(s);
+  }
+
+  /**
+   * 每個欄位的驗證器：看得懂就回傳「清理過的值」，看不懂就回傳空字串。
+   * 回傳值而不是布林，是因為儲存格可能黏了鄰欄的內容（例如「2022 1,000」），
+   * 這時候把屬於自己的那一段挑出來，比整格丟掉好。
+   */
+  const VALIDATORS = {
+    taxId: (t) => {
+      const s = squash(t);
+      if (!s || s.length > 24) return '';
+      const m = s.match(/(?:^|[^\d])(\d{8})(?![\d])/);
+      return m ? m[1] : '';
+    },
+    grade: (t) => {
+      const s = squash(t).toUpperCase();
+      return /^[SABC][?？]?$/.test(s) ? s : '';
+    },
+    founded: (t) => {
+      const s = squash(t);
+      if (!s || s.length > 16) return '';               // 長文一定不是年份欄
+      const m = s.match(/(?:19|20)\d{2}/);
+      return m ? m[0] : '';
+    },
+    capital: (t) => {
+      const s = squash(t);
+      return /^[\d,]{1,15}$/.test(s) && /\d/.test(s) ? s : '';
+    },
+    country: (t) => (COUNTRIES.test(squash(t)) ? squash(t) : ''),
+    phone: (t) => {
+      const body = String(t || '').trim();
+      if (!body || body.length > 90) return '';        // 一大段訪談內容裡就算有號碼也不是電話欄
+      return extractPhones(body).length ? body : '';
+    },
+    address: (t) => {
+      const body = String(t || '').trim();
+      const s = squash(body);
+      if (!s || s.length > 160) return '';
+      if (!/[縣市]/.test(s) || !/[區鄉鎮市路街號村里巷弄段樓]/.test(s)) return '';
+      if (/\d{2,3}\/\d{1,2}\/\d{1,2}/.test(s)) return '';   // 有訪談日期 → 是訪談內容
+      return body;
+    },
+    notes: (t) => {
+      const body = String(t || '').trim();
+      if (!body) return '';
+      const s = squash(body);
+      if (/\d{2,4}\/\d{1,2}\/\d{1,2}/.test(s) && s.length > 10) return body;
+      return s.length >= 14 ? body : '';
+    },
+    company: (t) => {
+      const body = String(t || '').replace(/\n/g, '').trim();
+      const s = squash(body);
+      if (!s || s.length > 90) return '';
+      NAME_SUFFIX.lastIndex = 0;
+      if (NAME_SUFFIX.test(s)) return body;
+      // 沒有公司型態字尾的（商號、個人戶）：中文為主、不含日期或長句
+      return /^[\u4e00-\u9fa5A-Za-z0-9()（）\-&.· ]{2,24}$/.test(s) && !/\d{2,4}\/\d{1,2}/.test(s) ? body : '';
+    },
+    industry: (t) => {
+      const body = String(t || '').trim();
+      const s = squash(body);
+      if (!s || s.length > 24) return '';
+      if (/\d{2,4}\/\d{1,2}\/\d{1,2}/.test(s)) return '';
+      if (/[縣市][\u4e00-\u9fa5]{1,3}[區鄉鎮]/.test(s)) return '';   // 是地址
+      return /[\u4e00-\u9fa5]/.test(s) ? body : '';
+    },
+    person: (t) => {
+      const body = String(t || '').trim();
+      const s = squash(body);
+      if (!s || s.length > 26) return '';
+      if (/\d{2,4}\/\d{1,2}\/\d{1,2}/.test(s)) return '';
+      return /^[\u4e00-\u9fa5A-Za-z0-9()（）?？\-. ]{1,26}$/.test(s) ? body : '';
+    },
+    nextDate: dateOnly,
+    lastDate: dateOnly,
+    addedDate: dateOnly,
+  };
+  VALIDATORS.owner = VALIDATORS.person;
+  VALIDATORS.keyman = VALIDATORS.person;
+
+  const validate = (field, text) => {
+    const fn = VALIDATORS[field];
+    if (!fn) return String(text || '').trim();
+    return fn(text) || '';
+  };
+
+  // 這幾個欄位的內容型態夠明確，適合拿來判斷「整列是不是平移了」
+  const ANCHOR_FIELDS = ['taxId', 'grade', 'capital', 'founded', 'country', 'phone', 'address'];
+
+  /**
+   * 整份表格如果因為少偵測到一條直線而整體平移，位置對應會全錯。
+   * 拿前面幾十列試算各種位移，挑出讓錨點欄位驗證通過最多次的那一個。
+   */
+  function detectShift(rows, map) {
+    const sample = rows.slice(0, 40);
+    const width = Math.max(...sample.map((r) => r.length), 0);
+    let best = { shift: 0, score: -1 };
+    for (let shift = -4; shift <= 4; shift++) {
+      let score = 0;
+      for (const row of sample) {
+        for (const field of ANCHOR_FIELDS) {
+          const idx = map[field];
+          if (idx === undefined) continue;
+          const at = idx + shift;
+          if (at < 0 || at >= width) continue;
+          if (validate(field, row[at])) score++;
+        }
+      }
+      // 同分時維持不位移，不要無謂地動它
+      if (score > best.score || (score === best.score && shift === 0)) best = { shift, score };
+    }
+    return best;
+  }
+
+  /**
+   * 把一列的每個欄位安置到正確的格子：先用表頭位置，位置上的內容驗證不過，
+   * 就在整列裡找一個驗證得過、而且還沒被別人用走的格子。
+   */
+  function resolveRow(cells, map) {
+    const used = new Set();
+    const out = {};
+
+    // 第一輪：位置正確的先卡位
+    for (const [field] of FIELD_RULES) {
+      const idx = map[field];
+      if (idx === undefined || used.has(idx)) continue;
+      const value = validate(field, cells[idx]);
+      if (value) { out[field] = value; used.add(idx); }
+    }
+
+    // 第二輪：位置上對不起來的，改用內容找
+    const DATE_FIELDS = ['nextDate', 'lastDate', 'addedDate'];
+    for (const [field] of FIELD_RULES) {
+      if (out[field] !== undefined || DATE_FIELDS.includes(field)) continue;
+      let pick = -1;
+      let pickValue = '';
+      for (let i = 0; i < cells.length; i++) {
+        if (used.has(i)) continue;
+        const value = validate(field, cells[i]);
+        if (!value) continue;
+        // 就近優先：離原本的欄位越近越可能是它
+        if (pick < 0 || (map[field] !== undefined
+          && Math.abs(i - map[field]) < Math.abs(pick - map[field]))) {
+          pick = i;
+          pickValue = value;
+        }
+      }
+      if (pick >= 0) { out[field] = pickValue; used.add(pick); }
+    }
+
+    // 日期三兄弟一起處理：長相一樣，只能靠位置與先後順序分辨
+    const dateCells = [];
+    for (let i = 0; i < cells.length; i++) {
+      const iso = dateOnly(cells[i]);
+      if (iso) dateCells.push({ index: i, iso });
+    }
+    for (const field of DATE_FIELDS) {
+      const idx = map[field];
+      const hit = dateCells.find((d) => d.index === idx && !used.has(d.index));
+      if (hit) { out[field] = hit.iso; used.add(hit.index); }
+    }
+    // 還缺的就按時間先後補：名單新增 ≤ 最近聯絡 ≤ 下次聯絡
+    const spare = dateCells.filter((d) => !used.has(d.index)).sort((a, b) => a.iso.localeCompare(b.iso));
+    for (const field of ['addedDate', 'lastDate', 'nextDate']) {
+      if (out[field] || !spare.length) continue;
+      const take = field === 'nextDate' ? spare.pop() : spare.shift();
+      if (take) { out[field] = take.iso; used.add(take.index); }
+    }
+    return out;
+  }
+
   /** 穩定的 ID：重新匯入同一份 PDF 時，通話紀錄才不會跟著跑掉。 */
   function makeId(source, company, taxId) {
     const base = `${source}|${squash(company)}|${squash(taxId)}`;
@@ -294,51 +481,68 @@
     const header = detectHeader(rows);
     if (!header) return { records: [], header: null, skipped: rows.length };
 
-    const { map } = header;
+    const map = { ...header.map };
     const offset = header.index + 1;
+    const body = rows.slice(offset);
+
+    // 先做整體平移校正：少偵測到一條直線就會整份錯位，連「哪一格是公司名稱」
+    // 都會跟著錯，所以要在合併跨頁殘列之前就修好。
+    const { shift } = detectShift(body, map);
+    if (shift) Object.keys(map).forEach((k) => { map[k] += shift; });
+
     const merged = mergeContinuations(
-      rows.slice(offset),
+      body,
       map,
       ((options && options.pageStarts) || []).map((n) => n - offset).filter((n) => n > 0)
     );
-    const cell = (row, field) => (map[field] === undefined ? '' : (row[map[field]] || '').trim());
+
     const records = [];
     const skipped = merged.dropped;
+    let repaired = 0;
 
     for (const row of merged.rows) {
-      const company = cell(row, 'company');
-      const phoneRaw = cell(row, 'phone');
+      const field = resolveRow(row, map);
+      const company = field.company || '';
+      const phoneRaw = field.phone || '';
       if (!company && !phoneRaw) continue;
 
+      // 有欄位是靠內容救回來的就記一筆，匯入完提醒使用者抽查
+      for (const [name] of FIELD_RULES) {
+        const idx = map[name];
+        if (idx === undefined || field[name] === undefined) continue;
+        if (!validate(name, row[idx])) { repaired++; break; }
+      }
+
       const names = splitCompanyNames(company);
-      const address = cell(row, 'address').replace(/\n/g, ' ').trim();
+      const address = (field.address || '').replace(/\n/g, ' ').trim();
+      const notesRaw = field.notes || '';
       const record = {
-        id: makeId(source, company, cell(row, 'taxId')),
+        id: makeId(source, company, field.taxId || ''),
         source,
         company: names[0] || company.replace(/\n/g, ''),
         aliases: names.slice(1),
-        taxId: squash(cell(row, 'taxId')),
-        grade: squash(cell(row, 'grade')).toUpperCase().replace(/[^A-Z?]/g, '') || '',
-        founded: squash(cell(row, 'founded')),
-        capital: squash(cell(row, 'capital')),
+        taxId: field.taxId || '',
+        grade: field.grade || '',
+        founded: field.founded || '',
+        capital: field.capital || '',
         phoneRaw,
         phones: extractPhones(phoneRaw),
-        owner: cell(row, 'owner').replace(/\n/g, ' ').trim(),
-        keyman: cell(row, 'keyman').replace(/\n/g, ' ').trim(),
-        industry: cell(row, 'industry').replace(/\n/g, '／').trim(),
-        nextDate: parseDate(cell(row, 'nextDate')),
-        lastDate: parseDate(cell(row, 'lastDate')),
-        addedDate: parseDate(cell(row, 'addedDate')),
-        country: squash(cell(row, 'country')),
+        owner: (field.owner || '').replace(/\n/g, ' ').trim(),
+        keyman: (field.keyman || '').replace(/\n/g, ' ').trim(),
+        industry: (field.industry || '').replace(/\n/g, '／').trim(),
+        nextDate: field.nextDate || null,
+        lastDate: field.lastDate || null,
+        addedDate: field.addedDate || null,
+        country: field.country || '',
         address,
-        notesRaw: cell(row, 'notes'),
+        notesRaw,
       };
       Object.assign(record, parseAddress(address));
-      record.timeline = parseNotes(record.notesRaw);
-      record.outcome = guessOutcome(record.notesRaw);
+      record.timeline = parseNotes(notesRaw);
+      record.outcome = guessOutcome(notesRaw);
       records.push(record);
     }
-    return { records, header, skipped };
+    return { records, header, skipped, shift, repaired };
   }
 
   /** 最小可用的 CSV 解析（支援引號內的逗號與換行）。 */
@@ -367,6 +571,7 @@
 
   global.Normalize = {
     toRecords, detectHeader, parseDate, extractPhones, parseNotes, splitCompanyNames, parseCsv,
+    validate, resolveRow, detectShift, VALIDATORS,
     parseAddress, guessOutcome, OUTCOME_LABEL, makeId, toHalfWidth,
   };
 })(window);

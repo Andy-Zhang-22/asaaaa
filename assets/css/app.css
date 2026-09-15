@@ -270,3 +270,14 @@ button, input, select { font: inherit; color: inherit; }
   .tabs { top: 104px; }
   .drawer-panel { width: 100%; }
 }
+
+.import-preview { margin: 12px 0; font-size: 13px; }
+.import-preview h3 { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.import-preview dl {
+  display: grid; grid-template-columns: 72px 1fr; gap: 2px 10px; margin: 0 0 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px;
+}
+.import-preview dt { color: var(--muted); }
+.import-preview dd { margin: 0; overflow-wrap: anywhere; }
+.import-preview dd.is-blank { color: var(--muted); opacity: .55; }
