@@ -36,16 +36,28 @@
 
 ## 啟動方式
 
-需要用 HTTP 開啟（瀏覽器不允許 `file://` 下的 Web Worker）：
+### 給團隊用：GitHub Pages（推薦，手機也能開）
+
+1. 到 repo 的 **Settings → Pages**。
+2. Source 選 **Deploy from a branch**，Branch 選 `main`、資料夾 `/ (root)`，Save。
+3. 等一兩分鐘，網址是 `https://<帳號>.github.io/asaaaa/`。手機瀏覽器開這個網址，
+   再「加入主畫面」就跟 App 一樣。
+
+網址是公開的，但**網站本身不含任何名單資料**——PDF 是每個人在自己瀏覽器裡匯入的，
+不會上傳。別人打開只會看到空白的匯入畫面。
+
+### 電腦上單機用：直接開檔
+
+Code → Download ZIP → 解壓縮 → 雙擊 `index.html`。Chrome 與 Edge 實測可用
+（pdf.js 會自動改用主執行緒解析）。若瀏覽器擋住本機檔案，改用下面的方式。
+
+### 本機起一個伺服器
 
 ```bash
 # 專案根目錄擇一執行，然後開 http://localhost:8000
 python3 -m http.server 8000
 npx serve .
 ```
-
-要給團隊用，把整個資料夾丟到任何靜態主機（GitHub Pages、Netlify…）即可，
-不需要後端。每個人的名單與紀錄各自存在自己的瀏覽器。
 
 ## PDF 是怎麼讀出來的
 
