@@ -480,6 +480,33 @@
     $('#importLog').prepend(el('div', { className: cls || '', textContent: text }));
   }
 
+  /** 匯入後秀前幾筆的欄位對照，讓使用者當場看得出有沒有跑錯格。 */
+  function showPreview(filename, records) {
+    const box = el('div', { className: 'import-preview' });
+    box.append(el('h3', { textContent: `${filename.replace(/\.(pdf|csv)$/i, '')}　欄位檢查（前 ${Math.min(3, records.length)} 筆）` }));
+    records.slice(0, 3).forEach((r) => {
+      const dl = el('dl');
+      const rows = [
+        ['公司名稱', r.company + (r.aliases.length ? `（另有 ${r.aliases.join('、')}）` : '')],
+        ['統編', r.taxId], ['分級', r.grade], ['成立年', r.founded],
+        ['資本額', r.capital], ['電話', r.phoneRaw.replace(/\n/g, ' / ')],
+        ['負責人', r.owner], ['KEYMAN', r.keyman], ['產業別', r.industry],
+        ['下次聯絡', r.nextDate || ''], ['最近聯絡', r.lastDate || ''],
+        ['地址', r.address],
+        ['訪談內容', (r.notesRaw || '').replace(/\n/g, ' ').slice(0, 60) + ((r.notesRaw || '').length > 60 ? '…' : '')],
+      ];
+      rows.forEach(([k, v]) => {
+        dl.append(el('dt', { textContent: k }), el('dd', {
+          textContent: v || '（空白）',
+          className: v ? '' : 'is-blank',
+        }));
+      });
+      box.append(dl);
+    });
+    box.append(el('p', { className: 'muted', textContent: '對照一下內容有沒有放錯欄位。有錯的話把這段截圖給我，我再調整。' }));
+    $('#importLog').prepend(box);
+  }
+
   async function importFiles(files) {
     const wanted = [...files].filter((f) => /\.(pdf|csv)$/i.test(f.name)
       || f.type === 'application/pdf' || f.type === 'text/csv');
@@ -502,7 +529,8 @@
           });
           ({ rows, pages, pageStarts, mode } = parsed);
         }
-        const { records, header, skipped } = window.Normalize.toRecords(rows, file.name, { pageStarts });
+        const { records, header, skipped, shift, repaired } =
+          window.Normalize.toRecords(rows, file.name, { pageStarts });
         if (!header) {
           logLine(`⚠️ ${file.name}：找不到「公司名稱／電話」等欄位標題，請確認這是名單表格。`, 'err');
           continue;
@@ -516,9 +544,12 @@
         logLine(
           `✅ ${file.name}：${isCsv ? 'CSV' : `${pages} 頁`} → ${records.length} 筆客戶`
           + `${skipped ? `（略過 ${skipped} 個空列）` : ''}`
-          + `${mode === 'heuristic' ? '（此檔沒有表格框線，欄位為推測結果，請抽查）' : ''}`,
+          + `${mode === 'heuristic' ? '（此檔沒有表格框線，欄位為推測結果）' : ''}`,
           'ok'
         );
+        if (shift) logLine(`🔧 偵測到整份表格欄位平移 ${shift > 0 ? '+' : ''}${shift} 格，已自動校正。`);
+        if (repaired) logLine(`🔧 有 ${repaired} 筆的部分欄位內容對不上欄位標題，已依內容重新歸位。`);
+        showPreview(file.name, records);
       } catch (err) {
         console.error(err);
         logLine(`❌ ${file.name}：${err && err.message ? err.message : '解析失敗'}`, 'err');
