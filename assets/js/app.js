@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-12';
+  const APP_VERSION = '20260916-13';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1004,6 +1004,32 @@ export default {
       el('span', { textContent: '自架代理網址（不想經過第三方就用這個）' }), proxy,
     ]));
     proxy.onchange = () => { window.Registry.setProxy(proxy.value.trim()); };
+
+    /*
+     * 代理的健康檢查跟查詢分開。
+     *
+     * 查詢失敗時，瀏覽器給的資訊少到無法分辨「代理沒部署」「網址填錯」「腳本貼錯」
+     * 「ORIGIN 不對」——全部都是同一個 TypeError。這顆按鈕不帶查詢參數直接打代理，
+     * 腳本正常的話會回 400 加白名單訊息，收到就代表前三關都過了。
+     */
+    const diag = el('div', { className: 'rule-result proxy-diag' });
+    const checkBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '檢查代理設定' });
+    checkBtn.onclick = async () => {
+      window.Registry.setProxy(proxy.value.trim());
+      diag.textContent = '';
+      diag.append(el('p', { className: 'rule-note', textContent: '檢查中…' }));
+      const res = await window.Registry.checkProxy();
+      diag.textContent = '';
+      diag.append(el('p', { className: `rule-verdict ${res.ok ? 'is-ok' : 'is-fail'}`, textContent: res.message }));
+      if (res.body) diag.append(el('p', { className: 'rule-note', textContent: `代理回應：${res.body}` }));
+      if (res.openUrl) {
+        diag.append(el('p', {}, [
+          el('a', { href: res.openUrl, target: '_blank', rel: 'noopener', textContent: res.openUrl }),
+        ]));
+      }
+      if (res.ok) diag.append(el('p', { className: 'rule-note', textContent: '可以按「先試一筆」了。' }));
+    };
+    host.append(el('div', { className: 'card-actions' }, [checkBtn]), diag);
 
     const guide = el('details', { className: 'proxy-guide' }, [
       el('summary', { textContent: '怎麼架自己的代理（免費，約五分鐘）' }),
