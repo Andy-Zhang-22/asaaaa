@@ -464,6 +464,67 @@
     return out;
   }
 
+  /* ------------------------------------------------------------------
+   * 往來對象判讀
+   *
+   * 訪談內容裡常寫到客戶跟誰有往來，這會直接影響案子怎麼走：
+   * 中租其他單位的舊戶牽動歸屬與收益率控管，同業與銀行則是競爭態勢。
+   * 名稱是從實際名單的訪談內容裡挖出來的，不是憑空列的。
+   * ------------------------------------------------------------------ */
+
+  // 中租體系內部單位
+  const INTERNAL_UNITS = ['大企部', '大企', '微企處', '微企', '融專', '城北',
+    '一版組', '設備組', '長租', '中租'];
+  // 租賃／分期同業
+  const PEER_UNITS = ['台新租賃', '中國租賃', '和潤', '裕融', '合迪', '新鑫', '遠信', '博鈞'];
+  // 銀行（需要出現在金融關係的上下文才算，避免「國泰建設」這種同名誤判）
+  const BANKS = ['兆豐', '玉山', '永豐', '國泰', '富邦', '元大', '華南', '第一銀', '彰銀',
+    '合庫', '土銀', '上海商銀', '陽信', '板信', '新光', '台企銀', '中國信託', '星展', '匯豐'];
+  const BANK_CONTEXT = /(額度|貸款|融資|往來|核准|撥款|授信|存款|利率|銀行|借款|保證|履保)/;
+
+  const RELATION_LABEL = {
+    internal: '中租其他單位',
+    peer: '同業',
+    bank: '銀行',
+  };
+
+  /**
+   * 從訪談內容判讀客戶跟哪些單位有往來。
+   * 每一筆都附上原文片段，方便使用者自己確認判斷對不對。
+   * @returns {{internal:Array, peer:Array, bank:Array}}
+   */
+  function detectRelations(notesRaw) {
+    const out = { internal: [], peer: [], bank: [] };
+    const text = toHalfWidth(notesRaw || '');
+    if (!text.trim()) return out;
+    const lines = text.split(/\n+/);
+
+    const collect = (bucket, names, needContext) => {
+      const seen = new Set();
+      names.forEach((name) => {
+        for (const line of lines) {
+          if (!line.includes(name)) continue;
+          if (needContext && !BANK_CONTEXT.test(line)) continue;
+          // 已經收過更長的名稱就不重複收短的（例如有「台新租賃」就不再收「台新」）
+          if ([...seen].some((got) => got.includes(name))) return;
+          seen.add(name);
+          out[bucket].push({ name, snippet: line.trim().slice(0, 70) });
+          return;
+        }
+      });
+    };
+
+    collect('internal', INTERNAL_UNITS, false);
+    collect('peer', PEER_UNITS, false);
+    collect('bank', BANKS, true);
+    return out;
+  }
+
+  /** 這筆客戶有哪幾類往來，給篩選用。 */
+  function relationKinds(relations) {
+    return ['internal', 'peer', 'bank'].filter((k) => relations[k] && relations[k].length);
+  }
+
   /** 穩定的 ID：重新匯入同一份 PDF 時，通話紀錄才不會跟著跑掉。 */
   function makeId(source, company, taxId) {
     const base = `${source}|${squash(company)}|${squash(taxId)}`;
@@ -620,6 +681,8 @@
     toRecords, detectHeader, parseDate, extractPhones, parseNotes, splitCompanyNames,
     parseCsv, parseDelimited, detectDelimiter, parsePasted, STANDARD_HEADER,
     validate, resolveRow, detectShift, VALIDATORS,
+    detectRelations, relationKinds, RELATION_LABEL,
+    INTERNAL_UNITS, PEER_UNITS, BANKS,
     parseAddress, guessOutcome, OUTCOME_LABEL, makeId, toHalfWidth,
   };
 })(window);
