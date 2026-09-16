@@ -490,3 +490,12 @@ button, input, select { font: inherit; color: inherit; }
 
 /* 選單底部的版本號：出問題時要一眼看得出自己跑的是哪一版 */
 .menu-version { padding: 6px 12px 8px; font-size: 12px; color: var(--muted); }
+/* 禁止推廣：唯一絕對不能看漏的標記 */
+.badge-blocked { border-color: var(--danger); color: var(--danger); font-weight: 700; }
+.blocked-warning {
+  margin: 10px 0; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--danger); border-right-width: 4px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.blocked-warning strong { color: var(--danger); }
+.blocked-warning p { margin: 6px 0 0; font-size: 13px; color: var(--muted); line-height: 1.7; }

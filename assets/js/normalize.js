@@ -711,6 +711,38 @@
     return null;
   }
 
+  /* ------------------------------------------------------------------
+   * 禁止推廣
+   *
+   * 這是所有標記裡唯一「不能出錯也不能被蓋掉」的一個：客戶明講不要再打了，
+   * 再打就是騷擾。
+   *
+   * 原本它只是 outcome 的七個值之一，而 outcome 會被之後記的通話紀錄覆蓋——
+   * 隨便記一通「已聯絡」，禁止推廣就消失，那位客戶會悄悄回到待打名單裡。
+   * 所以改成直接從訪談內容判讀，跟 outcome 分開，蓋不掉。
+   *
+   * 用詞只收明確的拒訪語句。像「黑名單」「拒絕往來」看起來很像，但在金融業的
+   * 訪談紀錄裡通常是在講客戶自己的信用狀況（拒絕往來戶），不是叫我們別打，
+   * 收進來會製造假的禁打名單。
+   * ------------------------------------------------------------------ */
+
+  const BLOCKED_RE = /禁止推廣|禁推|勿再推廣|不得推廣|請勿推銷|不要推銷|不要再(?:打|撥|來電|聯絡)|別再(?:撥打|打|來電|聯絡)|勿再(?:撥打|來電|聯絡)|打死不想/;
+
+  /**
+   * @returns {{blocked:boolean, phrase:string, snippet:string}}
+   */
+  function detectBlocked(notesRaw) {
+    const text = toHalfWidth(notesRaw || '');
+    if (!text.trim()) return { blocked: false, phrase: '', snippet: '' };
+    for (const line of text.split(/\n+/)) {
+      const m = line.match(BLOCKED_RE);
+      if (m) {
+        return { blocked: true, phrase: m[0], snippet: line.replace(/\s+/g, ' ').trim().slice(0, 80) };
+      }
+    }
+    return { blocked: false, phrase: '', snippet: '' };
+  }
+
   /** 這筆客戶有哪幾類往來，給篩選用。 */
   function relationKinds(relations) {
     return ['internal', 'peer', 'bank'].filter((k) => relations[k] && relations[k].length);
@@ -874,6 +906,7 @@
     validate, resolveRow, detectShift, VALIDATORS,
     detectRelations, relationKinds, RELATION_LABEL,
     detectDealing, latestNote, DEALING_LABEL,
+    detectBlocked,
     findFollowUp,
     looksLikeAddress,
     validateAddress: (t) => VALIDATORS.address(t) || '',

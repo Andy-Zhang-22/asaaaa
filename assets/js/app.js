@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-17';
+  const APP_VERSION = '20260916-18';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -92,6 +92,15 @@
     out.relationKinds = window.Normalize.relationKinds(out.relations);
     out.dealing = window.Normalize.detectDealing(out.notesRaw);
     out.dealingKind = out.dealing.kind;
+    /*
+     * 禁止推廣獨立於 outcome。
+     *
+     * outcome 會被之後記的通話紀錄覆蓋，隨便記一通「已聯絡」就會把禁止推廣洗掉，
+     * 那位客戶就悄悄回到待打名單裡。所以以訪談內容為準，再把使用者自己選的
+     * 「禁止推廣」也算進來——兩邊任一成立就是禁打，只能加不能減。
+     */
+    out.blockedInfo = window.Normalize.detectBlocked(out.notesRaw);
+    out.blocked = out.blockedInfo.blocked || out.outcome === 'blocked';
     return out;
   }
 
@@ -299,10 +308,10 @@
     const terms = q ? q.split(/\s+/) : [];
 
     let list = allViews().filter((r) => {
-      if (state.hideBlocked && r.outcome === 'blocked') return false;
+      if (state.hideBlocked && r.blocked) return false;
       if (f.source.size && !f.source.has(r.source)) return false;
       if (f.grade.size && !f.grade.has(r.grade || '未分級')) return false;
-      if (f.outcome.size && !f.outcome.has(r.outcome)) return false;
+      if (f.outcome.size && !f.outcome.has(r.blocked ? 'blocked' : r.outcome)) return false;
       if (f.city.size && !f.city.has(r.city || '其他')) return false;
       if (f.scale.size && !f.scale.has(r.scale || '未填資本額')) return false;
       if (f.territory.size && !f.territory.has(r.territory || '未填地址')) return false;
@@ -403,7 +412,9 @@
 
     chips($('#fltSource'), 'source', tally((r) => r.source), state.filters.source, (v) => v.replace(/\.pdf$/i, ''));
     chips($('#fltGrade'), 'grade', tally((r) => r.grade || '未分級'), state.filters.grade);
-    chips($('#fltOutcome'), 'outcome', tally((r) => r.outcome), state.filters.outcome, (v) => OUTCOME_LABEL[v] || v);
+    // 禁打以 blocked 為準：outcome 可能已經被後來的通話紀錄蓋掉了
+    chips($('#fltOutcome'), 'outcome', tally((r) => (r.blocked ? 'blocked' : r.outcome)),
+      state.filters.outcome, (v) => OUTCOME_LABEL[v] || v);
     chips($('#fltCity'), 'city', tally((r) => r.city || '其他').slice(0, 12), state.filters.city);
     chips($('#fltScale'), 'scale', tally((r) => r.scale || '未填資本額'), state.filters.scale);
     chips($('#fltTerritory'), 'territory', tally((r) => r.territory || '未填地址'), state.filters.territory);
@@ -421,6 +432,8 @@
   }
 
   function outcomeBadge(r) {
+    // 禁打另外有專屬的紅色標記，這裡再畫一次會變成同一句話出現兩遍
+    if (r.blocked) return '';
     return el('span', {
       className: `badge out-${r.outcome}`,
       textContent: OUTCOME_LABEL[r.outcome] || r.outcome,
@@ -492,6 +505,7 @@
       (r.scale || capitalScale(r)) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
       r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
+      r.blocked ? el('span', { className: 'badge badge-blocked', textContent: '禁止推廣' }) : '',
       r.dealingKind === 'active' ? el('span', { className: 'badge badge-dealing', textContent: '有往來' }) : '',
     ].filter(Boolean));
     node.append(top);
@@ -689,6 +703,23 @@
         deleteBtn(r),
       ].filter(Boolean)),
     ].filter(Boolean)));
+
+    /*
+     * 禁打的警告放在最上面、電話的上面。
+     *
+     * 放下面沒有用：撥號鍵就在上面，看到電話就會直接按下去。
+     */
+    if (r.blocked) {
+      const warn = el('div', { className: 'blocked-warning' }, [
+        el('strong', { textContent: '⛔ 禁止推廣 — 請勿撥打' }),
+      ]);
+      if (r.blockedInfo.snippet) {
+        warn.append(el('p', { textContent: `訪談內容：「${r.blockedInfo.snippet}」` }));
+      } else {
+        warn.append(el('p', { textContent: '這筆是在通話結果裡被標記為禁止推廣的。' }));
+      }
+      body.append(warn);
+    }
 
     if (r.phones.length) {
       const box = el('div', { className: 'card-actions' });
