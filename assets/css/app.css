@@ -499,3 +499,8 @@ button, input, select { font: inherit; color: inherit; }
 }
 .blocked-warning strong { color: var(--danger); }
 .blocked-warning p { margin: 6px 0 0; font-size: 13px; color: var(--muted); line-height: 1.7; }
+
+/* 日期輸入框旁的民國年提示：瀏覽器把日期顯示成 mm/dd/yyyy，這裡補上名單慣用的寫法 */
+.date-with-hint { display: inline-flex; align-items: center; gap: 6px; }
+.roc-hint { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.roc-hint:empty { display: none; }
