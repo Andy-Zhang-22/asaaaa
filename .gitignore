@@ -1,3 +1,7 @@
 node_modules/
 .DS_Store
 *.log
+
+# 探測報告是每次執行產生的，不進版控（本機跑的結果會因為網路限制而誤導）
+probe-report.md
+probe-raw.json
