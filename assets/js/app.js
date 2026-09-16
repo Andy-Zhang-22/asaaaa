@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-28';
+  const APP_VERSION = '20260916-30';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -22,12 +22,12 @@
     records: [],
     logs: [],
     userStates: new Map(),
-    tab: 'today',
+    tab: 'all',
     search: '',
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), industry: '' },
+    filters: { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), added: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -463,6 +463,7 @@
     viewsCache = state.records.map((record) => {
       const v = view(record);
       v.bucket = dueBucket(v.nextDate);
+      v.addedBucket = addedBucket(v.addedDate);
       v.blob = [v.company, v.aliases.join(' '), v.taxId, v.owner, v.keyman, v.industry,
         v.phoneRaw, v.address, v.notesRaw, v.source].join(' ').toLowerCase();
       return v;
@@ -470,6 +471,29 @@
     viewsKey = key;
     return viewsCache;
   }
+
+  /*
+   * 名單是什麼時候進來的。
+   *
+   * 用「離今天多久」而不是列出每一個日期：從 PDF 匯進來的客戶，名單新增日期是
+   * 來源檔裡的原始日期，散落好幾年、有上百個不同的值，一個日期一顆按鈕會變成
+   * 一面牆。反過來，同一批匯入的會共用同一天，所以「今天」「7 天內」就足以
+   * 把剛加進來的那批圈出來。
+   *
+   * 要精確找某一批的話，「名單來源」那個篩選更直接——匯入時的檔名就是來源。
+   */
+  function addedBucket(iso) {
+    if (!iso) return '未填';
+    const diff = -dayDiff(iso);          // dayDiff 是「未來還有幾天」，這裡要反過來
+    if (diff < 0) return '未填';         // 日期在未來，多半是解析錯的
+    if (diff === 0) return '今天新增';
+    if (diff <= 7) return '7 天內';
+    if (diff <= 30) return '30 天內';
+    if (diff <= 365) return '一年內';
+    return '更早';
+  }
+
+  const ADDED_ORDER = ['今天新增', '7 天內', '30 天內', '一年內', '更早', '未填'];
 
   function dueBucket(iso) {
     if (!iso) return 'none';
@@ -496,6 +520,7 @@
       if (f.scale.size && !f.scale.has(r.scale || '未填資本額')) return false;
       if (f.territory.size && !f.territory.has(r.territory || '未填地址')) return false;
       if (f.relation.size && !f.relation.has(r.dealingKind)) return false;
+      if (f.added.size && !f.added.has(r.addedBucket)) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (f.due) {
         const b = r.bucket;
@@ -508,9 +533,6 @@
       return true;
     });
 
-    if (state.tab === 'today') {
-      list = list.filter((r) => r.bucket === 'overdue' || r.bucket === 'today');
-    }
 
     const gradeRank = { S: 0, 'S?': 1, A: 2, B: 3, C: 4 };
     const num = (s) => Number(String(s || '').replace(/[^\d]/g, '')) || 0;
@@ -604,6 +626,13 @@
     all.forEach((r) => { dealCounts[r.dealingKind === 'active' ? 0 : 1][1] += 1; });
     chips($('#fltRelation'), 'relation', dealCounts.filter(([, n]) => n > 0),
       state.filters.relation, (v) => window.Normalize.DEALING_LABEL[v]);
+
+    // 順序固定成由新到舊，不依筆數排——「今天新增」永遠在第一個位置才好按
+    const addedCounts = new Map(ADDED_ORDER.map((k) => [k, 0]));
+    all.forEach((r) => { addedCounts.set(r.addedBucket, (addedCounts.get(r.addedBucket) || 0) + 1); });
+    chips($('#fltAdded'), 'added',
+      ADDED_ORDER.filter((k) => addedCounts.get(k)).map((k) => [k, addedCounts.get(k)]),
+      state.filters.added);
 
     const industries = [...new Set(all.map((r) => r.industry).filter(Boolean))].sort();
     $('#industryList').textContent = '';
@@ -750,7 +779,7 @@
       } else {
         empty.append(
           el('strong', { textContent: '沒有符合條件的客戶' }),
-          el('p', { textContent: state.tab === 'today' ? '今天沒有到期的追蹤對象，切到「全部名單」看看。' : '試著放寬篩選條件或清除搜尋。' })
+          el('p', { textContent: '試著放寬篩選條件或清除搜尋。' })
         );
       }
     }
@@ -835,16 +864,13 @@
   function render() {
     const total = state.records.length;
     $('#countAll').textContent = String(total);
-    $('#countToday').textContent = String(
-      allViews().filter((r) => r.bucket === 'overdue' || r.bucket === 'today').length
-    );
     const sources = new Set(state.records.map((r) => r.source));
     $('#brandSub').textContent = total
       ? `${total} 筆客戶 · ${sources.size} 份名單`
       : '尚未匯入名單';
 
     const tab = state.tab;
-    $('#paneList').hidden = tab !== 'today' && tab !== 'all';
+    $('#paneList').hidden = tab !== 'all';
     $('#paneStats').hidden = tab !== 'stats';
     $('#paneRules').hidden = tab !== 'rules';
     // 統計與規則頁用不到左側篩選，讓內容佔滿整個寬度
