@@ -435,3 +435,15 @@ button, input, select { font: inherit; color: inherit; }
   background: var(--surface-2); color: var(--text);
   font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6;
 }
+
+/* ---------- 電話：撥號 + 複製 ---------- */
+.tel-group { display: inline-flex; align-items: stretch; }
+.tel-group .tel { border-radius: 999px 0 0 999px; border-right: 0; }
+.tel-copy {
+  border: 1px solid var(--border);
+  border-radius: 0 999px 999px 0;
+  background: var(--surface-2); color: var(--muted);
+  padding: 5px 12px; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.tel-copy:hover { color: var(--primary); border-color: var(--primary); background: var(--surface); }
+.tel-copy:active { background: var(--primary); color: var(--primary-ink); }
