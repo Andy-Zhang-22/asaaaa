@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-34';
+  const APP_VERSION = '20260916-35';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -53,6 +53,22 @@
     const [y, m, d] = iso.split('-');
     return `${+y - 1911}/${m}/${d}`;
   };
+  /*
+   * 日期輸入框旁邊即時顯示民國年。
+   *
+   * <input type="date"> 的顯示格式跟著瀏覽器語系走，在使用者的電腦上是 mm/dd/yyyy，
+   * 網頁改不了。選擇器本身很好用（有月曆、有快速鍵），不想換掉，
+   * 所以在旁邊補一個民國年的標示，選了什麼一眼就對得上名單其他地方的寫法。
+   */
+  function withRocHint(input) {
+    const hint = el('span', { className: 'roc-hint' });
+    const sync = () => { hint.textContent = input.value ? rocLabel(input.value) : ''; };
+    input.addEventListener('input', sync);
+    input.addEventListener('change', sync);
+    sync();
+    return el('span', { className: 'date-with-hint' }, [input, hint]);
+  }
+
   const dayDiff = (iso) => {
     todayISO();
     return Math.round((Date.parse(`${iso}T00:00:00`) - todayCache.ms) / 86400000);
@@ -969,8 +985,8 @@
       ['統一編號', r.taxId], ['負責人', r.owner], ['KEYMAN', r.keyman],
       ['產業別', r.industry], ['成立年', r.founded],
       ['資本額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
-      ['下次聯絡', r.nextDate ? `${rocLabel(r.nextDate)}（${r.nextDate}）` : ''],
-      ['最近聯絡', r.lastDate ? `${rocLabel(r.lastDate)}（${r.lastDate}）` : ''],
+      ['下次聯絡', r.nextDate ? rocLabel(r.nextDate) : ''],
+      ['最近聯絡', r.lastDate ? rocLabel(r.lastDate) : ''],
       ['名單新增', r.addedDate ? rocLabel(r.addedDate) : ''],
     ];
     rows.forEach(([k, v]) => {
@@ -1010,7 +1026,11 @@
     const quick = el('div', { className: 'card-actions' });
     [['明天', 1], ['3 天後', 3], ['一週後', 7], ['兩週後', 14], ['一個月後', 30], ['三個月後', 90]].forEach(([label, days]) => {
       const b = el('button', { className: 'btn btn-tiny', type: 'button', textContent: label });
-      b.onclick = () => { nextInput.value = addDays(todayISO(), days); };
+      b.onclick = () => {
+        nextInput.value = addDays(todayISO(), days);
+        // 直接改 value 不會觸發事件，旁邊的民國年提示要靠這個才會跟著換
+        nextInput.dispatchEvent(new Event('change'));
+      };
       quick.append(b);
     });
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存紀錄' });
@@ -1048,7 +1068,7 @@
     };
     form.append(memo, el('div', { className: 'row' }, [
       el('span', { className: 'muted', textContent: '結果' }), outcomeSel,
-      el('span', { className: 'muted', textContent: '下次聯絡' }), nextInput, save,
+      el('span', { className: 'muted', textContent: '下次聯絡' }), withRocHint(nextInput), save,
     ]));
     form.append(quick);
     section.append(form);
@@ -1116,7 +1136,7 @@
             const when = el('input', { type: 'date', value: e.date || todayISO() });
             const ok = el('button', { className: 'btn btn-primary btn-tiny', type: 'button', textContent: '儲存' });
             const cancel = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '取消' });
-            const editor = el('div', {}, [box, el('div', { className: 'row' }, [when, ok, cancel])]);
+            const editor = el('div', {}, [box, el('div', { className: 'row' }, [withRocHint(when), ok, cancel])]);
             li.replaceChild(editor, actions);
             box.focus();
             cancel.onclick = () => { li.replaceChild(actions, editor); };
@@ -1192,7 +1212,7 @@
     const nextDate = el('input', { type: 'date', value: values.nextDate || '' });
     inputs.nextDate = nextDate;
     node.append(el('label', { className: 'rule-field' }, [
-      el('span', { textContent: '下次聯絡日' }), nextDate,
+      el('span', { textContent: '下次聯絡日' }), withRocHint(nextDate),
     ]));
     return {
       node,
