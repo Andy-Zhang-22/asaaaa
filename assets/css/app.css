@@ -461,3 +461,12 @@ button, input, select { font: inherit; color: inherit; }
 
 .badge-priority { border-color: var(--ok); color: var(--ok); font-weight: 600; }
 .badge-outside { border-color: var(--danger); color: var(--danger); }
+
+/* ---------- 往來對象 ---------- */
+.badge-internal { border-color: var(--warn); color: var(--warn); }
+.badge-peer { border-color: var(--muted); color: var(--muted); }
+.relation-group { margin-bottom: 12px; padding-right: 12px; border-right: 3px solid var(--border); }
+.relation-group.relation-internal { border-right-color: var(--warn); }
+.relation-group.relation-peer { border-right-color: var(--muted); }
+.relation-group.relation-bank { border-right-color: var(--primary); }
+.relation-snippet { margin: 4px 0 0; font-size: 13px; color: var(--muted); line-height: 1.7; }

@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-6';
+  const APP_VERSION = '20260916-7';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -27,7 +27,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), industry: '' },
+    filters: { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -82,6 +82,8 @@
     };
     out.scale = capitalScale(out);
     out.territory = territory(out);
+    out.relations = window.Normalize.detectRelations(out.notesRaw);
+    out.relationKinds = window.Normalize.relationKinds(out.relations);
     // 電話與地址改過就要重新解析，撥號鍵與縣市篩選才會跟著正確
     if (edits && edits.phoneRaw !== undefined) out.phones = window.Normalize.extractPhones(edits.phoneRaw);
     if (edits && edits.address !== undefined) Object.assign(out, window.Normalize.parseAddress(edits.address));
@@ -169,6 +171,10 @@
       if (f.city.size && !f.city.has(r.city || '其他')) return false;
       if (f.scale.size && !f.scale.has(r.scale || '未填資本額')) return false;
       if (f.territory.size && !f.territory.has(r.territory || '未填地址')) return false;
+      if (f.relation.size) {
+        const kinds = r.relationKinds.length ? r.relationKinds : ['none'];
+        if (!kinds.some((k) => f.relation.has(k))) return false;
+      }
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (f.due) {
         const b = r.bucket;
@@ -270,6 +276,17 @@
     chips($('#fltScale'), 'scale', tally((r) => r.scale || '未填資本額'), state.filters.scale);
     chips($('#fltTerritory'), 'territory', tally((r) => r.territory || '未填地址'), state.filters.territory);
 
+    // 一筆客戶可能同時跟好幾類往來，所以分開累計而不是用 tally
+    const relationCounts = new Map([['internal', 0], ['peer', 0], ['bank', 0], ['none', 0]]);
+    all.forEach((r) => {
+      if (!r.relationKinds.length) relationCounts.set('none', relationCounts.get('none') + 1);
+      r.relationKinds.forEach((k) => relationCounts.set(k, relationCounts.get(k) + 1));
+    });
+    chips($('#fltRelation'), 'relation',
+      [...relationCounts.entries()].filter(([, n]) => n > 0),
+      state.filters.relation,
+      (v) => (v === 'none' ? '無往來紀錄' : window.Normalize.RELATION_LABEL[v]));
+
     const industries = [...new Set(all.map((r) => r.industry).filter(Boolean))].sort();
     $('#industryList').textContent = '';
     industries.forEach((i) => $('#industryList').append(el('option', { value: i })));
@@ -348,6 +365,8 @@
       (r.scale || capitalScale(r)) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
       r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
+      r.relationKinds.includes('internal') ? el('span', { className: 'badge badge-internal', textContent: '中租他單位' }) : '',
+      r.relationKinds.includes('peer') ? el('span', { className: 'badge badge-peer', textContent: '同業往來' }) : '',
     ].filter(Boolean));
     node.append(top);
 
@@ -626,6 +645,25 @@
     form.append(quick);
     section.append(form);
     body.append(section);
+
+    // 往來對象
+    if (r.relationKinds.length) {
+      const sec = el('div', { className: 'detail-section' }, [el('h3', { textContent: '往來對象（由訪談內容判讀）' })]);
+      ['internal', 'peer', 'bank'].forEach((kind) => {
+        if (!r.relations[kind].length) return;
+        const group = el('div', { className: `relation-group relation-${kind}` }, [
+          el('strong', { textContent: `${window.Normalize.RELATION_LABEL[kind]}：${r.relations[kind].map((x) => x.name).join('、')}` }),
+        ]);
+        // 同一句話可能同時提到好幾個對象，原文只需要秀一次
+        [...new Set(r.relations[kind].map((item) => item.snippet))].forEach((snippet) => {
+          group.append(el('p', { className: 'relation-snippet', textContent: `「${snippet}」` }));
+        });
+        sec.append(group);
+      });
+      sec.append(el('p', { className: 'muted',
+        textContent: '這是從訪談內容的關鍵字判讀出來的，請對照原文確認。' }));
+      body.append(sec);
+    }
 
     // 時間軸：本機紀錄 + PDF 原始訪談內容
     const mineLogs = state.logs
@@ -1143,7 +1181,7 @@
     $('#btnMore').onclick = () => { state.limit += PAGE_SIZE; renderList(); };
     $('#fltIndustry').oninput = (e) => { state.filters.industry = e.target.value.trim(); state.limit = PAGE_SIZE; render(); };
     $('#btnResetFilters').onclick = () => {
-      state.filters = { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), industry: '' };
+      state.filters = { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), industry: '' };
       $('#fltIndustry').value = '';
       state.limit = PAGE_SIZE;
       render();
