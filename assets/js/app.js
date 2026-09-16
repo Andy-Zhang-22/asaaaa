@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-8';
+  const APP_VERSION = '20260916-9';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -80,19 +80,84 @@
       starred: !!(mine && mine.starred),
       edited: !!edits,
     };
+    // 電話與地址改過就要先重新解析，再去算衍生欄位。
+    // 順序不能反過來：服務區域是從地址拆出來的縣市與行政區算的，先算就會拿到
+    // 編輯前的舊縣市，改了地址之後篩選與卡片標記都不會跟著動。
+    if (edits && edits.phoneRaw !== undefined) out.phones = window.Normalize.extractPhones(edits.phoneRaw);
+    if (edits && edits.address !== undefined) Object.assign(out, window.Normalize.parseAddress(edits.address));
+
     out.scale = capitalScale(out);
     out.territory = territory(out);
     out.relations = window.Normalize.detectRelations(out.notesRaw);
     out.relationKinds = window.Normalize.relationKinds(out.relations);
     out.dealing = window.Normalize.detectDealing(out.notesRaw);
     out.dealingKind = out.dealing.kind;
-    // 電話與地址改過就要重新解析，撥號鍵與縣市篩選才會跟著正確
-    if (edits && edits.phoneRaw !== undefined) out.phones = window.Normalize.extractPhones(edits.phoneRaw);
-    if (edits && edits.address !== undefined) Object.assign(out, window.Normalize.parseAddress(edits.address));
     return out;
   }
 
   /** 更新某一筆的個人狀態，保留既有欄位（通話結果與編輯內容互不覆蓋）。 */
+  /*
+   * 舊資料修復：把誤放到 KEYMAN／負責人／產業別的地址搬回地址欄。
+   *
+   * 匯入時的欄位判斷曾經讓人名欄位吃下地址（人名的驗證條件太寬鬆，而
+   * 「新北市新莊區幸福東路79號4樓」正好符合），造成大量客戶顯示「未填地址」。
+   * 匯入端已經修好，但已經進到資料庫的那些還在原地，而且使用者未必留著原始 PDF，
+   * 所以提供這個就地修復。
+   *
+   * 搬移是寫成「編輯」而不是直接改原始資料：這樣看得出哪些是後來動過的，
+   * 也會透過既有機制同步到其他裝置，不滿意還能用詳細頁的「還原成名單原始內容」退回。
+   * 只處理地址欄本來就空的客戶，不會覆蓋任何已經有地址的資料。
+   */
+  const STRAY_FIELDS = [['keyman', 'KEYMAN'], ['owner', '負責人'], ['industry', '產業別']];
+
+  function findStrayAddress(r) {
+    for (const [field, label] of STRAY_FIELDS) {
+      const value = window.Normalize.validateAddress(r[field] || '');
+      if (value) return { field, label, value };
+    }
+    return null;
+  }
+
+  async function repairStrayAddresses() {
+    const targets = [];
+    state.records.forEach((rec) => {
+      const r = view(rec);
+      if (r.address) return;                      // 已經有地址的完全不碰
+      const stray = findStrayAddress(r);
+      if (stray) targets.push({ rec, r, stray });
+    });
+
+    if (!targets.length) {
+      toast('沒有找到錯置的地址，不需要修復');
+      return;
+    }
+
+    const byField = new Map();
+    targets.forEach((t) => byField.set(t.stray.label, (byField.get(t.stray.label) || 0) + 1));
+    const breakdown = [...byField.entries()].map(([label, n]) => `　・${label}：${n} 筆`).join('\n');
+    const samples = targets.slice(0, 3)
+      .map((t) => `　・${t.r.company}\n　　${t.stray.label} → 地址：${t.stray.value}`).join('\n');
+
+    const ok = confirm(`找到 ${targets.length} 筆地址被放到別的欄位：\n${breakdown}\n\n`
+      + `例如：\n${samples}\n\n`
+      + '要把它們搬回地址欄嗎？\n（會記錄成「已修改」，可以在各客戶的詳細頁還原）');
+    if (!ok) return;
+
+    for (const { rec, r, stray } of targets) {
+      const existing = state.userStates.get(rec.id) || {};
+      const edits = { ...(existing.edits || {}) };
+      edits.address = stray.value;
+      // 原本那格放的是地址不是人名／產業別，一併清掉才不會兩邊都顯示同一串
+      if ((r[stray.field] || '').trim() === stray.value.trim()) edits[stray.field] = '';
+      await saveState(rec.id, { edits, editsAt: Date.now() });
+    }
+
+    await reload();
+    render();
+    toast(`已修復 ${targets.length} 筆地址`);
+    scheduleSync();
+  }
+
   async function saveState(recordId, patch) {
     const merged = { ...(state.userStates.get(recordId) || { recordId }), ...patch, recordId };
     await window.Store.setState(merged);
@@ -1279,6 +1344,7 @@
       }
       if (act === 'new-customer') openNewCustomer();
       if (act === 'paste-customer') openPasteImport();
+      if (act === 'fix-address') { await repairStrayAddresses(); return; }
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }

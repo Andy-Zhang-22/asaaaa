@@ -42,25 +42,37 @@
   const NAME_SUFFIX = /(股份有限公司|有限公司|股份公司|合夥事業|土木包工業|建築師事務所|會計師事務所|事務所|企業社|企業行|實業社|工程行|工作室|商行|營造廠|公司)/g;
 
   function splitCompanyNames(raw) {
-    const text = String(raw || '').replace(/\s+/g, '');
-    if (!text) return [];
+    // 先照換行切。
+    //
+    // 這一步是必要的：PDF 解析那邊已經分辨過「折行」跟「真的換行」了（折行會被
+    // 接回去），所以留到這裡的換行就代表是不同的公司。之前把換行整個刪掉、單靠
+    // 公司字尾切，遇到沒有字尾的商號就會出事——
+    //   「大同鐵工廠」＋「乙建設股份有限公司」
+    // 刪掉換行後變成一長串，字尾只在最後面匹配到一次，於是整串被當成一家公司的
+    // 名字，看起來就像亂碼。
+    const lines = String(raw || '').split(/\n+/).map((l) => l.replace(/\s+/g, '')).filter(Boolean);
+    if (!lines.length) return [];
+
     const names = [];
-    let cut = 0;
-    let m;
-    NAME_SUFFIX.lastIndex = 0;
-    while ((m = NAME_SUFFIX.exec(text)) !== null) {
-      const end = m.index + m[0].length;
-      const name = text.slice(cut, end).trim();
-      if (name) names.push(name);
-      cut = end;
+    for (const line of lines) {
+      // 同一行裡還是可能擠了好幾家，所以行內再用公司字尾切一次
+      let cut = 0;
+      let m;
+      NAME_SUFFIX.lastIndex = 0;
+      while ((m = NAME_SUFFIX.exec(line)) !== null) {
+        const end = m.index + m[0].length;
+        const name = line.slice(cut, end).trim();
+        if (name) names.push(name);
+        cut = end;
+      }
+      const tail = line.slice(cut).trim();
+      if (tail) {
+        // 「…股份有限公司(3490)」這種尾巴要黏回上一個名字
+        if (names.length && /^[(（]/.test(tail)) names[names.length - 1] += tail;
+        else names.push(tail);
+      }
     }
-    const tail = text.slice(cut).trim();
-    if (tail) {
-      // 「…股份有限公司(3490)」這種尾巴要黏回上一個名字
-      if (names.length && /^[(（]/.test(tail)) names[names.length - 1] += tail;
-      else names.push(tail);
-    }
-    return names.length ? names : [text];
+    return names.length ? names : [lines.join('')];
   }
 
   /** 找出表頭那一列，回傳 { index, map }；找不到回傳 null。 */
@@ -300,6 +312,23 @@
    * 回傳值而不是布林，是因為儲存格可能黏了鄰欄的內容（例如「2022 1,000」），
    * 這時候把屬於自己的那一段挑出來，比整格丟掉好。
    */
+  /**
+   * 這串看起來像不像地址。
+   *
+   * 人名欄位（負責人、KEYMAN）非用不可：原本的 person 驗證器只管「26 字以內的
+   * 中文數字」，而「新北市新莊區幸福東路79號4樓」正好符合，於是 KEYMAN 會在第一輪
+   * 就把地址搶走並佔住那一格，等輪到 address 時已經拿不到了——這就是名單裡大量
+   * 「未填地址」的真正原因，資料其實一直都在，只是掛錯欄位。
+   */
+  function looksLikeAddress(raw) {
+    const s = squash(raw);
+    if (!s) return false;
+    if (/[縣市][\u4e00-\u9fa5]{1,3}[區鄉鎮市]/.test(s)) return true;          // 新北市新莊區
+    if (/\d+號/.test(s) && /[路街巷弄段村里]/.test(s)) return true;            // …幸福東路79號
+    if (/[路街道]\s*[一二三四五六七八九十\d]+段/.test(s)) return true;          // …中正路二段
+    return false;
+  }
+
   const VALIDATORS = {
     taxId: (t) => {
       const s = squash(t);
@@ -356,7 +385,7 @@
       const s = squash(body);
       if (!s || s.length > 24) return '';
       if (/\d{2,4}\/\d{1,2}\/\d{1,2}/.test(s)) return '';
-      if (/[縣市][\u4e00-\u9fa5]{1,3}[區鄉鎮]/.test(s)) return '';   // 是地址
+      if (looksLikeAddress(s)) return '';   // 是地址
       return /[\u4e00-\u9fa5]/.test(s) ? body : '';
     },
     person: (t) => {
@@ -364,6 +393,7 @@
       const s = squash(body);
       if (!s || s.length > 26) return '';
       if (/\d{2,4}\/\d{1,2}\/\d{1,2}/.test(s)) return '';
+      if (looksLikeAddress(s)) return '';        // 地址不是人名，別讓 KEYMAN 搶走
       return /^[\u4e00-\u9fa5A-Za-z0-9()（）?？\-. ]{1,26}$/.test(s) ? body : '';
     },
     nextDate: dateOnly,
@@ -415,8 +445,26 @@
     const used = new Set();
     const out = {};
 
+    // 第零輪：地址優先卡位。
+    //
+    // address 的驗證條件是所有文字欄位裡最嚴的（要同時有縣市和路街門牌），所以
+    // 一格內容若通過 address 驗證，它幾乎不可能是人名、產業別或訪談內容。反過來
+    // 卻不成立——那些欄位的驗證都寬鬆到會接受地址。若照 FIELD_RULES 的順序跑，
+    // 排在前面的 KEYMAN／訪談內容會在第一輪就把地址搶走並佔住格子，等輪到
+    // address 時那格已經被標記用過了。這正是名單裡大量「未填地址」的成因：
+    // 資料一直都在，只是掛錯欄位。
+    if (map.address === undefined || !validate('address', cells[map.address])) {
+      // 地址在這類名單裡通常排在最後幾欄，從列尾往前找命中率最高
+      for (let i = cells.length - 1; i >= 0; i--) {
+        if (used.has(i)) continue;
+        const value = validate('address', cells[i]);
+        if (value) { out.address = value; used.add(i); break; }
+      }
+    }
+
     // 第一輪：位置正確的先卡位
     for (const [field] of FIELD_RULES) {
+      if (out[field] !== undefined) continue;
       const idx = map[field];
       if (idx === undefined || used.has(idx)) continue;
       const value = validate(field, cells[idx]);
@@ -726,6 +774,8 @@
     validate, resolveRow, detectShift, VALIDATORS,
     detectRelations, relationKinds, RELATION_LABEL,
     detectDealing, latestNote, DEALING_LABEL,
+    looksLikeAddress,
+    validateAddress: (t) => VALIDATORS.address(t) || '',
     INTERNAL_UNITS, PEER_UNITS, BANKS,
     parseAddress, guessOutcome, OUTCOME_LABEL, makeId, toHalfWidth,
   };
