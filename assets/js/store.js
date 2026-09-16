@@ -106,6 +106,18 @@
      * 使用者會以為刪除功能壞了。墓碑的時間戳也讓重新匯入同一份 PDF 時，
      * 比墓碑新的資料可以正常回來（那是使用者自己又匯入的，不是同步救回來的）。
      */
+    /**
+     * 匯入時覆蓋用：只把舊的那筆客戶資料刪掉，通話紀錄與追蹤狀態留著。
+     *
+     * 跟 deleteRecord 的差別就在這裡——那個是使用者真的要刪掉這家公司，
+     * 連紀錄一起清；這個是同一家公司換一份新資料，紀錄必須繼續掛在同一個 id 上。
+     * 也不留墓碑，否則新資料存進去會被同步當成「已刪除」而消失。
+     */
+    async deleteRecordsById(ids) {
+      await tx('records', 'readwrite', (store) => ids.forEach((id) => store.delete(id)));
+      return ids.length;
+    },
+
     async deleteRecord(id) {
       await tx('records', 'readwrite', (store) => store.delete(id));
 
