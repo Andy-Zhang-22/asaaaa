@@ -458,3 +458,6 @@ button, input, select { font: inherit; color: inherit; }
   font-size: 14px;
 }
 .update-bar .btn { padding: 6px 12px; font-size: 13px; }
+
+.badge-priority { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+.badge-outside { border-color: var(--danger); color: var(--danger); }
