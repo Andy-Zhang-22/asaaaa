@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-20';
+  const APP_VERSION = '20260916-21';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1293,6 +1293,38 @@ export default {
         if (!res.attempts || !res.attempts.length) note(res.reason);
         if (!mirror.checked && !window.Registry.getProxy()) {
           note('還沒試過其他來源：可以勾上面的 g0v 鏡像，或填自己的代理網址再試一次。');
+        }
+
+        /*
+         * 全部都是「空白回應」或「查無資料」時，多做一步：不帶篩選跟資料集要一筆。
+         *
+         * 那個症狀分不出「這個統編剛好沒資料」「篩選語法不對」「資料集編號是錯的」
+         * 三件事，而這三件事的處理方式完全不同。拿掉篩選就分得出來——資料集存在
+         * 的話一定給得出一筆。
+         */
+        // 只看真的收到回應的那些。官方那條永遠是跨網域被擋、根本沒收到東西，
+        // 把它算進來的話「全部都空」這個條件永遠不會成立。
+        const responded = (res.attempts || []).filter((a) => a.body || /查無資料/.test(a.reason));
+        const allEmpty = responded.length
+          && responded.every((a) => /空白回應|查無資料/.test(`${a.reason} ${a.body || ''}`));
+        if (allEmpty) {
+          note('正在確認資料集本身有沒有反應（不帶查詢條件要一筆）…');
+          const probe = await window.Registry.probeDataset();
+          if (probe.ok) {
+            note(`資料集是好的：不帶條件要得到資料（經由${probe.label}）。`
+              + '所以問題出在查詢條件，不是網址。', 'rule-verdict is-fail');
+            note(`這支 API 實際的欄位名稱：${probe.keys.join('、')}`);
+            showRaw(probe.row);
+            note('把上面這段給我，我照真正的欄位名稱改查詢條件與對應表。');
+          } else {
+            note('資料集本身也要不到任何資料，代表我用的資料集編號是錯的，'
+              + '再怎麼調查詢條件都沒用。', 'rule-verdict is-fail');
+            (probe.tried || []).forEach((t) => {
+              note(`${t.label}：${t.reason}`);
+              note(`　　網址：${t.url}`);
+            });
+            note('把上面這段給我，我換一個資料集編號。');
+          }
         }
         return;
       }
