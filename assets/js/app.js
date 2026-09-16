@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-13';
+  const APP_VERSION = '20260916-14';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -116,6 +116,43 @@
       if (value) return { field, label, value };
     }
     return null;
+  }
+
+  /*
+   * 批次：把訪談內容裡寫到的下次聯絡日補進日期欄。
+   *
+   * 跟上面那個即時補的差別在於對象：這個處理的是已經在名單裡、
+   * 當初匯入時就只讀日期欄的舊資料。判讀規則共用 findFollowUp()。
+   *
+   * 只碰「日期欄空白，或日期已經過去」的客戶——已經排好且還沒到的約訪不動，
+   * 那是使用者自己排的，比訪談內容的舊字句可信。
+   */
+  async function repairFollowUps() {
+    const today = todayISO();
+    const targets = [];
+    state.records.forEach((rec) => {
+      const r = view(rec);
+      if (r.nextDate && r.nextDate >= today) return;
+      const found = window.Normalize.findFollowUp(r.notesRaw, today);
+      if (found && found.iso !== r.nextDate) targets.push({ rec, r, found });
+    });
+
+    if (!targets.length) { toast('訪談內容裡沒有找到可以補的下次聯絡日'); return; }
+
+    const samples = targets.slice(0, 5)
+      .map((t) => `　・${t.r.company}\n　　「${t.found.snippet}」→ ${rocLabel(t.found.iso)}`).join('\n');
+    const ok = confirm(`找到 ${targets.length} 筆客戶的訪談內容寫了再聯絡的日期，但日期欄是空的或已經過期：\n\n`
+      + `${samples}\n\n`
+      + '要把這些日期補進去嗎？\n（已經排好、還沒到的約訪不會被動到；補進去的可以在詳細頁改回來）');
+    if (!ok) return;
+
+    for (const { rec, found } of targets) {
+      await saveState(rec.id, { nextDate: found.iso });
+    }
+    await reload();
+    render();
+    toast(`已補上 ${targets.length} 筆下次聯絡日`);
+    scheduleSync();
   }
 
   async function repairStrayAddresses() {
@@ -683,16 +720,30 @@
       const text = memo.value.trim();
       if (!text && !nextInput.value) { toast('請至少填寫內容或下次聯絡日'); return; }
       const today = todayISO();
+
+      /*
+       * 日期欄沒填，但內容裡寫了再聯絡的日期，就補進去。
+       *
+       * 實際使用時很容易把「約10/20再拜訪」打在內容裡就送出，日期欄留空。
+       * 那筆客戶因此永遠不會出現在今日待打——寫了等於沒寫。
+       * 只在日期欄是空的時候才補，使用者自己填的一律尊重。
+       */
+      let picked = nextInput.value;
+      let auto = null;
+      if (!picked) {
+        auto = window.Normalize.findFollowUp(text, today);
+        if (auto) picked = auto.iso;
+      }
       await window.Store.addLog({
         recordId: r.id, date: today, text, outcome: outcomeSel.value, createdAt: Date.now(),
       });
       await saveState(r.id, {
         outcome: outcomeSel.value,
-        nextDate: nextInput.value || null,
+        nextDate: picked || null,
         lastDate: today,
       });
       state.logs = await window.Store.allLogs();
-      toast('已儲存通話紀錄');
+      toast(auto ? `已儲存，並依內容把下次聯絡日設為 ${rocLabel(auto.iso)}` : '已儲存通話紀錄');
       render();
       openDetail(r.id);
       scheduleSync();
@@ -1645,6 +1696,7 @@ export default {
       if (act === 'paste-customer') openPasteImport();
       if (act === 'fix-address') { await repairStrayAddresses(); return; }
       if (act === 'registry') { openRegistryUpdate(); return; }
+      if (act === 'followup') { await repairFollowUps(); return; }
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }
