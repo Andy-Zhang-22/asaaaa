@@ -22,7 +22,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), industry: '' },
+    filters: { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -66,6 +66,13 @@
     };
   }
 
+  /** 資本額（仟元）≤ 10,000 者屬微型企業營業處客戶範疇，見規則頁。 */
+  function capitalScale(record) {
+    const value = Number(String(record.capital || '').replace(/[^\d.]/g, ''));
+    if (!value) return '';
+    return value <= (window.Rules ? window.Rules.MICRO_CAPITAL_LIMIT : 10000) ? '微企範疇' : '一般組範疇';
+  }
+
   function searchBlob(r) {
     if (!r._blob) {
       r._blob = [r.company, r.aliases.join(' '), r.taxId, r.owner, r.keyman, r.industry,
@@ -96,6 +103,7 @@
       if (f.grade.size && !f.grade.has(r.grade || '未分級')) return false;
       if (f.outcome.size && !f.outcome.has(r.outcome)) return false;
       if (f.city.size && !f.city.has(r.city || '其他')) return false;
+      if (f.scale.size && !f.scale.has(capitalScale(r) || '未填資本額')) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (f.due) {
         const b = dueBucket(r.nextDate);
@@ -173,6 +181,7 @@
     chips($('#fltGrade'), tally((r) => r.grade || '未分級'), state.filters.grade);
     chips($('#fltOutcome'), tally((r) => r.outcome), state.filters.outcome, (v) => OUTCOME_LABEL[v] || v);
     chips($('#fltCity'), tally((r) => r.city || '其他').slice(0, 12), state.filters.city);
+    chips($('#fltScale'), tally((r) => capitalScale(r) || '未填資本額'), state.filters.scale);
 
     const industries = [...new Set(all.map((r) => r.industry).filter(Boolean))].sort();
     $('#industryList').textContent = '';
@@ -205,6 +214,7 @@
       el('span', { className: 'card-name', textContent: r.company }),
       r.grade ? el('span', { className: `badge badge-grade badge-${r.grade}`, textContent: r.grade }) : '',
       outcomeBadge(r),
+      capitalScale(r) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
     ].filter(Boolean));
     node.append(top);
 
@@ -374,7 +384,7 @@
     const rows = [
       ['統一編號', r.taxId], ['負責人', r.owner], ['KEYMAN', r.keyman],
       ['產業別', r.industry], ['成立年', r.founded],
-      ['資本額', r.capital ? `${r.capital} 仟元` : ''],
+      ['資本額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
       ['下次聯絡', r.nextDate ? `${rocLabel(r.nextDate)}（${r.nextDate}）` : ''],
       ['最近聯絡', r.lastDate ? `${rocLabel(r.lastDate)}（${r.lastDate}）` : ''],
       ['名單新增', r.addedDate ? rocLabel(r.addedDate) : ''],
@@ -686,7 +696,7 @@
     $('#btnMore').onclick = () => { state.limit += PAGE_SIZE; renderList(); };
     $('#fltIndustry').oninput = (e) => { state.filters.industry = e.target.value.trim(); state.limit = PAGE_SIZE; render(); };
     $('#btnResetFilters').onclick = () => {
-      state.filters = { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), industry: '' };
+      state.filters = { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), industry: '' };
       $('#fltIndustry').value = '';
       state.limit = PAGE_SIZE;
       render();

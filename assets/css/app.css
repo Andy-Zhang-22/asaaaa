@@ -344,3 +344,43 @@ button, input, select { font: inherit; color: inherit; }
 .rule-table td:first-child { white-space: nowrap; }
 .rule-table .row-short td { color: var(--danger); }
 .rule-table .row-waived td { color: var(--muted); }
+
+/* ---------- 規則頁：多規章與分析 ---------- */
+.rule-source { margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.rule-subhead { font-size: 14px; margin: 22px 0 10px; }
+.rule-note-plain { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+.rule-article ul, .rule-article ol { margin: 0; padding-right: 20px; }
+.rule-article li { margin-bottom: 8px; line-height: 1.85; }
+
+.rule-analysis { border-color: var(--primary); }
+.rule-flow { list-style: none; counter-reset: flow; margin: 0 0 8px; padding: 0; }
+.rule-flow li {
+  counter-increment: flow; position: relative;
+  padding: 0 40px 14px 0; border-right: 2px solid var(--border); margin-right: 13px;
+}
+.rule-flow li:last-child { border-right-color: transparent; }
+.rule-flow li::before {
+  content: counter(flow); position: absolute; right: -14px; top: 0;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--primary); color: var(--primary-ink);
+  font-size: 13px; font-weight: 700; display: grid; place-items: center;
+}
+.rule-flow strong { display: block; margin-bottom: 2px; }
+.rule-flow p { margin: 0; color: var(--muted); line-height: 1.8; }
+
+.rule-finding {
+  border-right: 3px solid var(--border); padding: 2px 12px 2px 0; margin-bottom: 14px;
+}
+.rule-finding strong { display: block; margin-bottom: 3px; }
+.rule-finding p { margin: 0; color: var(--muted); line-height: 1.8; }
+.rule-finding.level-key { border-right-color: var(--primary); }
+.rule-finding.level-warn { border-right-color: var(--warn); }
+.rule-finding.level-note { border-right-color: var(--border); }
+
+.rule-table-share th[scope="row"], .rule-table-thresholds th[scope="row"] { font-weight: 600; }
+.rule-table-share td, .rule-table-share th { text-align: center; }
+.rule-table-share th[scope="row"] { text-align: right; white-space: nowrap; }
+.rule-table-thresholds td, .rule-table-thresholds th { text-align: right; }
+.rule-table-thresholds th[scope="row"] { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rule-table td { white-space: normal; }
+.badge-micro { border-color: var(--primary); color: var(--primary); }
