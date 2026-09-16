@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-1';
+  const APP_VERSION = '20260916-2';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -664,6 +664,7 @@
       const existing = state.userStates.get(recordId) || {};
       await saveState(recordId, {
         edits: Object.keys(edits).length ? edits : undefined,
+        editsAt: Date.now(),      // 編輯有自己的時間戳，同步時才不會被通話紀錄洗掉
         nextDate: nextDate || existing.nextDate || null,
       });
       closeOverlays();
@@ -674,7 +675,7 @@
     };
     const revert = el('button', { className: 'btn', type: 'button', textContent: '還原成名單原始內容' });
     revert.onclick = async () => {
-      await saveState(recordId, { edits: undefined });
+      await saveState(recordId, { edits: undefined, editsAt: Date.now() });
       closeOverlays();
       render();
       openDetail(recordId);
