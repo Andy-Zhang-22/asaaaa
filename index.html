@@ -30,6 +30,8 @@
     <button id="btnImport" class="btn btn-primary">匯入名單</button>
     <button id="btnMenu" class="btn btn-ghost" aria-haspopup="true" title="更多">⋯</button>
     <div id="menu" class="menu" hidden>
+      <button data-act="new-customer">手動新增客戶</button>
+      <hr>
       <button data-act="export-csv">匯出 CSV（含通話紀錄）</button>
       <button data-act="export-json">下載備份 JSON</button>
       <button data-act="import-json">還原備份 JSON（合併）</button>
@@ -182,6 +184,15 @@
         <code>drive.file</code> 權限（僅能存取自己建立的檔案），屬於不需送審的範圍。
       </p>
     </details>
+  </div>
+</div>
+
+<!-- 編輯／新增客戶 -->
+<div id="editor" class="drawer" hidden>
+  <div class="drawer-backdrop" data-close></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="編輯客戶資料">
+    <button class="drawer-close" data-close aria-label="關閉">✕</button>
+    <div id="editorBody"></div>
   </div>
 </div>
 

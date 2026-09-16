@@ -812,7 +812,9 @@
     card.append(flow);
 
     card.append(el('h3', { className: 'rule-subhead', textContent: ANALYSIS.thresholds.title }));
-    card.append(table(ANALYSIS.thresholds.columns, ANALYSIS.thresholds.rows, { className: 'rule-table-thresholds' }));
+    card.append(el('div', { className: 'rule-defer' }, [
+      table(ANALYSIS.thresholds.columns, ANALYSIS.thresholds.rows, { className: 'rule-table-thresholds' }),
+    ]));
 
     card.append(el('h3', { className: 'rule-subhead', textContent: '重點與需要確認的地方' }));
     ANALYSIS.findings.forEach((f) => card.append(el('div', { className: `rule-finding level-${f.level}` }, [
@@ -820,6 +822,27 @@
       el('p', { textContent: f.text }),
     ])));
     return card;
+  }
+
+  /**
+   * 三個工具加起來有幾十個表單元件，一次全部建好會讓第一次打開規則頁停頓。
+   * 改成捲到附近才建——反正要用工具本來就得先捲下去。
+   */
+  function lazyTool(card, build) {
+    const holder = el('div', { className: 'rule-tool-holder' });
+    card.append(holder);
+    let done = false;
+    const make = () => {
+      if (done) return;
+      done = true;
+      holder.classList.add('is-ready');
+      holder.append(build());
+    };
+    if (typeof IntersectionObserver !== 'function') { make(); return; }
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { make(); io.disconnect(); }
+    }, { rootMargin: '400px' });
+    io.observe(holder);
   }
 
   function render(host) {
@@ -832,7 +855,7 @@
         el('p', { className: 'rule-summary', textContent: rule.summary }),
       ]);
       rule.sections.forEach((section) => card.append(renderSection(section)));
-      if (rule.tool && TOOLS[rule.tool]) card.append(TOOLS[rule.tool]());
+      if (rule.tool && TOOLS[rule.tool]) lazyTool(card, TOOLS[rule.tool]);
       host.append(card);
     });
   }

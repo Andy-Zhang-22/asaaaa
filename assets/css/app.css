@@ -32,6 +32,12 @@
 }
 
 * { box-sizing: border-box; }
+/*
+ * [hidden] 是瀏覽器預設樣式，任何作者端的 display 都會蓋過它。
+ * .stats 與 .rules 都設了 display:grid，於是「隱藏」的分頁其實還在排版，
+ * 寬表格把手機版面撐爆。統一用 !important 讓 hidden 永遠有效。
+ */
+[hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
@@ -335,6 +341,11 @@ button, input, select { font: inherit; color: inherit; }
 .rule-note { margin: 0 0 8px; font-size: 13px; color: var(--warn); line-height: 1.7; }
 
 .rule-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13.5px; }
+/* 規則裡的表格欄位多，窄螢幕改成可橫向捲動，不要把整頁撐寬 */
+@media (max-width: 760px) {
+  .rule-table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .rule-table thead, .rule-table tbody { display: table; width: max-content; min-width: 100%; }
+}
 .rule-table th, .rule-table td {
   padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: right;
   font-variant-numeric: tabular-nums;
@@ -384,3 +395,34 @@ button, input, select { font: inherit; color: inherit; }
 .rule-table-thresholds th[scope="row"] { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rule-table td { white-space: normal; }
 .badge-micro { border-color: var(--primary); color: var(--primary); }
+
+/* ---------- 長列表的繪製成本 ---------- */
+/*
+ * 名單一次可能有幾百筆，規則頁也很長。content-visibility 讓瀏覽器跳過
+ * 畫面外元素的排版與繪製，切換分頁時就不必為看不到的內容付出成本。
+ * contain-intrinsic-size 給一個概略高度，捲軸才不會亂跳。
+ */
+.card { content-visibility: auto; contain-intrinsic-size: auto 150px; }
+/*
+ * 規則頁只有 6 張卡，實測加 content-visibility 並沒有比較快（成本只是從
+ * 繪製移到排版），所以只在幾百筆的名單卡片上使用。
+ */
+.bars { content-visibility: auto; contain-intrinsic-size: auto 260px; }
+
+/* ---------- 編輯客戶資料 ---------- */
+.detail-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+.badge-edited { border-color: var(--warn); color: var(--warn); }
+.edit-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 12px; margin: 16px 0; }
+@media (max-width: 520px) { .edit-form { grid-template-columns: 1fr; } }
+.edit-form textarea { min-height: 52px; resize: vertical; }
+.edit-form .rule-field input, .edit-form .rule-field textarea {
+  width: 100%; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+}
+
+/* 工具表單延後建立，先留一塊位置避免捲軸亂跳 */
+.rule-tool-holder { min-height: 120px; }
+.rule-tool-holder.is-ready { min-height: 0; }
+
+/* 門檻表在畫面外時不必排版 */
+.rule-defer { content-visibility: auto; contain-intrinsic-size: auto 560px; }
