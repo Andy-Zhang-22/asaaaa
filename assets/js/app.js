@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-3';
+  const APP_VERSION = '20260916-4';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -258,13 +258,56 @@
     });
   }
 
-  function telLinks(r, limit) {
-    return (limit ? r.phones.slice(0, limit) : r.phones).map((p) => {
-      const a = el('a', { className: 'tel', href: `tel:${p.dial}` });
-      a.append(document.createTextNode(`📞 ${p.display}${p.note ? ` · ${p.note}` : ''}`));
-      a.onclick = (e) => e.stopPropagation();
-      return a;
+  /**
+   * 把文字複製到剪貼簿。navigator.clipboard 需要安全來源，
+   * 以 file:// 開啟或舊瀏覽器會沒有，所以留一個備援。
+   */
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+      const box = el('textarea', { value: text });
+      box.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+      document.body.append(box);
+      box.select();
+      const ok = document.execCommand('copy');
+      box.remove();
+      return ok;
+    } catch (err) {
+      console.error(err);
+      return false;
+    }
+  }
+
+  /** 一支電話 = 撥號連結 + 複製鈕。複製的是純數字，貼到撥號鍵盤直接可用。 */
+  function telGroup(p) {
+    const digits = String(p.dial || '').split(',')[0];
+    const ext = String(p.dial || '').split(',')[1] || '';
+
+    const link = el('a', { className: 'tel', href: `tel:${p.dial}` });
+    link.append(document.createTextNode(`📞 ${p.display}${p.note ? ` · ${p.note}` : ''}`));
+    link.onclick = (e) => e.stopPropagation();
+
+    const copy = el('button', {
+      className: 'tel-copy', type: 'button',
+      title: `複製 ${digits}`, 'aria-label': `複製電話 ${digits}`, textContent: '複製',
     });
+    copy.onclick = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ok = await copyText(digits);
+      toast(ok
+        ? `已複製 ${digits}${ext ? `（分機 ${ext}）` : ''}`
+        : '複製失敗，請手動選取號碼');
+    };
+
+    return el('span', { className: 'tel-group' }, [link, copy]);
+  }
+
+  function telLinks(r, limit) {
+    return (limit ? r.phones.slice(0, limit) : r.phones).map(telGroup);
   }
 
   function card(r) {
