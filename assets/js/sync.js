@@ -24,8 +24,8 @@
   };
 
   function mergeTombstones(a, b) {
-    const out = { logs: {}, sources: {} };
-    ['logs', 'sources'].forEach((kind) => {
+    const out = { logs: {}, sources: {}, records: {} };
+    ['logs', 'sources', 'records'].forEach((kind) => {
       const left = (a && a[kind]) || {};
       const right = (b && b[kind]) || {};
       Object.keys(left).forEach((k) => { out[kind][k] = left[k]; });
@@ -69,17 +69,28 @@
       if (!seen || (r.importedAt || 0) >= (seen.importedAt || 0)) records.set(r.id, r);
     });
     for (const [id, r] of records) {
-      const killedAt = tombstones.sources[r.source];
-      if (killedAt && killedAt > (r.importedAt || 0)) records.delete(id);
+      // 整份名單被刪掉
+      const sourceKilled = tombstones.sources[r.source];
+      if (sourceKilled && sourceKilled > (r.importedAt || 0)) { records.delete(id); continue; }
+      // 單一筆客戶被刪掉。比墓碑新的匯入可以回來——那是使用者自己又匯入了一次，
+      // 不是同步把刪掉的東西救回來。
+      const selfKilled = tombstones.records[id];
+      if (selfKilled && selfKilled > (r.importedAt || 0)) records.delete(id);
     }
 
-    // 通話紀錄：兩邊聯集，靠 uid 去重；被刪掉的不要救回來
+    // 通話紀錄：兩邊聯集，靠 uid 去重；被刪掉的不要救回來。
+    //
+    // 同一個 uid 出現在兩邊時要取「改得比較新」的那一份，不能先到先贏——
+    // 紀錄可以就地修改，先到先贏的話在這台改完的內容會被另一台的舊版本壓著，
+    // 而且是完全無聲的：畫面上看起來存好了，同步一次就變回去。
     const logs = new Map();
+    const logStamp = (l) => Math.max(l.updatedAt || 0, l.createdAt || 0);
     [...(left.logs || []), ...(right.logs || [])].forEach((l) => {
       if (!l) return;
       const uid = l.uid || `${l.recordId}|${l.createdAt}`;
       if (tombstones.logs[uid]) return;
-      if (!logs.has(uid)) logs.set(uid, { ...l, uid });
+      const seen = logs.get(uid);
+      if (!seen || logStamp(l) > logStamp(seen)) logs.set(uid, { ...l, uid });
     });
 
     // 追蹤狀態：同一筆客戶只能有一個，取比較新的。

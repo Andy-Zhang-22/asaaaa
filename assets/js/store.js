@@ -99,9 +99,45 @@
       return ids.length;
     },
 
+    /**
+     * 刪掉單一筆客戶，連同他的通話紀錄與追蹤狀態。
+     *
+     * 一樣要留墓碑：只從這台刪掉的話，下次同步會從另一台原封不動地救回來，
+     * 使用者會以為刪除功能壞了。墓碑的時間戳也讓重新匯入同一份 PDF 時，
+     * 比墓碑新的資料可以正常回來（那是使用者自己又匯入的，不是同步救回來的）。
+     */
+    async deleteRecord(id) {
+      await tx('records', 'readwrite', (store) => store.delete(id));
+
+      const logs = await api.allLogs();
+      const mine = logs.filter((l) => l.recordId === id);
+      await tx('logs', 'readwrite', (store) => mine.forEach((l) => store.delete(l.logId)));
+      for (const l of mine) { if (l.uid) await api.addTombstone('logs', l.uid); }
+
+      await tx('state', 'readwrite', (store) => store.delete(id));
+      await api.addTombstone('records', id);
+      return mine.length;
+    },
+
     addLog(log) {
       const row = { uid: newUid(), createdAt: Date.now(), ...log };
       return tx('logs', 'readwrite', (store) => req2promise(store.add(row)));
+    },
+
+    /**
+     * 修改已經存下的通話紀錄。
+     *
+     * 保留原本的 uid 與 createdAt：uid 是同步時判斷「這是同一筆」的依據，
+     * 換掉的話別台裝置會當成新的一筆，結果變兩則。改動時間另外記在 updatedAt，
+     * 讓同步端知道哪一邊比較新。
+     */
+    async updateLog(logId, patch) {
+      const row = await tx('logs', 'readonly', (store) => req2promise(store.get(logId)));
+      if (!row) return null;
+      const next = { ...row, ...patch, logId: row.logId, uid: row.uid,
+        createdAt: row.createdAt, updatedAt: Date.now() };
+      await tx('logs', 'readwrite', (store) => store.put(next));
+      return next;
     },
 
     async deleteLog(logId) {
@@ -134,7 +170,7 @@
     },
 
     async addTombstone(kind, key) {
-      const all = (await api.getMeta('tombstones')) || { logs: {}, sources: {} };
+      const all = (await api.getMeta('tombstones')) || { logs: {}, sources: {}, records: {} };
       all[kind] = all[kind] || {};
       all[kind][key] = Date.now();
       await api.setMeta('tombstones', all);
@@ -143,7 +179,9 @@
 
     async getTombstones() {
       const all = (await api.getMeta('tombstones')) || {};
-      return { logs: all.logs || {}, sources: all.sources || {} };
+      // 每加一種墓碑都要記得列在這裡。漏掉的話墓碑存得進去卻永遠傳不出去，
+      // 刪除在本機看起來成功，同步一次就被另一台原封不動地救回來。
+      return { logs: all.logs || {}, sources: all.sources || {}, records: all.records || {} };
     },
 
     /** 直接覆寫成合併後的結果（同步用），不留墓碑。 */

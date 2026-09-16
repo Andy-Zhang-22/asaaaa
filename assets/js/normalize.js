@@ -611,6 +611,106 @@
     };
   }
 
+  /* ------------------------------------------------------------------
+   * 從訪談內容找出「下次聯絡日」
+   *
+   * 業務常常把再聯絡的時間寫在紀錄的文字裡（「約10/15再拜訪」），而不是填進
+   * 日期欄位。之前程式只讀日期欄位，所以那些客戶永遠不會出現在今日待打，
+   * 等於白寫。
+   *
+   * 判讀刻意訂得保守，因為猜錯會打亂整個聯絡排程：
+   *   - 只看每則紀錄的「內文」。開頭那個日期是訪談當天（parseNotes 已經切開），
+   *     拿它當下次聯絡日一定是錯的。
+   *   - 同一則紀錄裡要出現約訪的字眼才算，避免把金額、比例、電話誤判成日期。
+   *   - 只接受今天以後、且一年半以內的日期。
+   *   - 取最新一則紀錄的判讀結果：舊的約訪早就過期了。
+   * ------------------------------------------------------------------ */
+
+  const FOLLOWUP_HINT = /(再聯絡|再撥|再打|再約|再談|再看|再拜訪|回電|追蹤|下次|約訪|拜訪|月底|月初|月中)/;
+  const FOLLOWUP_MAX_DAYS = 550;
+
+  function addDays(isoDate, days) {
+    const d = new Date(`${isoDate}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  /**
+   * @param {string} notesRaw 整欄訪談內容
+   * @param {string} todayIso 今天（傳進來而不是直接讀時鐘，測試才好固定）
+   * @returns {{iso:string, snippet:string, from:?string}|null}
+   */
+  function findFollowUp(notesRaw, todayIso) {
+    const today = todayIso || new Date().toISOString().slice(0, 10);
+    const limit = addDays(today, FOLLOWUP_MAX_DAYS);
+    const entries = parseNotes(notesRaw);
+    if (!entries.length) return null;
+
+    const scan = (entry) => {
+      const text = toHalfWidth(entry.text || '');
+      if (!text || !FOLLOWUP_HINT.test(text)) return null;
+      const re = /(\d{1,4})[\/\-.](\d{1,2})(?:[\/\-.](\d{1,2}))?/g;
+      let m;
+      let hit = null;
+      while ((m = re.exec(text)) !== null) {
+        let value = null;
+        if (m[3]) {
+          value = parseDate(m[0]);
+        } else {
+          // 只寫了月/日，要補年份。
+          //
+          // 只有「同年的那天已經過去很久」才推到明年——那代表是跨年（12 月寫 1/5）。
+          // 不能看到過去就一律推明年：九月寫「上次8/1有拜訪過」是在講過去，
+          // 推成明年 8/1 會憑空生出一個約訪。
+          const mo = +m[1];
+          const day = +m[2];
+          if (mo < 1 || mo > 12 || day < 1 || day > 31) continue;
+          const year = +today.slice(0, 4);
+          const same = iso(year, mo, day);
+          if (!same) continue;
+          value = same >= today
+            ? same
+            : (same < addDays(today, -180) ? iso(year + 1, mo, day) : null);
+        }
+        if (!value || value <= today || value > limit) continue;
+        // 同一則裡有好幾個未來日期就取最早的：那通常才是最近一次要做的事
+        if (!hit || value < hit) hit = value;
+      }
+      if (!hit) return null;
+      return { iso: hit, snippet: text.replace(/\s+/g, ' ').trim().slice(0, 60), from: entry.date || null };
+    };
+
+    // 從最新一則往回找，找到就停
+    const ordered = entries.slice().reverse();
+    const dated = entries.filter((e) => e.date);
+    if (dated.length) {
+      ordered.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    }
+    for (const entry of ordered) {
+      /*
+       * 紀錄開頭的日期本身就在未來時，那一則整個就是約訪。
+       *
+       * 會有這種情況是因為 parseNotes 看到日期就切成新的一則，所以
+       * 「115/09/01 老闆說115/10/15再聯絡」會被切成兩則，10/15 變成第二則的
+       * 開頭日期而不是內文。只掃內文的話這種寫法永遠抓不到。
+       * 一樣要有約訪字眼才算，否則「115/10/01 已聯絡」也會被當成約訪。
+       */
+      // 內文裡寫明的日期優先：開頭那個日期是這則寫下的時間，
+      // 內文的「約1/5再談」才是真正約好的那一天。
+      const got = scan(entry);
+      if (got) return got;
+      if (entry.date && entry.date > today && entry.date <= limit
+        && FOLLOWUP_HINT.test(toHalfWidth(entry.text || ''))) {
+        return {
+          iso: entry.date,
+          snippet: toHalfWidth(entry.text || '').replace(/\s+/g, ' ').trim().slice(0, 60),
+          from: null,
+        };
+      }
+    }
+    return null;
+  }
+
   /** 這筆客戶有哪幾類往來，給篩選用。 */
   function relationKinds(relations) {
     return ['internal', 'peer', 'bank'].filter((k) => relations[k] && relations[k].length);
@@ -774,6 +874,7 @@
     validate, resolveRow, detectShift, VALIDATORS,
     detectRelations, relationKinds, RELATION_LABEL,
     detectDealing, latestNote, DEALING_LABEL,
+    findFollowUp,
     looksLikeAddress,
     validateAddress: (t) => VALIDATORS.address(t) || '',
     INTERNAL_UNITS, PEER_UNITS, BANKS,
