@@ -487,3 +487,6 @@ button, input, select { font: inherit; color: inherit; }
 
 /* 刪除鈕：在詳細頁的動作列裡要一眼看得出是危險操作 */
 .btn.danger { border-color: var(--danger); color: var(--danger); }
+
+/* 選單底部的版本號：出問題時要一眼看得出自己跑的是哪一版 */
+.menu-version { padding: 6px 12px 8px; font-size: 12px; color: var(--muted); }

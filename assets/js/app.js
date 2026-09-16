@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-16';
+  const APP_VERSION = '20260916-17';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1619,15 +1619,28 @@ export default {
    * version.json 來比對；不一致就提示更新，並用帶參數的網址重新載入，
    * 強迫瀏覽器重新抓 index.html。
    */
-  async function checkForUpdate() {
+  /*
+   * 檢查有沒有新版本。
+   *
+   * @param {boolean} loud 使用者自己按「檢查更新」時為 true，已是最新版也要回報。
+   *   自動檢查時保持安靜——每次開啟都跳「已是最新版」很吵。
+   *
+   * 會做這件事是因為使用者多次遇到「我明明更新了，但畫面沒變」。實際上是
+   * 瀏覽器拿快取的舊檔，而從畫面上完全看不出自己跑的是哪一版，只能瞎猜。
+   */
+  async function checkForUpdate(loud) {
     try {
       const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
-      if (!res.ok) return;
+      if (!res.ok) { if (loud) toast('連不到伺服器，無法檢查更新'); return; }
       const data = await res.json();
-      if (!data || !data.version || data.version === APP_VERSION) return;
+      if (!data || !data.version || data.version === APP_VERSION) {
+        if (loud) toast(`已經是最新版（${APP_VERSION}）`);
+        return;
+      }
 
       const bar = $('#updateBar');
       bar.hidden = false;
+      if (loud) toast(`有新版本 ${data.version}，目前是 ${APP_VERSION}`);
       $('#btnUpdate').onclick = () => {
         // 換一個沒看過的網址，瀏覽器才會重新抓 index.html 而不是用快取
         location.replace(`${location.pathname}?v=${encodeURIComponent(data.version)}`);
@@ -1763,6 +1776,7 @@ export default {
       if (act === 'fix-address') { await repairStrayAddresses(); return; }
       if (act === 'registry') { openRegistryUpdate(); return; }
       if (act === 'followup') { await repairFollowUps(); return; }
+      if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }
@@ -1822,7 +1836,17 @@ export default {
       runSync({ quiet: true });          // 背景靜默同步，失敗就等使用者自己按
     }
     prebuildRules();
-    checkForUpdate();
+    $('#menuVersion').textContent = `版本 ${APP_VERSION}`;
+    checkForUpdate(false);
+    /*
+     * 切回這個分頁時再檢查一次。
+     *
+     * 原本只在載入時檢查，但手機上把網站加到主畫面之後常常是同一個分頁一直開著，
+     * 那就永遠不會再檢查——更新了也不知道。
+     */
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) checkForUpdate(false);
+    });
     if (!state.records.length) $('#importer').hidden = false;
   }
 
