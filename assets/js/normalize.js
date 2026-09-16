@@ -133,6 +133,120 @@
     return { company: parts[0], aliases: parts.slice(1) };
   }
 
+  /* ------------------------------------------------------------------
+   * 經濟部公司登記清冊（設立／變更）
+   *
+   * 使用者每個月會去撈這種檔案找新線索。欄位固定是：
+   *   序號, 統一編號, 公司名稱, 公司所在地, 代表人, 資本額, 核准設立日期
+   *
+   * 一次四千多筆，但他要的其實只有一小撮：資本額在一定範圍、地址在服務區。
+   * 以前得自己在試算表裡篩，現在直接在匯入時做掉。
+   *
+   * 順便從公司名稱推產業別——這種檔案沒有行業欄位，但設備租賃做不做得成，
+   * 看名字就有八成把握：「精密工業」「機械」有實體設備可談，「投資」「控股」
+   * 通常只有一張辦公桌。推測歸推測，所以是標記而不是直接濾掉。
+   * ------------------------------------------------------------------ */
+
+  const GOV_COLUMNS = ['統一編號', '公司名稱', '公司所在地', '代表人', '資本額'];
+
+  /** 這份檔案是不是經濟部的登記清冊。 */
+  function isGovRegistry(rows) {
+    if (!rows || !rows.length) return false;
+    const head = (rows[0] || []).map(squash);
+    return GOV_COLUMNS.every((c) => head.some((cell) => cell.includes(c)));
+  }
+
+  const GOV_INDUSTRY = [
+    [/(精密|機械|機電|工業|製造|鑄造|模具|沖壓|加工)/, '製造加工', true],
+    [/(工程|營造|水電|土木|鋼構|空調|消防)/, '工程營造', true],
+    [/(物流|通運|運輸|貨運|倉儲|車業|汽車)/, '運輸物流', true],
+    [/(食品|餐飲|烘焙|農產|生鮮|肉品)/, '食品餐飲', true],
+    [/(科技|資訊|電子|半導體|光電|軟體|數位|網路)/, '科技資訊', true],
+    [/(生技|醫療|藥品|檢驗|器材)/, '生技醫療', true],
+    [/(能源|太陽能|環保|再生)/, '能源環保', true],
+    [/(印刷|紡織|塑膠|橡膠|化工|金屬|五金)/, '傳統製造', true],
+    [/(建設|開發|營建|不動產|地產)/, '建設開發', true],
+    [/(投資|資產|控股|創投|管理顧問|顧問)/, '投資控股', false],
+    [/(貿易|國際|企業|實業|興業)/, '貿易實業', true],
+  ];
+
+  function guessIndustry(name) {
+    for (const [re, label, worth] of GOV_INDUSTRY) {
+      if (re.test(name)) return { industry: label, hasAssets: worth };
+    }
+    return { industry: '', hasAssets: true };
+  }
+
+  /**
+   * @param {Array<Array<string>>} rows 原始表格（含表頭）
+   * @param {object} opt
+   *   minCapital/maxCapital 單位是「元」，跟來源檔一致；cities 是要保留的縣市。
+   * @returns {{records:Array, stats:object}}
+   */
+  function fromGovRegistry(rows, opt) {
+    const o = opt || {};
+    const min = Number.isFinite(o.minCapital) ? o.minCapital : 0;
+    const max = Number.isFinite(o.maxCapital) ? o.maxCapital : Infinity;
+    const cities = o.cities && o.cities.length ? o.cities : null;
+
+    const head = (rows[0] || []).map(squash);
+    const at = (name) => head.findIndex((c) => c.includes(name));
+    const idx = {
+      taxId: at('統一編號'), company: at('公司名稱'), address: at('公司所在地'),
+      owner: at('代表人'), capital: at('資本額'), date: at('核准'),
+    };
+
+    const stats = { total: rows.length - 1, capitalOut: 0, cityOut: 0, dup: 0, kept: 0 };
+    const seen = new Set();
+    const records = [];
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const cell = (k) => (idx[k] >= 0 ? String(row[idx[k]] || '').trim() : '');
+      const taxId = cell('taxId').replace(/\D/g, '');
+      const company = cell('company');
+      if (!company) continue;
+
+      const capital = Number(cell('capital').replace(/\D/g, ''));
+      if (!Number.isFinite(capital) || capital < min || capital > max) { stats.capitalOut++; continue; }
+
+      const address = cell('address');
+      const city = (CITIES.find((c) => address.startsWith(c)) || '').replace(/^台/, '臺');
+      if (cities && !cities.includes(city)) { stats.cityOut++; continue; }
+
+      // 同一批檔案裡（例如同月份的兩份）會有完全相同的資料列
+      const key = taxId || squash(company);
+      if (seen.has(key)) { stats.dup++; continue; }
+      seen.add(key);
+
+      const { industry, hasAssets } = guessIndustry(company);
+      records.push({
+        taxId,
+        company,
+        address,
+        owner: cell('owner'),
+        capitalThousands: Math.round(capital / 1000).toLocaleString('en-US'),
+        capitalRaw: capital,
+        founded: (cell('date').match(/^\d{3}/) ? String(+cell('date').slice(0, 3) + 1911) : ''),
+        industry,
+        hasAssets,
+      });
+      stats.kept++;
+    }
+    return { records, stats };
+  }
+
+  /** 轉成「貼上新增客戶」那套標準欄位順序，後面就走既有的解析流程。 */
+  function govToStandardRows(records) {
+    const out = [STANDARD_HEADER.slice()];
+    records.forEach((r) => {
+      const note = r.hasAssets ? '' : '（名稱看起來是投資／控股類，可能沒有設備標的）';
+      out.push([r.company, r.taxId, '', r.founded, r.capitalThousands, '', r.owner,
+        '', r.industry, '', '', note, r.address, '', '']);
+    });
+    return out;
+  }
+
   /** 找出表頭那一列，回傳 { index, map }；找不到回傳 null。 */
   function detectHeader(rows) {
     for (let i = 0; i < Math.min(rows.length, 8); i++) {
@@ -966,6 +1080,7 @@
     detectDealing, latestNote, DEALING_LABEL,
     detectBlocked,
     suspiciousName, splitGluedName,
+    isGovRegistry, fromGovRegistry, govToStandardRows, guessIndustry,
     findFollowUp,
     looksLikeAddress,
     validateAddress: (t) => VALIDATORS.address(t) || '',
