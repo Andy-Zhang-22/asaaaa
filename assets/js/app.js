@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-14';
+  const APP_VERSION = '20260916-16';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -127,6 +127,37 @@
    * 只碰「日期欄空白，或日期已經過去」的客戶——已經排好且還沒到的約訪不動，
    * 那是使用者自己排的，比訪談內容的舊字句可信。
    */
+  /*
+   * 刪掉單一筆客戶。
+   *
+   * 原本只能用「管理已匯入名單」整份刪掉，但實際上會遇到的是單筆要移除：
+   * 公司倒了、統編重複、或是明確表示不要再打的。為了一筆而整份重匯不合理。
+   *
+   * 提示裡把會一起消失的東西講清楚（通話紀錄、編輯內容），因為這個動作救不回來。
+   */
+  function deleteBtn(r) {
+    const btn = el('button', { className: 'btn btn-tiny danger', type: 'button', textContent: '刪除這筆' });
+    btn.onclick = async () => {
+      const logCount = state.logs.filter((l) => l.recordId === r.id).length;
+      const extra = [
+        logCount ? `${logCount} 則通話紀錄` : '',
+        r.edited ? '你改過的欄位內容' : '',
+      ].filter(Boolean).join('、');
+      const ok = confirm(`確定要從名單刪掉「${r.company}」嗎？\n`
+        + (extra ? `\n連同${extra}會一起刪掉。\n` : '')
+        + '\n這個動作救不回來，其他裝置同步後也會一起消失。'
+        + '\n（之後重新匯入同一份 PDF 的話，這筆會再出現）');
+      if (!ok) return;
+      await window.Store.deleteRecord(r.id);
+      await reload();
+      closeOverlays();
+      render();
+      toast(`已刪除「${r.company}」`);
+      scheduleSync();
+    };
+    return btn;
+  }
+
   async function repairFollowUps() {
     const today = todayISO();
     const targets = [];
@@ -655,6 +686,7 @@
         outcomeBadge(r),
         r.edited ? el('span', { className: 'badge badge-edited', textContent: '已修改' }) : '',
         editBtn,
+        deleteBtn(r),
       ].filter(Boolean)),
     ].filter(Boolean)));
 
@@ -803,13 +835,47 @@
         }));
         li.append(el('p', { textContent: e.text }));
         if (e.mine) {
+          /*
+           * 自己記的紀錄要能改，不能只有刪除。
+           *
+           * 打完電話當下打字很容易漏字或記錯，如果只能刪掉重打，日期跟結果都要
+           * 重新選一次，而且原本那則的時間戳就沒了。改成就地編輯。
+           */
+          const edit = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '修改' });
           const del = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '刪除' });
+          const actions = el('div', { className: 'card-actions' }, [edit, del]);
+
+          edit.onclick = () => {
+            const box = el('textarea', { className: 'paste-box', rows: 3, value: e.text });
+            const when = el('input', { type: 'date', value: e.date || todayISO() });
+            const ok = el('button', { className: 'btn btn-primary btn-tiny', type: 'button', textContent: '儲存' });
+            const cancel = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '取消' });
+            const editor = el('div', {}, [box, el('div', { className: 'row' }, [when, ok, cancel])]);
+            li.replaceChild(editor, actions);
+            box.focus();
+            cancel.onclick = () => { li.replaceChild(actions, editor); };
+            ok.onclick = async () => {
+              await window.Store.updateLog(e.logId, { text: box.value.trim(), date: when.value || e.date });
+              state.logs = await window.Store.allLogs();
+              touch();
+              render();
+              openDetail(r.id);
+              toast('已更新這則紀錄');
+              scheduleSync();
+            };
+          };
+
           del.onclick = async () => {
+            if (!confirm('確定刪除這則紀錄嗎？')) return;
             await window.Store.deleteLog(e.logId);
             state.logs = await window.Store.allLogs();
+            touch();
+            render();
             openDetail(r.id);
+            toast('已刪除這則紀錄');
+            scheduleSync();
           };
-          li.append(del);
+          li.append(actions);
         }
         ul.append(li);
       });

@@ -484,3 +484,6 @@ button, input, select { font: inherit; color: inherit; }
   background: var(--code-bg, rgba(127, 127, 127, 0.12));
   font-size: 12px; line-height: 1.6; white-space: pre; direction: ltr; text-align: left;
 }
+
+/* 刪除鈕：在詳細頁的動作列裡要一眼看得出是危險操作 */
+.btn.danger { border-color: var(--danger); color: var(--danger); }
