@@ -474,3 +474,13 @@ button, input, select { font: inherit; color: inherit; }
 .relation-group.relation-peer { border-right-color: var(--muted); }
 .relation-group.relation-bank { border-right-color: var(--primary); }
 .relation-snippet { margin: 4px 0 0; font-size: 13px; color: var(--muted); line-height: 1.7; }
+
+/* 自架代理的設定說明 */
+.proxy-guide { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.proxy-guide summary { cursor: pointer; font-weight: 600; }
+.proxy-guide ol { margin: 10px 0; padding-right: 20px; line-height: 1.9; }
+.proxy-code {
+  max-height: 260px; overflow: auto; padding: 10px; border-radius: 6px;
+  background: var(--code-bg, rgba(127, 127, 127, 0.12));
+  font-size: 12px; line-height: 1.6; white-space: pre; direction: ltr; text-align: left;
+}

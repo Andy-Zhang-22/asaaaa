@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-10';
+  const APP_VERSION = '20260916-11';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -926,6 +926,53 @@
    * 更新一律寫成「編輯」，不動原始名單資料：登記資料未必永遠比業務手上的新
    * （例如剛換負責人還沒登記），保留得回原狀的路。
    */
+  /*
+   * 自架代理用的 Cloudflare Worker 腳本。
+   *
+   * 放在程式裡而不是只寫在 README，是因為使用者要設定的時候人在瀏覽器前面，
+   * 不會跑去翻 GitHub。旁邊直接給複製鈕。
+   *
+   * 兩個容易忽略但會害人 debug 半天的細節：
+   *   1. 連錯誤回應都要帶 CORS 標頭。少了的話，瀏覽器只會報「跨網域被擋」，
+   *      把真正的錯誤訊息（例如網址不在白名單）整個吃掉，等於瞎子摸象。
+   *   2. 白名單不能拿掉。沒有它，這個 Worker 就是誰都能拿去轉打任意網站的跳板。
+   */
+  const WORKER_SCRIPT = `const ALLOWED = 'https://data.gcis.nat.gov.tw/';
+const ORIGIN = '${location.origin}';
+
+const cors = {
+  'Access-Control-Allow-Origin': ORIGIN,
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Accept, Content-Type',
+};
+
+export default {
+  async fetch(request) {
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+
+    const target = new URL(request.url).searchParams.get('url');
+    // 白名單不要拿掉：沒有它，這個 Worker 就是任何人都能拿去轉打任意網站的跳板
+    if (!target || !target.startsWith(ALLOWED)) {
+      return new Response('只接受 data.gcis.nat.gov.tw 的網址', { status: 400, headers: cors });
+    }
+
+    try {
+      const upstream = await fetch(target, { headers: { Accept: 'application/json' } });
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: {
+          ...cors,
+          'Content-Type': upstream.headers.get('content-type') || 'application/json',
+          'Cache-Control': 'public, max-age=86400',
+        },
+      });
+    } catch (err) {
+      // 錯誤也要帶 cors，否則瀏覽器只會說「跨網域被擋」，看不到真正的原因
+      return new Response('連不上政府網站：' + err.message, { status: 502, headers: cors });
+    }
+  },
+};`;
+
   const REGISTRY_FIELDS = [
     ['taxId', '統一編號'],
     ['capital', '資本額（仟元）'],
@@ -954,9 +1001,30 @@
       value: window.Registry.getProxy(),
     });
     host.append(el('label', { className: 'rule-field' }, [
-      el('span', { textContent: '自架代理網址（最可控，設定方式見 README）' }), proxy,
+      el('span', { textContent: '自架代理網址（不想經過第三方就用這個）' }), proxy,
     ]));
     proxy.onchange = () => { window.Registry.setProxy(proxy.value.trim()); };
+
+    const guide = el('details', { className: 'proxy-guide' }, [
+      el('summary', { textContent: '怎麼架自己的代理（免費，約五分鐘）' }),
+    ]);
+    guide.append(el('ol', {}, [
+      el('li', { textContent: '到 dash.cloudflare.com 註冊（免費方案就夠用）。' }),
+      el('li', { textContent: '左側選 Workers & Pages → Create → Start with Hello World → Deploy。' }),
+      el('li', { textContent: '按 Edit code，把編輯器裡原有的內容全部刪掉，貼上下面這段，然後 Deploy。' }),
+      el('li', { textContent: '把它給你的網址（長得像 https://xxx.workers.dev）填回上面的欄位。' }),
+      el('li', { textContent: '按「先試一筆」確認通了。' }),
+    ]));
+    const code = el('pre', { className: 'proxy-code', textContent: WORKER_SCRIPT });
+    const copyBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '複製腳本' });
+    copyBtn.onclick = async () => {
+      toast(await copyText(WORKER_SCRIPT) ? '已複製，貼到 Cloudflare 的編輯器裡' : '複製失敗，請手動選取');
+    };
+    guide.append(el('div', { className: 'card-actions' }, [copyBtn]), code);
+    guide.append(el('p', { className: 'muted',
+      textContent: '腳本裡的白名單只允許轉打政府的開放資料網址，請不要拿掉——'
+        + '沒有它，這個代理就變成任何人都能拿去轉打任意網站的跳板。' }));
+    host.append(guide);
 
     const result = el('div', { className: 'rule-result' });
     const tryOne = el('button', { className: 'btn btn-primary', type: 'button', textContent: '先試一筆' });
