@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-32';
+  const APP_VERSION = '20260916-34';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1866,6 +1866,108 @@ export default {
     $('#importLog').prepend(box);
   }
 
+  /*
+   * 匯入時遇到已經在名單裡的公司要怎麼辦。
+   *
+   * 客戶的 id 是「檔名＋公司名＋統編」算出來的，所以同一家公司出現在不同檔案裡，
+   * 會變成兩張各自獨立的卡片。名單越匯越多，同一家公司就散在好幾處，
+   * 打過的紀錄在這張、新的資料在那張。
+   *
+   * 比對優先用統一編號：那是唯一且不會有寫法差異的。沒有統編才退回公司名稱，
+   * 並且把「台／臺」正規化——登記一律用「臺」，但名單上兩種都有。
+   */
+  const dedupeKey = (r) => {
+    const taxId = String(r.taxId || '').replace(/\D/g, '');
+    if (taxId.length === 8) return `tax:${taxId}`;
+    const name = String(r.company || '').replace(/\s+/g, '').replace(/台/g, '臺');
+    return name ? `name:${name}` : '';
+  };
+
+  /**
+   * 找出這批要匯入的資料裡，有哪些公司已經在名單上。
+   * 同一份來源檔的舊資料不算——那些本來就會被整份換掉。
+   */
+  function findImportDuplicates(incoming, sourceName) {
+    const index = new Map();
+    state.records.forEach((rec) => {
+      if (rec.source === sourceName) return;
+      const key = dedupeKey(rec);
+      if (key && !index.has(key)) index.set(key, rec);
+    });
+    const hits = [];
+    incoming.forEach((r) => {
+      const key = dedupeKey(r);
+      const old = key ? index.get(key) : null;
+      if (old) hits.push({ incoming: r, old, byTaxId: key.startsWith('tax:') });
+    });
+    return hits;
+  }
+
+  /**
+   * 問使用者要怎麼處理重複的，回傳 'overwrite' | 'keep' | 'skip' | null（取消）。
+   *
+   * 沒有預設幫他決定，因為三種做法的後果差很多，而且覆蓋會動到他手動改過的內容。
+   */
+  function askDuplicatePolicy(filename, hits) {
+    return new Promise((resolve) => {
+      const edited = hits.filter(({ old }) => {
+        const st = state.userStates.get(old.id);
+        return st && st.edits && Object.keys(st.edits).length;
+      }).length;
+      const logged = hits.filter(({ old }) =>
+        state.logs.some((l) => l.recordId === old.id)).length;
+
+      const host = $('#editorBody');
+      host.textContent = '';
+      host.append(el('h2', { textContent: '有重複的公司' }));
+      host.append(el('p', { className: 'muted',
+        textContent: `${filename} 裡有 ${hits.length} 家公司已經在名單上。要怎麼處理？` }));
+
+      const facts = el('div', { className: 'rule-result' });
+      facts.append(el('p', { className: 'rule-note',
+        textContent: `比對方式：${hits.filter((h) => h.byTaxId).length} 筆靠統一編號、`
+          + `${hits.filter((h) => !h.byTaxId).length} 筆靠公司名稱。` }));
+      if (logged) {
+        facts.append(el('p', { className: 'rule-note',
+          textContent: `其中 ${logged} 筆有通話紀錄——不管選哪一種，通話紀錄都會保留。` }));
+      }
+      if (edited) {
+        facts.append(el('p', { className: 'rule-verdict is-fail',
+          textContent: `其中 ${edited} 筆你曾經手動修改過欄位。選「覆蓋」的話，`
+            + '那些修改會被新檔案的內容取代。' }));
+      }
+      hits.slice(0, 5).forEach(({ incoming, old }) => {
+        facts.append(el('div', { className: 'import-preview' }, [
+          el('strong', { textContent: incoming.company }),
+          el('p', { className: 'rule-note',
+            textContent: `名單上的來源：${old.source}　→　新檔案：${filename}` }),
+        ]));
+      });
+      if (hits.length > 5) {
+        facts.append(el('p', { className: 'rule-note', textContent: `※ 以上只列前 5 筆。` }));
+      }
+      host.append(facts);
+
+      const pick = (value, label, hint, primary) => {
+        const btn = el('button', { className: `btn${primary ? ' btn-primary' : ''}`, type: 'button', textContent: label });
+        btn.onclick = () => { $('#editor').hidden = true; resolve(value); };
+        host.append(el('div', {}, [
+          el('div', { className: 'card-actions' }, [btn]),
+          el('p', { className: 'rule-note', textContent: hint }),
+        ]));
+      };
+      pick('overwrite', '以新檔案覆蓋', '同一家公司只留一張卡片，內容以新檔案為準。通話紀錄保留。', true);
+      pick('keep', '兩邊都留著', '新檔案的資料另外新增一筆。同一家公司會有兩張卡片。');
+      pick('skip', '略過重複的', '名單上已經有的就不動，只匯入新的公司。');
+
+      const cancel = el('button', { className: 'btn', type: 'button', textContent: '取消匯入' });
+      cancel.onclick = () => { $('#editor').hidden = true; resolve(null); };
+      host.append(el('div', { className: 'card-actions' }, [cancel]));
+
+      $('#editor').hidden = false;
+    });
+  }
+
   async function importFiles(files) {
     const wanted = [...files].filter((f) => /\.(pdf|csv)$/i.test(f.name)
       || f.type === 'application/pdf' || f.type === 'text/csv');
@@ -1909,10 +2011,42 @@ export default {
         }
         const importedAt = Date.now();
         records.forEach((r) => { r.importedAt = importedAt; });
+
+        /*
+         * 重複處理要在刪掉同名來源之前比對：比對的對象是「現在名單上的其他來源」，
+         * 順序反過來的話會把剛刪掉的也算進去。
+         */
+        let toSave = records;
+        let dupNote = '';
+        const hits = findImportDuplicates(records, file.name);
+        if (hits.length) {
+          const policy = await askDuplicatePolicy(file.name, hits);
+          if (!policy) { logLine(`已取消 ${file.name}`); continue; }
+          const byIncoming = new Map(hits.map((h) => [h.incoming, h]));
+          if (policy === 'skip') {
+            toSave = records.filter((r) => !byIncoming.has(r));
+            dupNote = `，略過 ${hits.length} 筆重複`;
+          } else if (policy === 'overwrite') {
+            // 沿用舊的 id，通話紀錄才會繼續掛在同一筆上
+            hits.forEach(({ incoming, old }) => { incoming.id = old.id; });
+            const ids = hits.map(({ old }) => old.id);
+            await window.Store.deleteRecordsById(ids);
+            // 手動修改過的內容會蓋掉新檔案的值，既然選了覆蓋就要清掉
+            for (const id of ids) {
+              const st = state.userStates.get(id);
+              if (st && st.edits) await saveState(id, { edits: undefined, editsAt: Date.now() });
+            }
+            dupNote = `，覆蓋 ${hits.length} 筆重複`;
+          } else {
+            dupNote = `，另外新增 ${hits.length} 筆重複的公司`;
+          }
+        }
+
         await window.Store.deleteSource(file.name, { keepTombstone: false });   // 同名重匯 = 更新
-        await window.Store.saveRecords(records);
+        await window.Store.saveRecords(toSave);
         logLine(
           `✅ ${file.name}：${isCsv ? 'CSV' : `${pages} 頁`} → ${records.length} 筆客戶`
+          + `${dupNote}`
           + `${skipped ? `（略過 ${skipped} 個空列）` : ''}`
           + `${mode === 'heuristic' ? '（此檔沒有表格框線，欄位為推測結果）' : ''}`,
           'ok'
