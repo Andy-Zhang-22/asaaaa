@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-4';
+  const APP_VERSION = '20260916-5';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1052,6 +1052,33 @@
     syncTimer = setTimeout(() => runSync({ quiet: true }), 4000);
   }
 
+  /* ---------------- 版本檢查 ---------------- */
+
+  /*
+   * 靜態主機連 index.html 本身都會被快取，所以就算資源網址帶了版本號，
+   * 使用者還是可能停在舊版、看不到新功能。這裡另外抓一個永不快取的
+   * version.json 來比對；不一致就提示更新，並用帶參數的網址重新載入，
+   * 強迫瀏覽器重新抓 index.html。
+   */
+  async function checkForUpdate() {
+    try {
+      const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data || !data.version || data.version === APP_VERSION) return;
+
+      const bar = $('#updateBar');
+      bar.hidden = false;
+      $('#btnUpdate').onclick = () => {
+        // 換一個沒看過的網址，瀏覽器才會重新抓 index.html 而不是用快取
+        location.replace(`${location.pathname}?v=${encodeURIComponent(data.version)}`);
+      };
+      $('#btnUpdateLater').onclick = () => { bar.hidden = true; };
+    } catch (err) {
+      // 以 file:// 開啟或離線時抓不到，忽略即可
+    }
+  }
+
   /* ---------------- 啟動 ---------------- */
 
   async function reload() {
@@ -1229,6 +1256,7 @@
       runSync({ quiet: true });          // 背景靜默同步，失敗就等使用者自己按
     }
     prebuildRules();
+    checkForUpdate();
     if (!state.records.length) $('#importer').hidden = false;
   }
 

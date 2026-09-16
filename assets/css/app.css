@@ -447,3 +447,14 @@ button, input, select { font: inherit; color: inherit; }
 }
 .tel-copy:hover { color: var(--primary); border-color: var(--primary); background: var(--surface); }
 .tel-copy:active { background: var(--primary); color: var(--primary-ink); }
+
+/* ---------- 有新版本時的提示列 ---------- */
+.update-bar {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 95;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
+  max-width: calc(100% - 32px);
+  padding: 10px 14px; border-radius: 14px;
+  background: var(--surface); border: 1px solid var(--primary); box-shadow: var(--shadow);
+  font-size: 14px;
+}
+.update-bar .btn { padding: 6px 12px; font-size: 13px; }
