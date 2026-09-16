@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-22';
+  const APP_VERSION = '20260916-23';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1376,8 +1376,19 @@ export default {
           if (a.url) note(`　　查詢網址：${a.url}`);
         });
         if (!res.attempts || !res.attempts.length) note(res.reason);
+        /*
+         * 沒填代理時要直接講。
+         *
+         * 代理網址存在各台裝置自己的瀏覽器裡、不會同步，所以在電腦上設定好之後
+         * 換到手機還是空的。使用者看到的是一長串「每個來源都失敗」，很難聯想到
+         * 「這台沒設定」——原本的提示又只在「兩個都沒開」時才出現，勾了鏡像就看不到了。
+         */
+        if (!window.Registry.getProxy()) {
+          note('這台裝置還沒有填自架代理網址。代理設定只存在各台裝置自己的瀏覽器裡，'
+            + '不會跟著同步——在電腦上設定過，換到手機還是要再填一次。', 'rule-verdict is-fail');
+        }
         if (!mirror.checked && !window.Registry.getProxy()) {
-          note('還沒試過其他來源：可以勾上面的 g0v 鏡像，或填自己的代理網址再試一次。');
+          note('也還沒勾 g0v 鏡像。兩個來源都沒有的話，只剩下必定被擋的官方那條。');
         }
 
         /*
