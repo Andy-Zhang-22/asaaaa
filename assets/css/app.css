@@ -106,6 +106,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 .tab.is-active { color: var(--text); border-bottom-color: var(--primary); font-weight: 600; }
 .tab-filters { display: none; margin-left: auto; }
+.tab-filters[hidden] { display: none !important; }
 .pill {
   display: inline-block; min-width: 20px; padding: 0 6px; margin-right: 4px;
   border-radius: 999px; background: var(--surface-2); font-size: 12px; text-align: center;
@@ -113,6 +114,8 @@ button, input, select { font: inherit; color: inherit; }
 
 /* ---------- 版面 ---------- */
 .layout { display: grid; grid-template-columns: 250px 1fr; gap: 20px; padding: 16px; align-items: start; }
+.layout.is-wide { grid-template-columns: 1fr; }
+.rules { max-width: 900px; }
 .filters {
   position: sticky; top: 108px; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 14px; max-height: calc(100vh - 128px); overflow: auto;
@@ -289,3 +292,55 @@ button, input, select { font: inherit; color: inherit; }
 .sync-help a { color: var(--primary); }
 #btnSync.is-busy { opacity: .6; }
 #btnSync.is-error { color: var(--danger); border-color: var(--danger); }
+
+/* ---------- 規則頁 ---------- */
+.rules { display: grid; gap: 16px; }
+.rule-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px;
+}
+.rule-card h2 { font-size: 17px; margin-bottom: 6px; }
+.rule-summary { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+.rule-article { margin-bottom: 14px; padding-right: 12px; border-right: 3px solid var(--border); }
+.rule-article h3 { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.rule-article p { margin: 0; line-height: 1.8; }
+.rule-clarify { border-right-color: var(--primary); }
+.rule-clarify ol { margin: 0; padding-right: 20px; }
+.rule-clarify li { margin-bottom: 6px; line-height: 1.8; }
+
+.rule-checker {
+  margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border);
+}
+.rule-checker h3 { font-size: 15px; margin-bottom: 12px; }
+.rule-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.rule-field { display: block; margin-bottom: 14px; }
+.rule-field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.rule-field small { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
+.rule-field input, .rule-field select, .rule-field textarea {
+  width: 100%; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+}
+.rule-field textarea { min-height: 96px; resize: vertical; font-variant-numeric: tabular-nums; }
+.rule-field-wide { margin-top: 4px; }
+
+.rule-result { margin-top: 16px; }
+.rule-verdict {
+  margin: 0 0 10px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface-2); line-height: 1.7;
+}
+.rule-verdict.is-ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.rule-verdict.is-controlled { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.rule-verdict.is-warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.rule-verdict.is-fail { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.rule-note { margin: 0 0 8px; font-size: 13px; color: var(--warn); line-height: 1.7; }
+
+.rule-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13.5px; }
+.rule-table th, .rule-table td {
+  padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.rule-table th { color: var(--muted); font-weight: 500; font-size: 12px; }
+.rule-table td:first-child, .rule-table th:first-child { text-align: right; }
+.rule-table td:first-child { white-space: nowrap; }
+.rule-table .row-short td { color: var(--danger); }
+.rule-table .row-waived td { color: var(--muted); }

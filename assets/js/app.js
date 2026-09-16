@@ -329,11 +329,19 @@
       ? `${total} 筆客戶 · ${sources.size} 份名單`
       : '尚未匯入名單';
 
-    const isStats = state.tab === 'stats';
-    $('#paneList').hidden = isStats;
-    $('#paneStats').hidden = !isStats;
+    const tab = state.tab;
+    $('#paneList').hidden = tab !== 'today' && tab !== 'all';
+    $('#paneStats').hidden = tab !== 'stats';
+    $('#paneRules').hidden = tab !== 'rules';
+    // 統計與規則頁用不到左側篩選，讓內容佔滿整個寬度
+    const wide = tab === 'stats' || tab === 'rules';
+    document.querySelector('.layout').classList.toggle('is-wide', wide);
+    $('#filters').hidden = wide;
+    $('#btnFilters').hidden = wide;
     renderFilters();
-    if (isStats) renderStats(); else renderList();
+    if (tab === 'stats') renderStats();
+    else if (tab === 'rules') window.Rules.render($('#paneRules'));
+    else renderList();
   }
 
   /* ---------------- 詳細資料抽屜 ---------------- */
