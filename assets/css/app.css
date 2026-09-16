@@ -463,6 +463,10 @@ button, input, select { font: inherit; color: inherit; }
 .badge-outside { border-color: var(--danger); color: var(--danger); }
 
 /* ---------- 往來對象 ---------- */
+.badge-dealing { border-color: var(--warn); color: var(--warn); }
+.dealing-verdict { margin: 0 0 8px; }
+.dealing-verdict .muted { margin-left: 6px; font-size: 13px; }
+.dealing-verdict.dealing-active strong { color: var(--warn); }
 .badge-internal { border-color: var(--warn); color: var(--warn); }
 .badge-peer { border-color: var(--muted); color: var(--muted); }
 .relation-group { margin-bottom: 12px; padding-right: 12px; border-right: 3px solid var(--border); }

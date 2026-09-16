@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-7';
+  const APP_VERSION = '20260916-8';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -84,6 +84,8 @@
     out.territory = territory(out);
     out.relations = window.Normalize.detectRelations(out.notesRaw);
     out.relationKinds = window.Normalize.relationKinds(out.relations);
+    out.dealing = window.Normalize.detectDealing(out.notesRaw);
+    out.dealingKind = out.dealing.kind;
     // 電話與地址改過就要重新解析，撥號鍵與縣市篩選才會跟著正確
     if (edits && edits.phoneRaw !== undefined) out.phones = window.Normalize.extractPhones(edits.phoneRaw);
     if (edits && edits.address !== undefined) Object.assign(out, window.Normalize.parseAddress(edits.address));
@@ -171,10 +173,7 @@
       if (f.city.size && !f.city.has(r.city || '其他')) return false;
       if (f.scale.size && !f.scale.has(r.scale || '未填資本額')) return false;
       if (f.territory.size && !f.territory.has(r.territory || '未填地址')) return false;
-      if (f.relation.size) {
-        const kinds = r.relationKinds.length ? r.relationKinds : ['none'];
-        if (!kinds.some((k) => f.relation.has(k))) return false;
-      }
+      if (f.relation.size && !f.relation.has(r.dealingKind)) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (f.due) {
         const b = r.bucket;
@@ -276,16 +275,11 @@
     chips($('#fltScale'), 'scale', tally((r) => r.scale || '未填資本額'), state.filters.scale);
     chips($('#fltTerritory'), 'territory', tally((r) => r.territory || '未填地址'), state.filters.territory);
 
-    // 一筆客戶可能同時跟好幾類往來，所以分開累計而不是用 tally
-    const relationCounts = new Map([['internal', 0], ['peer', 0], ['bank', 0], ['none', 0]]);
-    all.forEach((r) => {
-      if (!r.relationKinds.length) relationCounts.set('none', relationCounts.get('none') + 1);
-      r.relationKinds.forEach((k) => relationCounts.set(k, relationCounts.get(k) + 1));
-    });
-    chips($('#fltRelation'), 'relation',
-      [...relationCounts.entries()].filter(([, n]) => n > 0),
-      state.filters.relation,
-      (v) => (v === 'none' ? '無往來紀錄' : window.Normalize.RELATION_LABEL[v]));
+    // 二分法，順序固定成「有往來 → 沒往來」，不跟著筆數浮動
+    const dealCounts = [['active', 0], ['none', 0]];
+    all.forEach((r) => { dealCounts[r.dealingKind === 'active' ? 0 : 1][1] += 1; });
+    chips($('#fltRelation'), 'relation', dealCounts.filter(([, n]) => n > 0),
+      state.filters.relation, (v) => window.Normalize.DEALING_LABEL[v]);
 
     const industries = [...new Set(all.map((r) => r.industry).filter(Boolean))].sort();
     $('#industryList').textContent = '';
@@ -365,8 +359,7 @@
       (r.scale || capitalScale(r)) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
       r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
-      r.relationKinds.includes('internal') ? el('span', { className: 'badge badge-internal', textContent: '中租他單位' }) : '',
-      r.relationKinds.includes('peer') ? el('span', { className: 'badge badge-peer', textContent: '同業往來' }) : '',
+      r.dealingKind === 'active' ? el('span', { className: 'badge badge-dealing', textContent: '有往來' }) : '',
     ].filter(Boolean));
     node.append(top);
 
@@ -579,7 +572,6 @@
       ['下次聯絡', r.nextDate ? `${rocLabel(r.nextDate)}（${r.nextDate}）` : ''],
       ['最近聯絡', r.lastDate ? `${rocLabel(r.lastDate)}（${r.lastDate}）` : ''],
       ['名單新增', r.addedDate ? rocLabel(r.addedDate) : ''],
-      ['名單來源', r.source],
     ];
     rows.forEach(([k, v]) => {
       if (!v) return;
@@ -601,6 +593,8 @@
       dd.append(link);
       dl.append(dd);
     }
+    // 名單來源放最後，看的頻率最低
+    if (r.source) dl.append(el('dt', { textContent: '名單來源' }), el('dd', { textContent: r.source }));
     body.append(dl);
 
     // 通話紀錄表單
@@ -646,9 +640,18 @@
     section.append(form);
     body.append(section);
 
-    // 往來對象
-    if (r.relationKinds.length) {
-      const sec = el('div', { className: 'detail-section' }, [el('h3', { textContent: '往來對象（由訪談內容判讀）' })]);
+    // 往來情形：先講二分法的結論，再列往來對象當佐證
+    {
+      const sec = el('div', { className: 'detail-section' }, [el('h3', { textContent: '往來情形' })]);
+      sec.append(el('p', { className: `dealing-verdict dealing-${r.dealingKind}` }, [
+        el('strong', { textContent: window.Normalize.DEALING_LABEL[r.dealingKind] }),
+        el('span', { className: 'muted', textContent: r.dealingKind === 'active'
+          ? `（最新一期${r.dealing.date ? ` ${r.dealing.date} ` : ''}有提到本餘）`
+          : '（最新一期沒提到本餘）' }),
+      ]));
+      if (r.dealing.snippet) {
+        sec.append(el('p', { className: 'relation-snippet', textContent: `「…${r.dealing.snippet}…」` }));
+      }
       ['internal', 'peer', 'bank'].forEach((kind) => {
         if (!r.relations[kind].length) return;
         const group = el('div', { className: `relation-group relation-${kind}` }, [
@@ -660,8 +663,10 @@
         });
         sec.append(group);
       });
-      sec.append(el('p', { className: 'muted',
-        textContent: '這是從訪談內容的關鍵字判讀出來的，請對照原文確認。' }));
+      if (r.relationKinds.length) {
+        sec.append(el('p', { className: 'muted',
+          textContent: '以上往來對象是從訪談內容的關鍵字判讀出來的，請對照原文確認。' }));
+      }
       body.append(sec);
     }
 
@@ -1181,7 +1186,11 @@
     $('#btnMore').onclick = () => { state.limit += PAGE_SIZE; renderList(); };
     $('#fltIndustry').oninput = (e) => { state.filters.industry = e.target.value.trim(); state.limit = PAGE_SIZE; render(); };
     $('#btnResetFilters').onclick = () => {
-      state.filters = { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), industry: '' };
+      // 就地清空，不要換掉整個 state.filters 物件：chip 的 onclick 抓的是 Set 的參照，
+      // 一旦換成新物件，按鈕改到的就是被丟掉的舊 Set，按下去完全沒反應。
+      Object.values(state.filters).forEach((v) => { if (v instanceof Set) v.clear(); });
+      state.filters.due = '';
+      state.filters.industry = '';
       $('#fltIndustry').value = '';
       state.limit = PAGE_SIZE;
       render();
