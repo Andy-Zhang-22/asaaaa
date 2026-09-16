@@ -145,13 +145,67 @@
    * 跨網域被擋跟斷網在瀏覽器裡長得一模一樣（都是 TypeError，拿不到細節），
    * 所以這裡不硬要分辨，而是把兩種可能都講出來。
    */
-  function explain(err) {
+  const BLOCKED_HINT = {
+    official: '瀏覽器擋下了這個請求——政府的開放資料 API 不送 CORS 標頭，'
+      + '這條路目前走不通，要靠自架代理或鏡像繞過。',
+    g0v: '連不上 g0v 鏡像。可能是對方暫時不通，或你的網路擋掉了。',
+    proxy: '連不到你的代理，或它沒有回傳 CORS 標頭。三個最常見的原因：'
+      + '① 網址填錯或 Worker 還沒部署；'
+      + '② 腳本裡的 ORIGIN 跟你現在開的網址不一樣；'
+      + '③ 腳本貼上時沒有把原本的 Hello World 內容刪乾淨，Worker 執行出錯。'
+      + '按下面的「檢查代理設定」可以分辨是哪一種。',
+  };
+
+  /**
+   * 把 fetch 的失敗翻成看得懂的話。
+   *
+   * 一定要分來源講。跨網域被擋跟斷網在瀏覽器裡長得一模一樣（都是 TypeError、
+   * 拿不到細節），所以訊息本身就是使用者唯一的線索；如果不管哪個來源都印
+   * 「政府的 API 不允許跨網域」，代理設定出錯的人會被導去完全錯誤的方向。
+   */
+  function explain(err, sourceKey) {
     if (err && err.name === 'AbortError') return '查詢逾時（超過 20 秒沒有回應）。';
-    if (err instanceof TypeError) {
-      return '瀏覽器擋下了這個請求。最可能的原因是政府的開放資料 API 不允許跨網域呼叫（CORS）；'
-        + '也有可能是網路不通。這一條路走不通的話，要改用另一種做法（由排程抓整批資料回來比對）。';
-    }
+    if (err instanceof TypeError) return BLOCKED_HINT[sourceKey] || '瀏覽器擋下了這個請求。';
     return `查詢失敗：${(err && err.message) || err}`;
+  }
+
+  /**
+   * 檢查代理本身活著沒有，跟查詢分開。
+   *
+   * 故意不帶 ?url= 打過去：腳本遇到沒有網址的請求會回 400 並帶 CORS 標頭，
+   * 所以「收到 400」反而是最好的消息——代表 Worker 活著、腳本正確、CORS 也對，
+   * 問題只在查詢本身。連 400 都收不到就代表前面三關有一關沒過。
+   */
+  async function checkProxy() {
+    const base = getProxy();
+    if (!base) return { ok: false, stage: 'unset', message: '還沒填代理網址。' };
+    let url;
+    try {
+      url = new URL(base);
+      if (!/^https?:$/.test(url.protocol)) throw new Error('protocol');
+    } catch (e) {
+      return { ok: false, stage: 'url', message: `「${base}」不是合法的網址，要像 https://xxx.workers.dev 這樣。` };
+    }
+    try {
+      const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
+      const body = (await res.text()).slice(0, 300);
+      if (res.status === 400 && body.includes('data.gcis.nat.gov.tw')) {
+        return { ok: true, stage: 'alive', status: res.status, body,
+          message: '代理活著，腳本與 CORS 都正確。' };
+      }
+      return { ok: false, stage: 'wrong-script', status: res.status, body,
+        message: `代理有回應（HTTP ${res.status}），但回的內容不是預期的白名單訊息。`
+          + '最可能是腳本沒貼對，或原本的 Hello World 內容沒刪乾淨。' };
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        return { ok: false, stage: 'timeout', message: '代理 15 秒內沒有回應。' };
+      }
+      return { ok: false, stage: 'blocked', openUrl: url.toString(),
+        message: '連不到代理，或它沒有回傳 CORS 標頭。'
+          + '請用瀏覽器新分頁直接打開下面的網址：看得到「只接受 data.gcis.nat.gov.tw 的網址」'
+          + '就代表 Worker 活著，問題出在腳本裡的 ORIGIN 設定；'
+          + '如果打不開或顯示錯誤，就是網址填錯或 Worker 沒部署成功。' };
+    }
   }
 
   async function request(url) {
@@ -200,7 +254,7 @@
           data: mapRow(rows[0]), candidates: rows.map(mapRow), raw: rows[0], attempts,
         };
       } catch (err) {
-        attempts.push({ source: key, label: src.label, reason: explain(err), body: err.body });
+        attempts.push({ source: key, label: src.label, reason: explain(err, key), body: err.body });
       }
     }
     return {
@@ -225,6 +279,6 @@
 
   global.Registry = {
     lookupByTaxId, lookupByName, mapRow, toThousands, tidyDate,
-    SOURCES, activeSources, getProxy, setProxy, FIELD_CANDIDATES,
+    SOURCES, activeSources, getProxy, setProxy, checkProxy, FIELD_CANDIDATES,
   };
 })(window);

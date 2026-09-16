@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-11';
+  const APP_VERSION = '20260916-13';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1005,6 +1005,32 @@ export default {
     ]));
     proxy.onchange = () => { window.Registry.setProxy(proxy.value.trim()); };
 
+    /*
+     * 代理的健康檢查跟查詢分開。
+     *
+     * 查詢失敗時，瀏覽器給的資訊少到無法分辨「代理沒部署」「網址填錯」「腳本貼錯」
+     * 「ORIGIN 不對」——全部都是同一個 TypeError。這顆按鈕不帶查詢參數直接打代理，
+     * 腳本正常的話會回 400 加白名單訊息，收到就代表前三關都過了。
+     */
+    const diag = el('div', { className: 'rule-result proxy-diag' });
+    const checkBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '檢查代理設定' });
+    checkBtn.onclick = async () => {
+      window.Registry.setProxy(proxy.value.trim());
+      diag.textContent = '';
+      diag.append(el('p', { className: 'rule-note', textContent: '檢查中…' }));
+      const res = await window.Registry.checkProxy();
+      diag.textContent = '';
+      diag.append(el('p', { className: `rule-verdict ${res.ok ? 'is-ok' : 'is-fail'}`, textContent: res.message }));
+      if (res.body) diag.append(el('p', { className: 'rule-note', textContent: `代理回應：${res.body}` }));
+      if (res.openUrl) {
+        diag.append(el('p', {}, [
+          el('a', { href: res.openUrl, target: '_blank', rel: 'noopener', textContent: res.openUrl }),
+        ]));
+      }
+      if (res.ok) diag.append(el('p', { className: 'rule-note', textContent: '可以按「先試一筆」了。' }));
+    };
+    host.append(el('div', { className: 'card-actions' }, [checkBtn]), diag);
+
     const guide = el('details', { className: 'proxy-guide' }, [
       el('summary', { textContent: '怎麼架自己的代理（免費，約五分鐘）' }),
     ]);
@@ -1053,9 +1079,29 @@ export default {
         ? await window.Registry.lookupByTaxId(target.taxId, opts)
         : await window.Registry.lookupByName(target.company, opts);
       result.textContent = '';
+      /*
+       * 原始回應一律附上，成功失敗都是。
+       *
+       * 欄位名稱是用候選清單猜的（開發環境連不上政府網站，沒辦法確認），猜錯的話
+       * 查詢會「成功」但每一格都是空的——那是最難查的一種壞法。把原始回應攤開來，
+       * 一眼就看得出是沒查到、還是查到了但欄位名字不一樣。
+       */
+      const showRaw = (payload) => {
+        if (payload === undefined || payload === null) return;
+        const box = el('details', { className: 'proxy-guide' }, [
+          el('summary', { textContent: '顯示原始回應（欄位對不上時把這段給我）' }),
+          el('pre', { className: 'proxy-code',
+            textContent: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2) }),
+        ]);
+        result.append(box);
+      };
+
       if (!res.ok) {
         note('每個來源都失敗了。', 'rule-verdict is-fail');
-        (res.attempts || []).forEach((a) => note(`${a.label}：${a.reason}`));
+        (res.attempts || []).forEach((a) => {
+          note(`${a.label}：${a.reason}`);
+          if (a.body) note(`　　伺服器回應：${a.body}`);
+        });
         if (!res.attempts || !res.attempts.length) note(res.reason);
         if (!mirror.checked && !window.Registry.getProxy()) {
           note('還沒試過其他來源：可以勾上面的 g0v 鏡像，或填自己的代理網址再試一次。');
@@ -1064,6 +1110,13 @@ export default {
       }
       note(`查詢成功，走的是「${res.label}」。`, 'rule-verdict is-ok');
       (res.attempts || []).forEach((a) => note(`（${a.label} 不通：${a.reason.split('\n')[0]}）`));
+
+      // 每一格都空的，代表欄位名稱猜錯了，這時候要講得比「成功」更清楚
+      const mapped = REGISTRY_FIELDS.filter(([key]) => res.data[key]).length;
+      if (!mapped) {
+        note('連上了，但沒有一個欄位對得上——回應的欄位名稱跟預期的不一樣。'
+          + '請把下面的原始回應給我，我改對應表。', 'rule-verdict is-fail');
+      }
       const dl = el('dl');
       REGISTRY_FIELDS.forEach(([key, label]) => {
         dl.append(el('dt', { textContent: label }),
@@ -1074,7 +1127,8 @@ export default {
       if (res.data.unmappedKeys && res.data.unmappedKeys.length) {
         note(`回應裡還有這些沒對應到的欄位，可能有用：${res.data.unmappedKeys.join('、')}`);
       }
-      runAll.disabled = false;
+      showRaw(res.raw);
+      runAll.disabled = mapped === 0;
     };
 
     let cancelled = false;
