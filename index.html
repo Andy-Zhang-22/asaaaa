@@ -160,13 +160,21 @@
       <ol>
         <li>到 <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud 主控台</a> 建一個專案（名稱隨意）。</li>
         <li>左側「API 和服務 → 程式庫」，搜尋 <strong>Google Drive API</strong>，按啟用。</li>
-        <li>左側「OAuth 同意畫面」：User Type 選 <strong>外部</strong>，填應用程式名稱與你的信箱，
-            測試使用者加入你自己的 Gmail。</li>
+        <li>左側「OAuth 同意畫面」：User Type 選 <strong>外部</strong>，填應用程式名稱與你的信箱。</li>
+        <li><strong>最容易漏掉的一步</strong>：在同一區找到「測試使用者」，
+            把<strong>你要用來登入的那個 Gmail</strong> 加進去。沒加的話登入會出現
+            「403 access_denied：只有測試人員可以存取」。</li>
         <li>左側「憑證 → 建立憑證 → OAuth 用戶端 ID」，應用程式類型選 <strong>網頁應用程式</strong>。</li>
-        <li>「已授權的 JavaScript 來源」加入這個網站的網址（就是你現在瀏覽器網址列上、到網域為止的那一段）。</li>
+        <li>「已授權的 JavaScript 來源」加入這個網站的網址，<strong>只到網域為止</strong>
+            （例如 <code>https://你的帳號.github.io</code>，後面的路徑不要加）。</li>
         <li>建立後把「用戶端 ID」複製貼到上面的欄位。</li>
       </ol>
-      <p class="muted">同意畫面停在「測試」狀態就夠自己用，只是登入時會出現「這個應用程式未經驗證」的提醒，選「繼續」即可。</p>
+      <p class="muted">
+        同意畫面停在「測試」狀態就夠自己用，只是登入時會出現「這個應用程式未經驗證」的提醒，選「繼續」即可；
+        但<strong>每個要用的 Google 帳號都必須列在測試使用者裡</strong>。
+        不想維護名單的話，也可以在同意畫面按「發布應用程式」——這個網站只要
+        <code>drive.file</code> 權限（僅能存取自己建立的檔案），屬於不需送審的範圍。
+      </p>
     </details>
   </div>
 </div>

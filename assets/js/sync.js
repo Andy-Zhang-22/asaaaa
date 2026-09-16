@@ -98,6 +98,21 @@
 
   /* ---------------- Google 授權 ---------------- */
 
+  /** Google 回傳的錯誤代碼看不出要做什麼，翻成「你現在該去哪裡改」。 */
+  const ERROR_HINTS = {
+    access_denied: '你的 Google 帳號還不在這個應用程式的「測試使用者」名單裡。'
+      + '請到 Google Cloud 主控台的「OAuth 同意畫面 → 測試使用者」，'
+      + '把你登入用的 Gmail 加進去（或直接按「發布應用程式」），再回來同步一次。',
+    invalid_client: '用戶端 ID 不正確，或這個 ID 屬於別的專案。請回到 Google Cloud「憑證」頁重新複製。',
+    redirect_uri_mismatch: '這個網址不在用戶端 ID 的「已授權的 JavaScript 來源」裡。'
+      + `請到 Google Cloud「憑證」頁把 ${global.location ? global.location.origin : '本網站網址'} 加進去。`,
+    idpiframe_initialization_failed: '瀏覽器擋住了 Google 登入，請確認沒有封鎖第三方 Cookie。',
+    popup_closed: '授權視窗被關掉了，再按一次同步即可。',
+    popup_failed_to_open: '授權視窗被瀏覽器擋住了，請允許這個網站顯示彈出式視窗。',
+  };
+
+  const describeAuthError = (code, fallback) => ERROR_HINTS[code] || fallback || `授權失敗：${code || '未知錯誤'}`;
+
   let tokenClient = null;
   let accessToken = null;
   let tokenExpiry = 0;
@@ -149,13 +164,12 @@
             tokenExpiry = Date.now() + (Number(res.expires_in || 3600) * 1000);
             resolve(accessToken);
           } else {
-            reject(new Error((res && res.error) || '取得授權失敗'));
+            const code = res && res.error;
+            reject(new Error(describeAuthError(code, code ? undefined : '取得授權失敗')));
           }
         },
         error_callback: (err) => {
-          reject(new Error(err && err.type === 'popup_closed'
-            ? '授權視窗被關閉'
-            : `授權失敗：${(err && err.type) || '未知錯誤'}`));
+          reject(new Error(describeAuthError(err && err.type)));
         },
       });
       tokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' });
@@ -176,7 +190,12 @@
     });
     if (res.status === 401 || res.status === 403) {
       accessToken = null;
-      throw new Error('雲端硬碟拒絕存取，請重新授權');
+      const body = await res.text().catch(() => '');
+      if (/accessNotConfigured|has not been used|is disabled/.test(body)) {
+        throw new Error('這個 Google Cloud 專案還沒有啟用 Google Drive API，'
+          + '請到主控台的「API 和服務 → 程式庫」搜尋 Google Drive API 並啟用。');
+      }
+      throw new Error('雲端硬碟拒絕存取，請按同步重新授權');
     }
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -267,7 +286,7 @@
 
   global.DriveSync = {
     sync, mergeDumps, diffSummary, mergeTombstones,
-    isConfigured, clientId, setClientId, signOut, getToken,
+    isConfigured, clientId, setClientId, signOut, getToken, describeAuthError,
     FILE_NAME, SCOPE,
   };
 })(window);
