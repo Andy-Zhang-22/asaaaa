@@ -36,6 +36,20 @@
     return out;
   }
 
+  /** 合併同一筆客戶的兩份追蹤狀態。 */
+  function mergeState(a, b) {
+    const newer = (b.updatedAt || 0) >= (a.updatedAt || 0) ? b : a;
+    const older = newer === a ? b : a;
+    const out = { ...newer };
+    // 編輯內容看 editsAt：還原（把 edits 清掉）也算一次編輯，同樣靠時間戳決定
+    if ((older.editsAt || 0) > (newer.editsAt || 0)) {
+      out.edits = older.edits;
+      out.editsAt = older.editsAt;
+    }
+    if (!out.edits) delete out.edits;
+    return out;
+  }
+
   /**
    * 合併兩份資料。兩邊地位相同，誰是本機誰是雲端都得到一樣的結果。
    * @param {object} a
@@ -68,12 +82,14 @@
       if (!logs.has(uid)) logs.set(uid, { ...l, uid });
     });
 
-    // 追蹤狀態：同一筆客戶只能有一個，取比較新的
+    // 追蹤狀態：同一筆客戶只能有一個，取比較新的。
+    // 但「編輯過的客戶資料」要分開比對自己的時間戳，否則另一台只是記了一通電話
+    // （updatedAt 比較新、但身上沒有編輯內容），就會把這台的編輯洗掉。
     const states = new Map();
     [...(left.states || []), ...(right.states || [])].forEach((st) => {
       if (!st || !st.recordId) return;
       const seen = states.get(st.recordId);
-      if (!seen || (st.updatedAt || 0) > (seen.updatedAt || 0)) states.set(st.recordId, st);
+      states.set(st.recordId, seen ? mergeState(seen, st) : st);
     });
 
     return {
@@ -285,7 +301,7 @@
   }
 
   global.DriveSync = {
-    sync, mergeDumps, diffSummary, mergeTombstones,
+    sync, mergeDumps, diffSummary, mergeTombstones, mergeState,
     isConfigured, clientId, setClientId, signOut, getToken, describeAuthError,
     FILE_NAME, SCOPE,
   };
