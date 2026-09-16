@@ -18,8 +18,29 @@
 (function (global) {
   'use strict';
 
-  // 商工行政資料開放平臺：公司登記基本資料
-  const BASE = 'https://data.gcis.nat.gov.tw/od/data/api/5F64D864-61CB-4D0D-8AD9-492047CC1EA6';
+  /*
+   * 商工行政資料開放平臺的資料集網址。
+   *
+   * 這裡預設的那串 GUID 是憑記憶寫的，實測「不帶任何查詢條件跟它要一筆」也回空的，
+   * 代表編號是錯的。但我連不上政府網站，沒辦法自己查出正確的編號。
+   *
+   * 所以改成可以在介面上填。使用者從開放資料平臺複製正確網址貼進來就能用，
+   * 不必等我改一版程式再部署一次——這種「只有使用者那一端查得到」的資訊，
+   * 本來就不該寫死在程式裡。
+   */
+  const DEFAULT_BASE = 'https://data.gcis.nat.gov.tw/od/data/api/5F64D864-61CB-4D0D-8AD9-492047CC1EA6';
+  const BASE_KEY = 'registry-dataset-url';
+
+  const getBase = () => {
+    try { return localStorage.getItem(BASE_KEY) || DEFAULT_BASE; } catch (e) { return DEFAULT_BASE; }
+  };
+  const setBase = (url) => {
+    try {
+      const clean = String(url || '').trim().split('?')[0];   // 貼進來的常常帶著查詢參數
+      if (clean) localStorage.setItem(BASE_KEY, clean);
+      else localStorage.removeItem(BASE_KEY);
+    } catch (e) { /* 無痕模式寫不進去，不影響當次使用 */ }
+  };
 
   /*
    * 查詢網址給的是「候選清單」而不是一條。
@@ -32,9 +53,9 @@
   const officialByTaxId = (taxId) => {
     const id = encodeURIComponent(taxId);
     return [
-      `${BASE}?%24format=json&%24filter=Business_Accounting_NO%20eq%20${id}&%24skip=0&%24top=1`,
-      `${BASE}?%24format=json&%24filter=Business_Accounting_NO%20eq%20%27${id}%27&%24skip=0&%24top=1`,
-      `${BASE}?$format=json&$filter=Business_Accounting_NO eq ${taxId}&$skip=0&$top=1`,
+      `${getBase()}?%24format=json&%24filter=Business_Accounting_NO%20eq%20${id}&%24skip=0&%24top=1`,
+      `${getBase()}?%24format=json&%24filter=Business_Accounting_NO%20eq%20%27${id}%27&%24skip=0&%24top=1`,
+      `${getBase()}?$format=json&$filter=Business_Accounting_NO eq ${taxId}&$skip=0&$top=1`,
     ];
   };
 
@@ -58,8 +79,8 @@
     const urls = [];
     for (const variant of nameVariants(name)) {
       const q = encodeURIComponent(variant);
-      urls.push(`${BASE}?%24format=json&%24filter=Company_Name%20like%20${q}&%24skip=0&%24top=5`);
-      urls.push(`${BASE}?%24format=json&%24filter=Company_Name%20eq%20%27${q}%27&%24skip=0&%24top=5`);
+      urls.push(`${getBase()}?%24format=json&%24filter=Company_Name%20like%20${q}&%24skip=0&%24top=5`);
+      urls.push(`${getBase()}?%24format=json&%24filter=Company_Name%20eq%20%27${q}%27&%24skip=0&%24top=5`);
     }
     return urls;
   };
@@ -289,7 +310,7 @@
    * 欄位名稱，不必再靠候選清單猜。
    */
   function bareUrls() {
-    const plain = `${BASE}?%24format=json&%24skip=0&%24top=1`;
+    const plain = `${getBase()}?%24format=json&%24skip=0&%24top=1`;
     const urls = [{ label: '官方（直接連）', url: plain }];
     if (getProxy()) urls.unshift({ label: '自架代理', url: viaProxy(plain) });
     return urls;
@@ -369,6 +390,7 @@
 
   global.Registry = {
     lookupByTaxId, lookupByName, mapRow, toThousands, tidyDate,
-    SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, nameVariants, FIELD_CANDIDATES,
+    SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, nameVariants,
+    getBase, setBase, DEFAULT_BASE, FIELD_CANDIDATES,
   };
 })(window);

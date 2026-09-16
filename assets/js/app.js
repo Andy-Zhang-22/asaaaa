@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-27';
+  const APP_VERSION = '20260916-28';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1324,8 +1324,38 @@ export default {
       el('span', { textContent: ' 允許使用 g0v 社群鏡像（官方被擋時的替代來源，只會送出統一編號）' }),
     ]));
 
+    /*
+     * 資料集網址可以自己填。
+     *
+     * 程式裡預設的那串 GUID 實測是錯的（不帶查詢條件要一筆也回空的），但開發環境
+     * 連不上政府網站，查不出正確的編號。與其讓使用者等我改一版再部署一次，
+     * 不如讓他從開放資料平臺複製網址貼進來——這種只有他那端查得到的資訊，
+     * 本來就不該寫死在程式裡。
+     */
+    const dataset = el('input', {
+      id: 'datasetUrl', type: 'url', className: 'paste-box',
+      placeholder: window.Registry.DEFAULT_BASE,
+      value: window.Registry.getBase() === window.Registry.DEFAULT_BASE ? '' : window.Registry.getBase(),
+    });
+    host.append(el('label', { className: 'rule-field' }, [
+      el('span', { textContent: '資料集 API 網址（目前程式內建的那組是錯的，需要換）' }), dataset,
+    ]));
+    dataset.onchange = () => { window.Registry.setBase(dataset.value); };
+    host.append(el('details', { className: 'proxy-guide' }, [
+      el('summary', { textContent: '去哪裡找正確的網址' }),
+      el('ol', {}, [
+        el('li', { textContent: '打開 data.gcis.nat.gov.tw（商工行政資料開放平臺）。' }),
+        el('li', { textContent: '找「公司登記基本資料」這個資料集。' }),
+        el('li', { textContent: '點它的「API」或「資料集描述」，裡面會有一段 https://data.gcis.nat.gov.tw/od/data/api/XXXX 的網址。' }),
+        el('li', { textContent: '把那段貼進上面的欄位（後面的 ?$format=... 有沒有一起貼都可以，程式會自己去掉）。' }),
+        el('li', { textContent: '按「先試一筆」。' }),
+      ]),
+      el('p', { className: 'muted',
+        textContent: '貼進來之後就存在這台裝置的瀏覽器裡，跟代理網址一樣不會同步。' }),
+    ]));
+
     const proxy = el('input', {
-      type: 'url', className: 'paste-box', placeholder: 'https://你的-worker.workers.dev/（選填）',
+      id: 'proxyUrl', type: 'url', className: 'paste-box', placeholder: 'https://你的-worker.workers.dev/（選填）',
       value: window.Registry.getProxy(),
     });
     host.append(el('label', { className: 'rule-field' }, [
