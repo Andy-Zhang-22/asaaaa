@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-26';
+  const APP_VERSION = '20260916-27';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -178,6 +178,101 @@
    *   - 其他 → 邊界無從得知（「大同鐵工廠乙建設股份有限公司」要從哪裡切？），
    *     硬拆只會拆錯，列出來讓使用者自己改，並且點一下就能開到那一筆。
    */
+  /*
+   * 匯入經濟部登記清冊前，先問要留哪些。
+   *
+   * 使用者實際的篩選習慣是「資本額 6000 萬以下、服務區域內」，所以預設就填好，
+   * 但留著可以改——他偶爾也會想看別的區間。畫面即時算出會留下幾筆，
+   * 不用先匯進去才知道結果。
+   */
+  // cities 用函式而不是直接展開：SERVICE_CITIES 宣告在這支檔案的後面，
+  // 直接寫 [...SERVICE_CITIES] 會在模組載入時就求值，那時它還沒初始化。
+  const GOV_CITY_PRESETS = {
+    dual: { label: '只要雙北', cities: () => ['臺北市', '新北市'] },
+    service: { label: '整個服務範圍（新竹以北加宜蘭）', cities: () => [...SERVICE_CITIES] },
+    all: { label: '不限縣市', cities: () => null },
+  };
+
+  function askGovFilter(filename, rows) {
+    return new Promise((resolve) => {
+      const host = $('#editorBody');
+      host.textContent = '';
+      host.append(el('h2', { textContent: '匯入經濟部登記清冊' }));
+      host.append(el('p', { className: 'muted',
+        textContent: `${filename} 共 ${rows.length - 1} 筆。這種清冊一次幾千筆，`
+          + '整份匯進來會把名單淹掉，所以先選要留哪些。' }));
+
+      const minIn = el('input', { type: 'number', value: '500', min: '0', step: '100' });
+      const maxIn = el('input', { type: 'number', value: '6000', min: '0', step: '100' });
+      const citySel = el('select', {}, Object.entries(GOV_CITY_PRESETS)
+        .map(([k, v]) => el('option', { value: k, textContent: v.label })));
+      const skipHolding = el('input', { type: 'checkbox' });
+
+      host.append(el('label', { className: 'rule-field' }, [
+        el('span', { textContent: '資本額下限（萬元）' }), minIn]));
+      host.append(el('label', { className: 'rule-field' }, [
+        el('span', { textContent: '資本額上限（萬元）' }), maxIn]));
+      host.append(el('label', { className: 'rule-field' }, [
+        el('span', { textContent: '地區' }), citySel]));
+      host.append(el('label', { className: 'rule-field' }, [
+        skipHolding, el('span', { textContent: ' 略過投資／控股類（看名字沒有設備標的，通常不值得打）' })]));
+
+      const preview = el('div', { className: 'rule-result' });
+      host.append(preview);
+
+      const opts = () => ({
+        minCapital: (Number(minIn.value) || 0) * 10000,
+        maxCapital: (Number(maxIn.value) || 0) * 10000 || Infinity,
+        cities: GOV_CITY_PRESETS[citySel.value].cities(),
+      });
+
+      let current = [];
+      const recount = () => {
+        const out = window.Normalize.fromGovRegistry(rows, opts());
+        current = skipHolding.checked ? out.records.filter((r) => r.hasAssets) : out.records;
+        preview.textContent = '';
+        preview.append(el('p', { className: 'rule-verdict is-ok',
+          textContent: `符合條件：${current.length} 筆` }));
+        preview.append(el('p', { className: 'rule-note',
+          textContent: `（資本額不符 ${out.stats.capitalOut} 筆、地區不符 ${out.stats.cityOut} 筆`
+            + `${out.stats.dup ? `、重複 ${out.stats.dup} 筆` : ''}`
+            + `${skipHolding.checked ? `、投資控股類 ${out.records.length - current.length} 筆` : ''}）` }));
+        // 已經在名單裡的先講，不然匯進去才發現重複
+        const known = new Set(state.records.map((r) => (r.taxId || '').replace(/\D/g, '')).filter(Boolean));
+        const dup = current.filter((r) => r.taxId && known.has(r.taxId)).length;
+        if (dup) {
+          preview.append(el('p', { className: 'rule-note',
+            textContent: `※ 其中 ${dup} 筆的統編已經在你的名單裡，匯入後會以這份資料更新它們。` }));
+        }
+        current.slice(0, 5).forEach((r) => {
+          preview.append(el('div', { className: 'import-preview' }, [
+            el('strong', { textContent: r.company }),
+            el('p', { className: 'rule-note',
+              textContent: `${r.capitalThousands} 仟元　${r.industry || '產業未知'}　${r.address}` }),
+          ]));
+        });
+        if (current.length > 5) {
+          preview.append(el('p', { className: 'rule-note', textContent: `※ 以上只列前 5 筆。` }));
+        }
+      };
+      [minIn, maxIn].forEach((n) => { n.oninput = recount; });
+      citySel.onchange = recount;
+      skipHolding.onchange = recount;
+      recount();
+
+      const go = el('button', { className: 'btn btn-primary', type: 'button', textContent: '匯入' });
+      const cancel = el('button', { className: 'btn', type: 'button', textContent: '取消' });
+      go.onclick = () => {
+        $('#editor').hidden = true;
+        resolve(window.Normalize.govToStandardRows(current));
+      };
+      cancel.onclick = () => { $('#editor').hidden = true; resolve(null); };
+      host.insertBefore(el('div', { className: 'card-actions' }, [go, cancel]), preview);
+
+      $('#editor').hidden = false;
+    });
+  }
+
   async function reviewCompanyNames() {
     const fixable = [];
     const manual = [];
@@ -1701,6 +1796,15 @@ export default {
         let mode = 'csv';
         if (isCsv) {
           rows = window.Normalize.parseCsv(await file.text());
+          /*
+           * 經濟部的登記清冊一次四千多筆，但真正要打的只有一小撮。
+           * 整份匯進來只會把名單淹掉，所以先問條件再匯。
+           */
+          if (window.Normalize.isGovRegistry(rows)) {
+            const picked = await askGovFilter(file.name, rows);
+            if (!picked) { logLine(`已取消 ${file.name}`); continue; }
+            rows = picked;
+          }
         } else {
           const buffer = await file.arrayBuffer();
           const parsed = await window.PdfTable.parsePdf(buffer, (done, total) => {
