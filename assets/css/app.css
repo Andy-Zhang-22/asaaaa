@@ -426,3 +426,5 @@ button, input, select { font: inherit; color: inherit; }
 
 /* 門檻表在畫面外時不必排版 */
 .rule-defer { content-visibility: auto; contain-intrinsic-size: auto 560px; }
+
+.menu-version { margin: 4px 12px 2px; font-size: 11px; color: var(--muted); text-align: right; }

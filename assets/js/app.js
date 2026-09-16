@@ -5,6 +5,11 @@
   'use strict';
 
   const { OUTCOME_LABEL } = window.Normalize;
+  /*
+   * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
+   * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
+   */
+  const APP_VERSION = '20260916-1';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1069,7 +1074,8 @@
       document.body.dataset.theme = saved;
       document.documentElement.dataset.theme = saved;
     }
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'assets/vendor/pdfjs/pdf.worker.min.js';
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = `assets/vendor/pdfjs/pdf.worker.min.js?v=${APP_VERSION}`;
+    $('#menuVersion').textContent = `版本 ${APP_VERSION}`;
     wireEvents();
     await reload();
     render();
