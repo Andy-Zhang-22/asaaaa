@@ -255,6 +255,48 @@
     }
   }
 
+  /*
+   * 不帶篩選條件、直接跟資料集要一筆。
+   *
+   * 實測用統編查三種寫法都回「Content-Type 是 JSON，但內容一個字都沒有」。
+   * 那個症狀分不出三件事：
+   *   (a) 這個統編剛好沒有資料
+   *   (b) 篩選語法不對
+   *   (c) 資料集編號根本是錯的（那串 GUID 是憑印象寫的，沒驗證過）
+   *
+   * 把篩選拿掉就分得出來了：資料集存在的話，$top=1 一定給得出一筆。
+   * 給不出來就是 (c)，再怎麼調語法都沒用。
+   *
+   * 順便還解掉另一個懸而未決的問題——回傳那一筆的欄位名稱，就是這支 API 真正的
+   * 欄位名稱，不必再靠候選清單猜。
+   */
+  function bareUrls() {
+    const plain = `${BASE}?%24format=json&%24skip=0&%24top=1`;
+    const urls = [{ label: '官方（直接連）', url: plain }];
+    if (getProxy()) urls.unshift({ label: '自架代理', url: viaProxy(plain) });
+    return urls;
+  }
+
+  async function probeDataset() {
+    const tried = [];
+    for (const { label, url } of bareUrls()) {
+      try {
+        const rows = await request(url);
+        if (!rows.length) {
+          tried.push({ label, url, reason: '資料集回了空的，連一筆都拿不到' });
+          continue;
+        }
+        return {
+          ok: true, label, url, row: rows[0],
+          keys: Object.keys(rows[0]), tried,
+        };
+      } catch (err) {
+        tried.push({ label, url, reason: explain(err, label === '自架代理' ? 'proxy' : 'official'), body: err.body });
+      }
+    }
+    return { ok: false, tried };
+  }
+
   /** 目前可以用的來源，依序試。沒填代理就跳過代理，沒啟用鏡像就跳過鏡像。 */
   function activeSources({ useMirror = false } = {}) {
     const keys = ['official'];
@@ -309,6 +351,6 @@
 
   global.Registry = {
     lookupByTaxId, lookupByName, mapRow, toThousands, tidyDate,
-    SOURCES, activeSources, getProxy, setProxy, checkProxy, FIELD_CANDIDATES,
+    SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, FIELD_CANDIDATES,
   };
 })(window);
