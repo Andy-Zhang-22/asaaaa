@@ -314,3 +314,72 @@ CORS 那一項是關鍵分歧點：
 - 更新一律寫成「編輯」，不動原始名單：登記資料未必永遠比業務手上的新（例如剛換
   負責人還沒登記），要保留得回原狀的路。每一筆都能在詳細頁還原。
 
+### 官方 API 被 CORS 擋掉之後
+
+實測結果：`data.gcis.nat.gov.tw` 不送 CORS 標頭，瀏覽器直接擋掉。所以查詢改成
+依序試三個來源，官方留著是因為政府哪天開放就會自動生效：
+
+| 來源 | 狀態 | 說明 |
+|---|---|---|
+| 商工行政資料開放平臺（官方） | 被擋 | 最正確，留著等政府開放 |
+| g0v 公司登記資料（社群鏡像） | 可用 | 同一份資料，有開 CORS。**預設不啟用**，要自己勾 |
+| 自架代理 | 可用 | 最可控，填網址就會用 |
+
+g0v 預設不啟用是刻意的：那是第三方服務，就算送出去的只有統一編號（本來就是公開
+資訊），也該由使用者自己決定，不該偷偷送。
+
+#### 自架代理（Cloudflare Worker）
+
+不想經過第三方就自己架一個，免費方案就夠用。到 Cloudflare Workers 建一個
+Worker，貼上：
+
+```js
+const ALLOWED = 'https://data.gcis.nat.gov.tw/';
+const ORIGIN = 'https://andy-zhang-22.github.io';
+
+const cors = {
+  'Access-Control-Allow-Origin': ORIGIN,
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Accept, Content-Type',
+};
+
+export default {
+  async fetch(request) {
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+
+    const target = new URL(request.url).searchParams.get('url');
+    // 白名單不要拿掉：沒有它，這個 Worker 就是任何人都能拿去轉打任意網站的跳板
+    if (!target || !target.startsWith(ALLOWED)) {
+      return new Response('只接受 data.gcis.nat.gov.tw 的網址', { status: 400, headers: cors });
+    }
+
+    try {
+      const upstream = await fetch(target, { headers: { Accept: 'application/json' } });
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: {
+          ...cors,
+          'Content-Type': upstream.headers.get('content-type') || 'application/json',
+          'Cache-Control': 'public, max-age=86400',
+        },
+      });
+    } catch (err) {
+      // 錯誤也要帶 cors，否則瀏覽器只會說「跨網域被擋」，看不到真正的原因
+      return new Response('連不上政府網站：' + err.message, { status: 502, headers: cors });
+    }
+  },
+};
+```
+
+連錯誤回應都帶 CORS 標頭是刻意的。少了的話瀏覽器只會報「跨網域被擋」，把真正的
+錯誤訊息（例如網址不在白名單）整個吃掉，出問題時完全無從判斷。
+
+設定步驟在網站裡也有一份（「從商工登記更新公司資料」→「怎麼架自己的代理」），
+還附複製鈕——要設定的時候人在瀏覽器前面，不會跑去翻 README。
+
+部署後把網址填進「從商工登記更新公司資料」的**自架代理網址**欄位即可（存在瀏覽器
+本機，不會進版控也不會同步）。
+
+那段白名單檢查不要拿掉：沒有它，這個 Worker 就變成任何人都能拿去轉打任意網站的
+跳板。`Access-Control-Allow-Origin` 也建議維持指定網域而不是 `*`。
+
