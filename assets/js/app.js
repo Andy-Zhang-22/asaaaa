@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-23';
+  const APP_VERSION = '20260916-24';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1305,16 +1305,26 @@ export default {
      * 負責人也改掉——登記上的負責人未必比業務手上的新。
      */
     const scope = el('select', {}, [
-      el('option', { value: 'address', textContent: '只補未填地址的（只寫地址，不動其他欄位）' }),
-      el('option', { value: 'all', textContent: '全部名單（比對統編、資本額、負責人、地址）' }),
+      el('option', { value: 'blank', textContent: '只補空白欄位（絕不覆蓋任何既有內容）' }),
+      el('option', { value: 'all', textContent: '全部校正（會覆蓋跟登記不一致的內容）' }),
     ]);
     host.append(el('label', { className: 'rule-field' }, [
       el('span', { textContent: '範圍' }), scope,
     ]));
 
+    /*
+     * 「只補空白」涵蓋四個欄位而不只是地址。
+     *
+     * 看過原始 PDF 才知道：沒地址的那批，統編在來源就是空的，不是解析掉的。
+     * 而統編空著就只能用名稱查，名稱一字不差才找得到——所以順手把查回來的統編
+     * 也填上，下一次就能用統編精準查，路會越走越順。
+     * 承諾維持不變：只填空白，既有內容一個字都不動。
+     */
     const scopeTargets = () => state.records
       .map((rec) => ({ rec, r: view(rec) }))
-      .filter(({ r }) => (scope.value === 'address' ? !r.address : true));
+      .filter(({ r }) => (scope.value === 'blank'
+        ? REGISTRY_FIELDS.some(([key]) => !String(r[key] || '').trim())
+        : true));
 
     const summary = el('p', { className: 'muted registry-summary' });
     host.append(summary);
@@ -1322,16 +1332,19 @@ export default {
       const targets = scopeTargets();
       const withTaxId = targets.filter(({ r }) => /^\d{8}$/.test(String(r.taxId || '').replace(/\D/g, ''))).length;
       const secs = Math.ceil(targets.length * 0.3);
-      summary.textContent = scope.value === 'address'
-        ? `名單共 ${state.records.length} 筆，其中 ${targets.length} 筆沒有地址。`
-          + `${withTaxId} 筆有 8 碼統編可直接查，其餘用公司名稱查。約需 ${secs} 秒。`
+      summary.textContent = scope.value === 'blank'
+        ? `名單共 ${state.records.length} 筆，其中 ${targets.length} 筆有欄位是空的。`
+          + `${withTaxId} 筆有 8 碼統編可直接查，其餘 ${targets.length - withTaxId} 筆只能用公司名稱查。`
+          + `約需 ${secs} 秒。`
         : `名單共 ${targets.length} 筆，其中 ${withTaxId} 筆有 8 碼統編可直接查，`
           + `其餘用公司名稱查。約需 ${secs} 秒。`;
     };
     scope.onchange = refreshSummary;
     // 沒有缺地址的客戶時，預設停在「只補地址」會讓人一按就撞到「沒有東西可以查」。
     // 這種時候直接預設成全部校正。
-    if (!state.records.map(view).some((r) => !r.address)) scope.value = 'all';
+    if (!state.records.map(view).some((r) => REGISTRY_FIELDS.some(([k]) => !String(r[k] || '').trim()))) {
+      scope.value = 'all';
+    }
     refreshSummary();
 
     const note = (text, cls) => result.append(el('p', { className: cls || 'rule-note', textContent: text }));
@@ -1451,14 +1464,14 @@ export default {
     stop.onclick = () => { cancelled = true; stop.textContent = '停止中…'; };
 
     runAll.onclick = async () => {
-      const addressOnly = scope.value === 'address';
+      const blanksOnly = scope.value === 'blank';
       const all = scopeTargets();
       if (!all.length) {
-        alert(addressOnly ? '名單裡沒有地址空白的客戶。' : '名單是空的。');
+        alert(blanksOnly ? '名單裡沒有欄位空白的客戶。' : '名單是空的。');
         return;
       }
       if (!confirm(`要查 ${all.length} 筆嗎？\n\n`
-        + (addressOnly ? '只會填入地址空白的那幾筆，不會動到其他欄位。\n\n' : '')
+        + (blanksOnly ? '只會填入目前空白的欄位，既有內容一個字都不會動。\n\n' : '')
         + '會一筆一筆送出（每筆間隔 0.3 秒，避免對政府網站造成負擔），'
         + '中途可以按停止。查完會先列出有差異的項目，確認後才寫入。')) return;
       cancelled = false;
@@ -1469,7 +1482,7 @@ export default {
 
       const diffs = [];
       const failures = [];
-      const fields = addressOnly ? REGISTRY_FIELDS.filter(([k]) => k === 'address') : REGISTRY_FIELDS;
+      const fields = REGISTRY_FIELDS;
       for (let i = 0; i < all.length; i++) {
         if (cancelled) break;
         const { rec, r } = all[i];
@@ -1484,8 +1497,8 @@ export default {
           fields.forEach(([key]) => {
             const now = String(r[key] || '').trim();
             const next = String(res.data[key] || '').trim();
-            // 補地址模式只填空白，本來就有值的一律不碰
-            if (addressOnly && now) return;
+            // 只補空白模式：本來就有值的一律不碰
+            if (blanksOnly && now) return;
             if (next && next !== now) changes[key] = { from: now, to: next };
           });
           if (Object.keys(changes).length) diffs.push({ rec, r, changes, status: res.data.status });
@@ -1501,11 +1514,11 @@ export default {
         note(failures[0].reason);
         return;
       }
-      note(`查完 ${all.length} 筆：${diffs.length} 筆${addressOnly ? '查到地址' : '有差異'}，`
+      note(`查完 ${all.length} 筆：${diffs.length} 筆${blanksOnly ? '查到可補的資料' : '有差異'}，`
         + `${failures.length} 筆查不到或失敗。`,
         'rule-verdict is-ok');
       if (!diffs.length) {
-        note(addressOnly ? '這些客戶在商工登記上查不到地址。' : '登記資料跟名單一致，沒有要更新的。');
+        note(blanksOnly ? '這些客戶在商工登記上查不到可以補的資料。' : '登記資料跟名單一致，沒有要更新的。');
         return;
       }
 
@@ -1522,7 +1535,7 @@ export default {
       if (diffs.length > 20) note(`※ 另外還有 ${diffs.length - 20} 筆有差異，這裡只列前 20 筆。`);
 
       const apply = el('button', { className: 'btn btn-primary', type: 'button',
-        textContent: addressOnly ? `填入這 ${diffs.length} 筆地址` : `套用這 ${diffs.length} 筆更新` });
+        textContent: blanksOnly ? `填入這 ${diffs.length} 筆` : `套用這 ${diffs.length} 筆更新` });
       apply.onclick = async () => {
         apply.disabled = true;
         for (const d of diffs) {

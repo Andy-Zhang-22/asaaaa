@@ -38,12 +38,30 @@
     ];
   };
 
+  /*
+   * 用名稱查要多試幾種，因為登記上的寫法跟業務手上的名單常常差一點點。
+   *
+   * 沒有統編的那批只能靠名稱查，而名稱一字不差才找得到，所以：
+   *   - 台／臺 兩種寫法都試（登記一律用「臺」，名單上兩種都有）
+   *   - 全形括號、空白先清掉
+   *   - like 找不到再試 eq
+   */
+  function nameVariants(raw) {
+    const base = String(raw || '').replace(/\s+/g, '').replace(/[（）]/g, (c) => (c === '（' ? '(' : ')'));
+    const out = new Set([base]);
+    if (base.includes('台')) out.add(base.replace(/台/g, '臺'));
+    if (base.includes('臺')) out.add(base.replace(/臺/g, '台'));
+    return [...out].filter(Boolean);
+  }
+
   const officialByName = (name) => {
-    const q = encodeURIComponent(name);
-    return [
-      `${BASE}?%24format=json&%24filter=Company_Name%20like%20${q}&%24skip=0&%24top=5`,
-      `${BASE}?%24format=json&%24filter=Company_Name%20like%20%27${q}%27&%24skip=0&%24top=5`,
-    ];
+    const urls = [];
+    for (const variant of nameVariants(name)) {
+      const q = encodeURIComponent(variant);
+      urls.push(`${BASE}?%24format=json&%24filter=Company_Name%20like%20${q}&%24skip=0&%24top=5`);
+      urls.push(`${BASE}?%24format=json&%24filter=Company_Name%20eq%20%27${q}%27&%24skip=0&%24top=5`);
+    }
+    return urls;
   };
 
   /*
@@ -351,6 +369,6 @@
 
   global.Registry = {
     lookupByTaxId, lookupByName, mapRow, toThousands, tidyDate,
-    SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, FIELD_CANDIDATES,
+    SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, nameVariants, FIELD_CANDIDATES,
   };
 })(window);
