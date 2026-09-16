@@ -915,6 +915,160 @@
    * 從試算表複製整列貼上新增客戶。走的是跟 CSV 匯入同一套解析與內容驗證，
    * 所以訪談內容、多支電話、民國年都會正確處理。先預覽再寫入。
    */
+  /*
+   * 從商工登記更新公司資料。
+   *
+   * 介面刻意分成「先試一筆」跟「全部更新」兩段。原因是這條路有一個沒辦法事先
+   * 驗證的風險：政府的開放資料 API 若不允許跨網域呼叫，瀏覽器會直接擋掉。與其讓
+   * 使用者按下「全部更新」跑到一半才發現全軍覆沒，不如先花十秒確認通不通，
+   * 順便把原始回應攤開來看——欄位名稱要是跟預期的不一樣，這時候就看得出來。
+   *
+   * 更新一律寫成「編輯」，不動原始名單資料：登記資料未必永遠比業務手上的新
+   * （例如剛換負責人還沒登記），保留得回原狀的路。
+   */
+  const REGISTRY_FIELDS = [
+    ['taxId', '統一編號'],
+    ['capital', '資本額（仟元）'],
+    ['owner', '負責人'],
+    ['address', '登記地址'],
+  ];
+
+  function openRegistryUpdate() {
+    const host = $('#editorBody');
+    host.textContent = '';
+    host.append(el('h2', { textContent: '從商工登記更新公司資料' }));
+    host.append(el('p', { className: 'muted',
+      textContent: '查詢的是「商工行政資料開放平臺」的公司登記基本資料，跟 findbiz 查詢畫面同一份來源。'
+        + '查詢由你的瀏覽器直接發出，送出去的只有統一編號，客戶名單不會離開這台裝置。' }));
+
+    const result = el('div', { className: 'rule-result' });
+    const tryOne = el('button', { className: 'btn btn-primary', type: 'button', textContent: '先試一筆' });
+    const runAll = el('button', { className: 'btn', type: 'button', textContent: '全部更新' });
+    runAll.disabled = true;
+    const stop = el('button', { className: 'btn', type: 'button', textContent: '停止' });
+    stop.hidden = true;
+    host.append(el('div', { className: 'card-actions' }, [tryOne, runAll, stop]));
+    host.append(result);
+
+    const withTaxId = state.records.map(view).filter((r) => /^\d{8}$/.test(String(r.taxId || '').replace(/\D/g, '')));
+    host.append(el('p', { className: 'muted',
+      textContent: `名單共 ${state.records.length} 筆，其中 ${withTaxId.length} 筆有 8 碼統編可以直接查。`
+        + (state.records.length - withTaxId.length
+          ? `另外 ${state.records.length - withTaxId.length} 筆沒有統編，會改用公司名稱查，比對到才更新。` : '') }));
+
+    const note = (text, cls) => result.append(el('p', { className: cls || 'rule-note', textContent: text }));
+
+    tryOne.onclick = async () => {
+      result.textContent = '';
+      const target = withTaxId[0] || state.records.map(view)[0];
+      if (!target) { note('名單是空的，沒有東西可以查。', 'rule-verdict is-fail'); return; }
+      note(`正在查：${target.company}（${target.taxId || '無統編，改用名稱'}）…`);
+      const res = target.taxId
+        ? await window.Registry.lookupByTaxId(target.taxId)
+        : await window.Registry.lookupByName(target.company);
+      result.textContent = '';
+      if (!res.ok) {
+        note(res.reason, 'rule-verdict is-fail');
+        if (res.body) note(`伺服器回應：${res.body}`);
+        note('如果是 CORS 被擋，這條路就走不通，要改成由每週排程抓整批資料回來比對。跟我說一聲我改。');
+        return;
+      }
+      note('查詢成功，這條路走得通。', 'rule-verdict is-ok');
+      const dl = el('dl');
+      REGISTRY_FIELDS.forEach(([key, label]) => {
+        dl.append(el('dt', { textContent: label }),
+          el('dd', { textContent: `名單：${target[key] || '（空）'}　→　登記：${res.data[key] || '（查無）'}` }));
+      });
+      if (res.data.status) dl.append(el('dt', { textContent: '營業狀態' }), el('dd', { textContent: res.data.status }));
+      result.append(dl);
+      if (res.data.unmappedKeys && res.data.unmappedKeys.length) {
+        note(`回應裡還有這些沒對應到的欄位，可能有用：${res.data.unmappedKeys.join('、')}`);
+      }
+      runAll.disabled = false;
+    };
+
+    let cancelled = false;
+    stop.onclick = () => { cancelled = true; stop.textContent = '停止中…'; };
+
+    runAll.onclick = async () => {
+      if (!confirm(`要查 ${state.records.length} 筆嗎？\n\n會一筆一筆送出（每筆間隔 0.3 秒，避免對政府網站造成負擔），`
+        + '中途可以按停止。查完會先列出有差異的項目，確認後才寫入。')) return;
+      cancelled = false;
+      tryOne.disabled = true; runAll.disabled = true; stop.hidden = false;
+      result.textContent = '';
+      const progress = el('p', { className: 'rule-verdict is-ok', textContent: '準備中…' });
+      result.append(progress);
+
+      const diffs = [];
+      const failures = [];
+      const all = state.records.map((rec) => ({ rec, r: view(rec) }));
+      for (let i = 0; i < all.length; i++) {
+        if (cancelled) break;
+        const { rec, r } = all[i];
+        progress.textContent = `查詢中 ${i + 1} / ${all.length}：${r.company}`;
+        const res = /^\d{8}$/.test(String(r.taxId || '').replace(/\D/g, ''))
+          ? await window.Registry.lookupByTaxId(r.taxId)
+          : await window.Registry.lookupByName(r.company);
+        if (!res.ok) { failures.push({ company: r.company, reason: res.reason }); }
+        else {
+          const changes = {};
+          REGISTRY_FIELDS.forEach(([key]) => {
+            const now = String(r[key] || '').trim();
+            const next = String(res.data[key] || '').trim();
+            if (next && next !== now) changes[key] = { from: now, to: next };
+          });
+          if (Object.keys(changes).length) diffs.push({ rec, r, changes, status: res.data.status });
+        }
+        await new Promise((done) => setTimeout(done, 300));
+      }
+
+      stop.hidden = true; stop.textContent = '停止'; tryOne.disabled = false;
+      result.textContent = '';
+      // 全部都失敗，幾乎可以確定是被擋掉，而不是資料真的都查不到
+      if (!diffs.length && failures.length === all.length && all.length) {
+        note('全部查詢都失敗，代表這條路被擋住了，不是資料的問題。', 'rule-verdict is-fail');
+        note(failures[0].reason);
+        return;
+      }
+      note(`查完 ${all.length} 筆：${diffs.length} 筆有差異，${failures.length} 筆查不到或失敗。`,
+        'rule-verdict is-ok');
+      if (!diffs.length) { note('登記資料跟名單一致，沒有要更新的。'); return; }
+
+      diffs.slice(0, 20).forEach((d) => {
+        const dl = el('dl');
+        Object.entries(d.changes).forEach(([key, ch]) => {
+          const label = (REGISTRY_FIELDS.find(([k]) => k === key) || [, key])[1];
+          dl.append(el('dt', { textContent: label }),
+            el('dd', { textContent: `${ch.from || '（空）'}　→　${ch.to}` }));
+        });
+        result.append(el('div', { className: 'import-preview' },
+          [el('strong', { textContent: d.company || d.r.company }), dl]));
+      });
+      if (diffs.length > 20) note(`※ 另外還有 ${diffs.length - 20} 筆有差異，這裡只列前 20 筆。`);
+
+      const apply = el('button', { className: 'btn btn-primary', type: 'button',
+        textContent: `套用這 ${diffs.length} 筆更新` });
+      apply.onclick = async () => {
+        apply.disabled = true;
+        for (const d of diffs) {
+          const existing = state.userStates.get(d.rec.id) || {};
+          const edits = { ...(existing.edits || {}) };
+          Object.entries(d.changes).forEach(([key, ch]) => { edits[key] = ch.to; });
+          await saveState(d.rec.id, { edits, editsAt: Date.now() });
+        }
+        await reload();
+        closeOverlays();
+        render();
+        toast(`已依登記資料更新 ${diffs.length} 筆`);
+        scheduleSync();
+      };
+      result.append(el('div', { className: 'card-actions' }, [apply]));
+      note('套用後會記成「已修改」，每一筆都可以在詳細頁按「還原成名單原始內容」退回。');
+    };
+
+    $('#editor').hidden = false;
+  }
+
   function openPasteImport() {
     const host = $('#editorBody');
     host.textContent = '';
@@ -1345,6 +1499,7 @@
       if (act === 'new-customer') openNewCustomer();
       if (act === 'paste-customer') openPasteImport();
       if (act === 'fix-address') { await repairStrayAddresses(); return; }
+      if (act === 'registry') { openRegistryUpdate(); return; }
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }
