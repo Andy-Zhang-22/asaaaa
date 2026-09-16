@@ -428,3 +428,10 @@ button, input, select { font: inherit; color: inherit; }
 .rule-defer { content-visibility: auto; contain-intrinsic-size: auto 560px; }
 
 .menu-version { margin: 4px 12px 2px; font-size: 11px; color: var(--muted); text-align: right; }
+
+.paste-box {
+  width: 100%; min-height: 130px; resize: vertical; margin: 14px 0 4px;
+  padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6;
+}
