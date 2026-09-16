@@ -520,6 +520,49 @@
     return out;
   }
 
+  /* ------------------------------------------------------------------
+   * 往來與否（二分法）
+   *
+   * 業務實際在用的判準只有一條：最新一期訪談內容有沒有寫到「本餘」。
+   * 有寫本餘＝這家現在還有在跑的案子，本金餘額掛在別的單位身上；
+   * 沒寫＝我們這邊沒有往來紀錄，是可以直接切進去談的名單。
+   * 只看最新一期，是因為三年前的本餘早就還完了，拿舊資料判斷會誤判。
+   * ------------------------------------------------------------------ */
+
+  const BALANCE_RE = /本餘|本金餘/;
+
+  const DEALING_LABEL = {
+    active: '有跟其他單位往來',
+    none: '沒有跟中租往來',
+  };
+
+  /** 取最新一期訪談：有日期的取最晚那筆，全都沒日期就取最後一段。 */
+  function latestNote(notesRaw) {
+    const entries = parseNotes(notesRaw);
+    if (!entries.length) return null;
+    const dated = entries.filter((e) => e.date);
+    if (dated.length) return dated.reduce((a, b) => (b.date >= a.date ? b : a));
+    return entries[entries.length - 1];
+  }
+
+  /**
+   * 二分法判讀往來情形，並附上原文片段讓業務自己覆核。
+   * @returns {{kind:'active'|'none', date:?string, snippet:string}}
+   */
+  function detectDealing(notesRaw) {
+    const latest = latestNote(notesRaw);
+    if (!latest) return { kind: 'none', date: null, snippet: '' };
+    const text = toHalfWidth(latest.text || '');
+    const m = text.match(BALANCE_RE);
+    if (!m) return { kind: 'none', date: latest.date || null, snippet: '' };
+    const from = Math.max(0, m.index - 20);
+    return {
+      kind: 'active',
+      date: latest.date || null,
+      snippet: text.slice(from, m.index + 50).replace(/\s+/g, ' ').trim(),
+    };
+  }
+
   /** 這筆客戶有哪幾類往來，給篩選用。 */
   function relationKinds(relations) {
     return ['internal', 'peer', 'bank'].filter((k) => relations[k] && relations[k].length);
@@ -682,6 +725,7 @@
     parseCsv, parseDelimited, detectDelimiter, parsePasted, STANDARD_HEADER,
     validate, resolveRow, detectShift, VALIDATORS,
     detectRelations, relationKinds, RELATION_LABEL,
+    detectDealing, latestNote, DEALING_LABEL,
     INTERNAL_UNITS, PEER_UNITS, BANKS,
     parseAddress, guessOutcome, OUTCOME_LABEL, makeId, toHalfWidth,
   };
