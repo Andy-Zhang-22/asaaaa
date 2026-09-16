@@ -21,11 +21,30 @@
   // 商工行政資料開放平臺：公司登記基本資料
   const BASE = 'https://data.gcis.nat.gov.tw/od/data/api/5F64D864-61CB-4D0D-8AD9-492047CC1EA6';
 
-  const officialByTaxId = (taxId) =>
-    `${BASE}?%24format=json&%24filter=Business_Accounting_NO%20eq%20${encodeURIComponent(taxId)}&%24skip=0&%24top=1`;
+  /*
+   * 查詢網址給的是「候選清單」而不是一條。
+   *
+   * 實測代理通了之後收到「回應不是 JSON」，代表政府那端收下了請求但回的不是資料，
+   * 多半是查詢語法不合它的胃口。OData 的字串比對通常要加單引號，但這支 API 的
+   * 文件範例又常寫成不加——我從開發環境連不上，沒辦法驗證是哪一種。
+   * 與其賭一個寫法，不如把幾種都試過去，第一個回得出 JSON 的就是對的。
+   */
+  const officialByTaxId = (taxId) => {
+    const id = encodeURIComponent(taxId);
+    return [
+      `${BASE}?%24format=json&%24filter=Business_Accounting_NO%20eq%20${id}&%24skip=0&%24top=1`,
+      `${BASE}?%24format=json&%24filter=Business_Accounting_NO%20eq%20%27${id}%27&%24skip=0&%24top=1`,
+      `${BASE}?$format=json&$filter=Business_Accounting_NO eq ${taxId}&$skip=0&$top=1`,
+    ];
+  };
 
-  const officialByName = (name) =>
-    `${BASE}?%24format=json&%24filter=Company_Name%20like%20${encodeURIComponent(name)}&%24skip=0&%24top=5`;
+  const officialByName = (name) => {
+    const q = encodeURIComponent(name);
+    return [
+      `${BASE}?%24format=json&%24filter=Company_Name%20like%20${q}&%24skip=0&%24top=5`,
+      `${BASE}?%24format=json&%24filter=Company_Name%20like%20%27${q}%27&%24skip=0&%24top=5`,
+    ];
+  };
 
   /*
    * 實測官方 API 不送 CORS 標頭，瀏覽器直接擋掉，所以只有官方這一條走不通。
@@ -50,6 +69,8 @@
     } catch (e) { /* 無痕模式寫不進去，不影響當次使用 */ }
   };
 
+  const viaProxy = (url) => `${getProxy().replace(/\/$/, '')}?url=${encodeURIComponent(url)}`;
+
   const SOURCES = {
     official: {
       label: '商工行政資料開放平臺（官方）',
@@ -58,13 +79,13 @@
     },
     g0v: {
       label: 'g0v 公司登記資料（社群鏡像）',
-      byTaxId: (taxId) => `https://company.g0v.tw/api/show/${encodeURIComponent(taxId)}`,
-      byName: (name) => `https://company.g0v.tw/api/search?q=${encodeURIComponent(name)}`,
+      byTaxId: (taxId) => [`https://company.g0v.tw/api/show/${encodeURIComponent(taxId)}`],
+      byName: (name) => [`https://company.g0v.tw/api/search?q=${encodeURIComponent(name)}`],
     },
     proxy: {
       label: '自架代理',
-      byTaxId: (taxId) => getProxy().replace(/\/$/, '') + '?url=' + encodeURIComponent(officialByTaxId(taxId)),
-      byName: (name) => getProxy().replace(/\/$/, '') + '?url=' + encodeURIComponent(officialByName(name)),
+      byTaxId: (taxId) => officialByTaxId(taxId).map(viaProxy),
+      byName: (name) => officialByName(name).map(viaProxy),
     },
   };
 
@@ -214,20 +235,24 @@
       signal: AbortSignal.timeout(20000),
     });
     const text = await res.text();
+    const type = res.headers.get('content-type') || '(沒有 Content-Type)';
+    // 收到什麼一定要帶回去。這類失敗光看「不是 JSON」完全無法判斷是政府端回了
+    // 錯誤頁、回了空白、還是代理自己出問題——實際內容講得比任何猜測都清楚。
+    const describe = () => (text.trim()
+      ? `${type}｜${text.replace(/\s+/g, ' ').trim().slice(0, 300)}`
+      : `${type}｜（空白回應，一個字都沒有）`);
     if (!res.ok) {
       const err = new Error(`HTTP ${res.status}`);
-      err.body = text.slice(0, 400);
+      err.body = describe();
       throw err;
     }
-    let json;
     try {
-      json = JSON.parse(text);
+      return unwrap(JSON.parse(text));
     } catch (e) {
       const err = new Error('回應不是 JSON');
-      err.body = text.slice(0, 400);
+      err.body = describe();
       throw err;
     }
-    return unwrap(json);
   }
 
   /** 目前可以用的來源，依序試。沒填代理就跳過代理，沒啟用鏡像就跳過鏡像。 */
@@ -242,19 +267,24 @@
     const attempts = [];
     for (const key of activeSources(opts)) {
       const src = SOURCES[key];
-      const url = kind === 'taxId' ? src.byTaxId(value) : src.byName(value);
-      try {
-        const rows = await request(url);
-        if (!rows.length) {
-          attempts.push({ source: key, label: src.label, reason: '查無資料' });
-          continue;
+      const urls = kind === 'taxId' ? src.byTaxId(value) : src.byName(value);
+      for (let i = 0; i < urls.length; i++) {
+        const tag = urls.length > 1 ? `${src.label}（寫法 ${i + 1}）` : src.label;
+        try {
+          const rows = await request(urls[i]);
+          if (!rows.length) {
+            attempts.push({ source: key, label: tag, reason: '查無資料' });
+            continue;   // 同一個來源的其他寫法還有機會
+          }
+          return {
+            ok: true, source: key, label: tag, url: urls[i],
+            data: mapRow(rows[0]), candidates: rows.map(mapRow), raw: rows[0], attempts,
+          };
+        } catch (err) {
+          attempts.push({ source: key, label: tag, reason: explain(err, key), body: err.body, url: urls[i] });
+          // 跨網域被擋是整個來源的問題，換寫法沒有意義
+          if (err instanceof TypeError) break;
         }
-        return {
-          ok: true, source: key, label: src.label,
-          data: mapRow(rows[0]), candidates: rows.map(mapRow), raw: rows[0], attempts,
-        };
-      } catch (err) {
-        attempts.push({ source: key, label: src.label, reason: explain(err, key), body: err.body });
       }
     }
     return {
