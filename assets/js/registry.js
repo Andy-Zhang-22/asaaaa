@@ -21,11 +21,63 @@
   // 商工行政資料開放平臺：公司登記基本資料
   const BASE = 'https://data.gcis.nat.gov.tw/od/data/api/5F64D864-61CB-4D0D-8AD9-492047CC1EA6';
 
-  const urlByTaxId = (taxId) =>
+  const officialByTaxId = (taxId) =>
     `${BASE}?%24format=json&%24filter=Business_Accounting_NO%20eq%20${encodeURIComponent(taxId)}&%24skip=0&%24top=1`;
 
-  const urlByName = (name) =>
+  const officialByName = (name) =>
     `${BASE}?%24format=json&%24filter=Company_Name%20like%20${encodeURIComponent(name)}&%24skip=0&%24top=5`;
+
+  /*
+   * 實測官方 API 不送 CORS 標頭，瀏覽器直接擋掉，所以只有官方這一條走不通。
+   * 這裡改成依序試三個來源，讓使用者有不必改架構就能用的路：
+   *
+   *   1. 官方  —— 最正確，但目前被擋。留著是因為政府哪天開放就自動能用。
+   *   2. g0v   —— 社群維護的同一份資料鏡像，有開 CORS。送出去的只有統編
+   *               （本來就是公開資訊），但畢竟是第三方，所以要使用者自己勾選啟用，
+   *               不預設偷偷送出去。
+   *   3. 自架代理 —— 使用者自己的 Cloudflare Worker 之類，最可控。
+   *               填了網址就會用它去轉打官方 API。
+   */
+  const PROXY_KEY = 'registry-proxy-url';
+
+  const getProxy = () => {
+    try { return localStorage.getItem(PROXY_KEY) || ''; } catch (e) { return ''; }
+  };
+  const setProxy = (url) => {
+    try {
+      if (url) localStorage.setItem(PROXY_KEY, url);
+      else localStorage.removeItem(PROXY_KEY);
+    } catch (e) { /* 無痕模式寫不進去，不影響當次使用 */ }
+  };
+
+  const SOURCES = {
+    official: {
+      label: '商工行政資料開放平臺（官方）',
+      byTaxId: officialByTaxId,
+      byName: officialByName,
+    },
+    g0v: {
+      label: 'g0v 公司登記資料（社群鏡像）',
+      byTaxId: (taxId) => `https://company.g0v.tw/api/show/${encodeURIComponent(taxId)}`,
+      byName: (name) => `https://company.g0v.tw/api/search?q=${encodeURIComponent(name)}`,
+    },
+    proxy: {
+      label: '自架代理',
+      byTaxId: (taxId) => getProxy().replace(/\/$/, '') + '?url=' + encodeURIComponent(officialByTaxId(taxId)),
+      byName: (name) => getProxy().replace(/\/$/, '') + '?url=' + encodeURIComponent(officialByName(name)),
+    },
+  };
+
+  /** g0v 用中文欄位名，而且資料包在 data 底下，跟官方的結構不一樣。 */
+  function unwrap(json) {
+    if (Array.isArray(json)) return json;
+    if (!json || typeof json !== 'object') return [];
+    if (json.data && typeof json.data === 'object') {
+      return Array.isArray(json.data) ? json.data : [json.data];
+    }
+    if (json.company && typeof json.company === 'object') return [json.company];
+    return [];
+  }
 
   /*
    * 欄位名稱用「候選清單」而不是寫死一個。
@@ -35,14 +87,17 @@
    * 把原始回應秀出來——猜錯的時候看得見，也才改得掉。
    */
   const FIELD_CANDIDATES = {
-    taxId: ['Business_Accounting_NO', 'BAN', 'Business_Accounting_No'],
-    name: ['Company_Name', 'Business_Name', 'Company_Name_Chinese'],
-    status: ['Company_Status_Desc', 'Company_Status', 'Business_Status_Desc'],
-    owner: ['Responsible_Name', 'Company_Responsible_Name', 'Business_Responsible_Name'],
-    address: ['Company_Location', 'Business_Address', 'Company_Address', 'Business_Location'],
-    capital: ['Capital_Stock_Amount', 'Capital_Total_Amount', 'Capital_Amount'],
-    paidIn: ['Paid_In_Capital_Amount', 'Paid_In_Capital_Total_Amount'],
-    setupDate: ['Company_Setup_Date', 'Business_Setup_Date', 'Setup_Date'],
+    taxId: ['Business_Accounting_NO', 'BAN', 'Business_Accounting_No', '統一編號'],
+    name: ['Company_Name', 'Business_Name', 'Company_Name_Chinese', '公司名稱', '商業名稱'],
+    status: ['Company_Status_Desc', 'Company_Status', 'Business_Status_Desc', '公司狀況', '狀態'],
+    owner: ['Responsible_Name', 'Company_Responsible_Name', 'Business_Responsible_Name',
+      '代表人姓名', '負責人姓名', '負責人'],
+    address: ['Company_Location', 'Business_Address', 'Company_Address', 'Business_Location',
+      '公司所在地', '地址', '營業所在地'],
+    capital: ['Capital_Stock_Amount', 'Capital_Total_Amount', 'Capital_Amount',
+      '資本總額(元)', '資本總額', '資本額'],
+    paidIn: ['Paid_In_Capital_Amount', 'Paid_In_Capital_Total_Amount', '實收資本額(元)', '實收資本額'],
+    setupDate: ['Company_Setup_Date', 'Business_Setup_Date', 'Setup_Date', '核准設立日期', '設立日期'],
   };
 
   const pick = (obj, keys) => {
@@ -118,35 +173,58 @@
       err.body = text.slice(0, 400);
       throw err;
     }
-    return Array.isArray(json) ? json : (json && json.data) || [];
+    return unwrap(json);
   }
 
-  async function lookupByTaxId(taxId) {
+  /** 目前可以用的來源，依序試。沒填代理就跳過代理，沒啟用鏡像就跳過鏡像。 */
+  function activeSources({ useMirror = false } = {}) {
+    const keys = ['official'];
+    if (getProxy()) keys.push('proxy');
+    if (useMirror) keys.push('g0v');
+    return keys;
+  }
+
+  async function tryEach(kind, value, opts) {
+    const attempts = [];
+    for (const key of activeSources(opts)) {
+      const src = SOURCES[key];
+      const url = kind === 'taxId' ? src.byTaxId(value) : src.byName(value);
+      try {
+        const rows = await request(url);
+        if (!rows.length) {
+          attempts.push({ source: key, label: src.label, reason: '查無資料' });
+          continue;
+        }
+        return {
+          ok: true, source: key, label: src.label,
+          data: mapRow(rows[0]), candidates: rows.map(mapRow), raw: rows[0], attempts,
+        };
+      } catch (err) {
+        attempts.push({ source: key, label: src.label, reason: explain(err), body: err.body });
+      }
+    }
+    return {
+      ok: false, attempts,
+      reason: attempts.length ? attempts.map((a) => `${a.label}：${a.reason}`).join('\n') : '沒有可用的查詢來源',
+    };
+  }
+
+  const lookupByTaxId = (taxId, opts) => {
     const clean = String(taxId || '').replace(/\D/g, '');
-    if (clean.length !== 8) return { ok: false, reason: '統一編號不是 8 碼，無法查詢' };
-    try {
-      const rows = await request(urlByTaxId(clean));
-      if (!rows.length) return { ok: false, reason: '查無這個統編的登記資料', raw: rows };
-      return { ok: true, data: mapRow(rows[0]), raw: rows[0] };
-    } catch (err) {
-      return { ok: false, reason: explain(err), body: err.body };
+    if (clean.length !== 8) {
+      return Promise.resolve({ ok: false, reason: '統一編號不是 8 碼，無法查詢', attempts: [] });
     }
-  }
+    return tryEach('taxId', clean, opts);
+  };
 
-  async function lookupByName(name) {
+  const lookupByName = (name, opts) => {
     const clean = String(name || '').trim();
-    if (!clean) return { ok: false, reason: '沒有公司名稱可以查' };
-    try {
-      const rows = await request(urlByName(clean));
-      if (!rows.length) return { ok: false, reason: '查無這個名稱的登記資料', raw: rows };
-      return { ok: true, data: mapRow(rows[0]), candidates: rows.map(mapRow), raw: rows[0] };
-    } catch (err) {
-      return { ok: false, reason: explain(err), body: err.body };
-    }
-  }
+    if (!clean) return Promise.resolve({ ok: false, reason: '沒有公司名稱可以查', attempts: [] });
+    return tryEach('name', clean, opts);
+  };
 
   global.Registry = {
     lookupByTaxId, lookupByName, mapRow, toThousands, tidyDate,
-    urlByTaxId, urlByName, FIELD_CANDIDATES,
+    SOURCES, activeSources, getProxy, setProxy, FIELD_CANDIDATES,
   };
 })(window);

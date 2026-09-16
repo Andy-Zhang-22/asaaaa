@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-9';
+  const APP_VERSION = '20260916-10';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -941,6 +941,23 @@
       textContent: '查詢的是「商工行政資料開放平臺」的公司登記基本資料，跟 findbiz 查詢畫面同一份來源。'
         + '查詢由你的瀏覽器直接發出，送出去的只有統一編號，客戶名單不會離開這台裝置。' }));
 
+    // 官方 API 實測會被 CORS 擋掉，所以這裡要讓使用者選別的路走。
+    // 鏡像預設不開：那是第三方，就算只送出公開的統編，也該由使用者自己決定。
+    const mirror = el('input', { type: 'checkbox', id: 'useMirror' });
+    host.append(el('label', { className: 'rule-field' }, [
+      mirror,
+      el('span', { textContent: ' 允許使用 g0v 社群鏡像（官方被擋時的替代來源，只會送出統一編號）' }),
+    ]));
+
+    const proxy = el('input', {
+      type: 'url', className: 'paste-box', placeholder: 'https://你的-worker.workers.dev/（選填）',
+      value: window.Registry.getProxy(),
+    });
+    host.append(el('label', { className: 'rule-field' }, [
+      el('span', { textContent: '自架代理網址（最可控，設定方式見 README）' }), proxy,
+    ]));
+    proxy.onchange = () => { window.Registry.setProxy(proxy.value.trim()); };
+
     const result = el('div', { className: 'rule-result' });
     const tryOne = el('button', { className: 'btn btn-primary', type: 'button', textContent: '先試一筆' });
     const runAll = el('button', { className: 'btn', type: 'button', textContent: '全部更新' });
@@ -963,17 +980,22 @@
       const target = withTaxId[0] || state.records.map(view)[0];
       if (!target) { note('名單是空的，沒有東西可以查。', 'rule-verdict is-fail'); return; }
       note(`正在查：${target.company}（${target.taxId || '無統編，改用名稱'}）…`);
+      const opts = { useMirror: mirror.checked };
       const res = target.taxId
-        ? await window.Registry.lookupByTaxId(target.taxId)
-        : await window.Registry.lookupByName(target.company);
+        ? await window.Registry.lookupByTaxId(target.taxId, opts)
+        : await window.Registry.lookupByName(target.company, opts);
       result.textContent = '';
       if (!res.ok) {
-        note(res.reason, 'rule-verdict is-fail');
-        if (res.body) note(`伺服器回應：${res.body}`);
-        note('如果是 CORS 被擋，這條路就走不通，要改成由每週排程抓整批資料回來比對。跟我說一聲我改。');
+        note('每個來源都失敗了。', 'rule-verdict is-fail');
+        (res.attempts || []).forEach((a) => note(`${a.label}：${a.reason}`));
+        if (!res.attempts || !res.attempts.length) note(res.reason);
+        if (!mirror.checked && !window.Registry.getProxy()) {
+          note('還沒試過其他來源：可以勾上面的 g0v 鏡像，或填自己的代理網址再試一次。');
+        }
         return;
       }
-      note('查詢成功，這條路走得通。', 'rule-verdict is-ok');
+      note(`查詢成功，走的是「${res.label}」。`, 'rule-verdict is-ok');
+      (res.attempts || []).forEach((a) => note(`（${a.label} 不通：${a.reason.split('\n')[0]}）`));
       const dl = el('dl');
       REGISTRY_FIELDS.forEach(([key, label]) => {
         dl.append(el('dt', { textContent: label }),
@@ -1006,9 +1028,10 @@
         if (cancelled) break;
         const { rec, r } = all[i];
         progress.textContent = `查詢中 ${i + 1} / ${all.length}：${r.company}`;
+        const opts = { useMirror: mirror.checked };
         const res = /^\d{8}$/.test(String(r.taxId || '').replace(/\D/g, ''))
-          ? await window.Registry.lookupByTaxId(r.taxId)
-          : await window.Registry.lookupByName(r.company);
+          ? await window.Registry.lookupByTaxId(r.taxId, opts)
+          : await window.Registry.lookupByName(r.company, opts);
         if (!res.ok) { failures.push({ company: r.company, reason: res.reason }); }
         else {
           const changes = {};
@@ -1026,7 +1049,7 @@
       result.textContent = '';
       // 全部都失敗，幾乎可以確定是被擋掉，而不是資料真的都查不到
       if (!diffs.length && failures.length === all.length && all.length) {
-        note('全部查詢都失敗，代表這條路被擋住了，不是資料的問題。', 'rule-verdict is-fail');
+        note('全部查詢都失敗，代表來源被擋住了，不是資料的問題。', 'rule-verdict is-fail');
         note(failures[0].reason);
         return;
       }
