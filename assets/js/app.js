@@ -27,9 +27,16 @@
 
   /* ---------------- 工具 ---------------- */
 
+  // 每分鐘算一次就夠了，這個函式在篩選與排序裡會被呼叫上千次
+  let todayCache = { at: 0, iso: '', ms: 0 };
   const todayISO = () => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const now = Date.now();
+    if (now - todayCache.at > 60000) {
+      const d = new Date();
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      todayCache = { at: now, iso, ms: Date.parse(`${iso}T00:00:00`) };
+    }
+    return todayCache.iso;
   };
   const addDays = (iso, n) => {
     const d = new Date(`${iso}T00:00:00`);
@@ -41,9 +48,10 @@
     const [y, m, d] = iso.split('-');
     return `${+y - 1911}/${m}/${d}`;
   };
-  const dayDiff = (iso) => Math.round(
-    (new Date(`${iso}T00:00:00`) - new Date(`${todayISO()}T00:00:00`)) / 86400000
-  );
+  const dayDiff = (iso) => {
+    todayISO();
+    return Math.round((Date.parse(`${iso}T00:00:00`) - todayCache.ms) / 86400000);
+  };
 
   let toastTimer;
   function toast(msg) {
@@ -57,13 +65,29 @@
   /** 使用者自己記的狀態會覆蓋 PDF 裡的原始值。 */
   function view(record) {
     const mine = state.userStates.get(record.id);
-    return {
-      ...record,
-      nextDate: (mine && mine.nextDate) || record.nextDate,
-      lastDate: (mine && mine.lastDate) || record.lastDate,
-      outcome: (mine && mine.outcome) || record.outcome,
+    const edits = (mine && mine.edits) || null;
+    const base = edits ? { ...record, ...edits } : record;
+    const out = {
+      ...base,
+      nextDate: (mine && mine.nextDate) || base.nextDate,
+      lastDate: (mine && mine.lastDate) || base.lastDate,
+      outcome: (mine && mine.outcome) || base.outcome,
       starred: !!(mine && mine.starred),
+      edited: !!edits,
     };
+    // 電話與地址改過就要重新解析，撥號鍵與縣市篩選才會跟著正確
+    if (edits && edits.phoneRaw !== undefined) out.phones = window.Normalize.extractPhones(edits.phoneRaw);
+    if (edits && edits.address !== undefined) Object.assign(out, window.Normalize.parseAddress(edits.address));
+    return out;
+  }
+
+  /** 更新某一筆的個人狀態，保留既有欄位（通話結果與編輯內容互不覆蓋）。 */
+  async function saveState(recordId, patch) {
+    const merged = { ...(state.userStates.get(recordId) || { recordId }), ...patch, recordId };
+    await window.Store.setState(merged);
+    state.userStates.set(recordId, merged);
+    touch();
+    return merged;
   }
 
   /** 資本額（仟元）≤ 10,000 者屬微型企業營業處客戶範疇，見規則頁。 */
@@ -73,12 +97,29 @@
     return value <= (window.Rules ? window.Rules.MICRO_CAPITAL_LIMIT : 10000) ? '微企範疇' : '一般組範疇';
   }
 
-  function searchBlob(r) {
-    if (!r._blob) {
-      r._blob = [r.company, r.aliases.join(' '), r.taxId, r.owner, r.keyman, r.industry,
-        r.phoneRaw, r.address, r.notesRaw, r.source].join(' ').toLowerCase();
-    }
-    return r._blob;
+  /*
+   * 每次重繪都把幾百筆資料重新攤平一次，切換分頁與打字才會卡。
+   * 這裡把整理好的資料快取起來，只有資料本身或日期變了才重算，
+   * 順便把到期分組、客戶規模與搜尋索引一次算完，後面就不必重複計算。
+   */
+  let dataVersion = 0;
+  let viewsKey = '';
+  let viewsCache = [];
+  const touch = () => { dataVersion += 1; };
+
+  function allViews() {
+    const key = `${dataVersion}|${todayISO()}`;
+    if (viewsKey === key) return viewsCache;
+    viewsCache = state.records.map((record) => {
+      const v = view(record);
+      v.bucket = dueBucket(v.nextDate);
+      v.scale = capitalScale(v);
+      v.blob = [v.company, v.aliases.join(' '), v.taxId, v.owner, v.keyman, v.industry,
+        v.phoneRaw, v.address, v.notesRaw, v.source].join(' ').toLowerCase();
+      return v;
+    });
+    viewsKey = key;
+    return viewsCache;
   }
 
   function dueBucket(iso) {
@@ -97,30 +138,27 @@
     const f = state.filters;
     const terms = q ? q.split(/\s+/) : [];
 
-    let list = state.records.map(view).filter((r) => {
+    let list = allViews().filter((r) => {
       if (state.hideBlocked && r.outcome === 'blocked') return false;
       if (f.source.size && !f.source.has(r.source)) return false;
       if (f.grade.size && !f.grade.has(r.grade || '未分級')) return false;
       if (f.outcome.size && !f.outcome.has(r.outcome)) return false;
       if (f.city.size && !f.city.has(r.city || '其他')) return false;
-      if (f.scale.size && !f.scale.has(capitalScale(r) || '未填資本額')) return false;
+      if (f.scale.size && !f.scale.has(r.scale || '未填資本額')) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (f.due) {
-        const b = dueBucket(r.nextDate);
+        const b = r.bucket;
         if (f.due === 'due' && !(b === 'overdue' || b === 'today')) return false;
         if (f.due === 'overdue' && b !== 'overdue') return false;
         if (f.due === 'week' && !(b === 'overdue' || b === 'today' || b === 'week')) return false;
         if (f.due === 'none' && b !== 'none') return false;
       }
-      if (terms.length) {
-        const blob = searchBlob(r);
-        if (!terms.every((t) => blob.includes(t))) return false;
-      }
+      if (terms.length && !terms.every((t) => r.blob.includes(t))) return false;
       return true;
     });
 
     if (state.tab === 'today') {
-      list = list.filter((r) => ['overdue', 'today'].includes(dueBucket(r.nextDate)));
+      list = list.filter((r) => r.bucket === 'overdue' || r.bucket === 'today');
     }
 
     const gradeRank = { S: 0, 'S?': 1, A: 2, B: 3, C: 4 };
@@ -138,23 +176,44 @@
 
   /* ---------------- 畫面 ---------------- */
 
+  let chipsKey = '';
+
+  /** 只更新按鈕的選取狀態，不動 DOM 結構。 */
+  function syncChipStates() {
+    document.querySelectorAll('#filters .chip[data-filter]').forEach((chip) => {
+      const { filter, value } = chip.dataset;
+      const on = filter === 'due'
+        ? state.filters.due === value
+        : state.filters[filter].has(value);
+      chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
   function renderFilters() {
-    const all = state.records.map(view);
-    const tally = (key) => {
+    // 篩選選項的內容只跟資料有關，跟搜尋字串或目前選了什麼無關，
+    // 所以資料沒變就不要重建幾十顆按鈕——那是打字會頓的主因之一。
+    const key = String(dataVersion);
+    if (chipsKey === key) { syncChipStates(); return; }
+    chipsKey = key;
+
+    const all = allViews();
+    const tally = (pick) => {
       const m = new Map();
       all.forEach((r) => {
-        const v = key(r);
+        const v = pick(r);
         m.set(v, (m.get(v) || 0) + 1);
       });
       return [...m.entries()].sort((a, b) => b[1] - a[1]);
     };
 
-    const chips = (host, items, setRef, labelOf) => {
+    const chips = (host, filter, items, setRef, labelOf) => {
       host.textContent = '';
       items.forEach(([value, count]) => {
         const btn = el('button', { className: 'chip', type: 'button' });
-        btn.setAttribute('aria-pressed', setRef.has(value) ? 'true' : 'false');
-        btn.append(el('small', { textContent: String(count) }), document.createTextNode(' ' + (labelOf ? labelOf(value) : value)));
+        btn.dataset.filter = filter;
+        btn.dataset.value = value;
+        btn.append(el('small', { textContent: String(count) }),
+          document.createTextNode(' ' + (labelOf ? labelOf(value) : value)));
         btn.onclick = () => {
           setRef.has(value) ? setRef.delete(value) : setRef.add(value);
           state.limit = PAGE_SIZE;
@@ -164,28 +223,27 @@
       });
     };
 
-    const dueItems = [
-      ['', '全部'], ['due', '今天以前（待打）'], ['overdue', '逾期'],
-      ['week', '一週內'], ['none', '未排定'],
-    ];
     const dueHost = $('#fltDue');
     dueHost.textContent = '';
-    dueItems.forEach(([value, label]) => {
+    [['', '全部'], ['due', '今天以前（待打）'], ['overdue', '逾期'],
+      ['week', '一週內'], ['none', '未排定']].forEach(([value, label]) => {
       const btn = el('button', { className: 'chip', type: 'button', textContent: label });
-      btn.setAttribute('aria-pressed', state.filters.due === value ? 'true' : 'false');
+      btn.dataset.filter = 'due';
+      btn.dataset.value = value;
       btn.onclick = () => { state.filters.due = value; state.limit = PAGE_SIZE; render(); };
       dueHost.append(btn);
     });
 
-    chips($('#fltSource'), tally((r) => r.source), state.filters.source, (v) => v.replace(/\.pdf$/i, ''));
-    chips($('#fltGrade'), tally((r) => r.grade || '未分級'), state.filters.grade);
-    chips($('#fltOutcome'), tally((r) => r.outcome), state.filters.outcome, (v) => OUTCOME_LABEL[v] || v);
-    chips($('#fltCity'), tally((r) => r.city || '其他').slice(0, 12), state.filters.city);
-    chips($('#fltScale'), tally((r) => capitalScale(r) || '未填資本額'), state.filters.scale);
+    chips($('#fltSource'), 'source', tally((r) => r.source), state.filters.source, (v) => v.replace(/\.pdf$/i, ''));
+    chips($('#fltGrade'), 'grade', tally((r) => r.grade || '未分級'), state.filters.grade);
+    chips($('#fltOutcome'), 'outcome', tally((r) => r.outcome), state.filters.outcome, (v) => OUTCOME_LABEL[v] || v);
+    chips($('#fltCity'), 'city', tally((r) => r.city || '其他').slice(0, 12), state.filters.city);
+    chips($('#fltScale'), 'scale', tally((r) => r.scale || '未填資本額'), state.filters.scale);
 
     const industries = [...new Set(all.map((r) => r.industry).filter(Boolean))].sort();
     $('#industryList').textContent = '';
     industries.forEach((i) => $('#industryList').append(el('option', { value: i })));
+    syncChipStates();
   }
 
   function outcomeBadge(r) {
@@ -205,7 +263,7 @@
   }
 
   function card(r) {
-    const bucket = dueBucket(r.nextDate);
+    const bucket = r.bucket || dueBucket(r.nextDate);
     const node = el('article', {
       className: `card${bucket === 'today' ? ' is-due' : ''}${bucket === 'overdue' ? ' is-overdue' : ''}`,
       tabIndex: 0,
@@ -214,7 +272,7 @@
       el('span', { className: 'card-name', textContent: r.company }),
       r.grade ? el('span', { className: `badge badge-grade badge-${r.grade}`, textContent: r.grade }) : '',
       outcomeBadge(r),
-      capitalScale(r) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
+      (r.scale || capitalScale(r)) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
     ].filter(Boolean));
     node.append(top);
 
@@ -244,7 +302,17 @@
     return node;
   }
 
+  let listKey = '';
+
   function renderList() {
+    // 條件沒變就不用重建幾百個節點（例如從統計切回來時）
+    const f = state.filters;
+    const key = [dataVersion, state.tab, state.search, state.sort, state.limit, state.hideBlocked,
+      f.due, f.industry, [...f.source].join(), [...f.grade].join(),
+      [...f.outcome].join(), [...f.city].join(), [...f.scale].join()].join('|');
+    if (listKey === key) return;
+    listKey = key;
+
     const list = visibleRecords();
     const host = $('#cards');
     host.textContent = '';
@@ -281,7 +349,7 @@
   }
 
   function renderStats() {
-    const all = state.records.map(view);
+    const all = allViews();
     const host = $('#paneStats');
     host.textContent = '';
     if (!all.length) {
@@ -290,7 +358,7 @@
     }
 
     const buckets = all.reduce((acc, r) => {
-      acc[dueBucket(r.nextDate)] = (acc[dueBucket(r.nextDate)] || 0) + 1;
+      acc[r.bucket] = (acc[r.bucket] || 0) + 1;
       return acc;
     }, {});
     const cards = [
@@ -328,11 +396,31 @@
     section('產業別 Top 12', group((r) => r.industry));
   }
 
+  let statsKey = '';
+  let rulesRendered = false;
+
+  /** 規則頁不依賴名單資料，建一次就好。 */
+  function buildRules() {
+    if (rulesRendered) return;
+    window.Rules.render($('#paneRules'));
+    rulesRendered = true;
+  }
+
+  /**
+   * 規則頁有三組表單與多張表格，第一次建構要花掉幾百毫秒。
+   * 趁使用者還在看名單的空檔先做好，點過去的時候就不會等。
+   */
+  function prebuildRules() {
+    const run = () => { try { buildRules(); } catch (err) { console.error(err); } };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 3000 });
+    else setTimeout(run, 800);
+  }
+
   function render() {
     const total = state.records.length;
     $('#countAll').textContent = String(total);
     $('#countToday').textContent = String(
-      state.records.map(view).filter((r) => ['overdue', 'today'].includes(dueBucket(r.nextDate))).length
+      allViews().filter((r) => r.bucket === 'overdue' || r.bucket === 'today').length
     );
     const sources = new Set(state.records.map((r) => r.source));
     $('#brandSub').textContent = total
@@ -349,9 +437,12 @@
     $('#filters').hidden = wide;
     $('#btnFilters').hidden = wide;
     renderFilters();
-    if (tab === 'stats') renderStats();
-    else if (tab === 'rules') window.Rules.render($('#paneRules'));
-    else renderList();
+    if (tab === 'stats') {
+      // 統計只跟資料有關，資料沒變就不用重畫幾十根長條
+      if (statsKey !== String(dataVersion)) { renderStats(); statsKey = String(dataVersion); }
+    } else if (tab === 'rules') {
+      buildRules();
+    } else renderList();
   }
 
   /* ---------------- 詳細資料抽屜 ---------------- */
@@ -363,12 +454,16 @@
     const body = $('#drawerBody');
     body.textContent = '';
 
+    const editBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '編輯資料' });
+    editBtn.onclick = () => openEditor(r.id);
     body.append(el('div', { className: 'detail-head' }, [
       el('h2', { textContent: r.company }),
       r.aliases.length ? el('p', { className: 'detail-alias', textContent: `關係企業：${r.aliases.join('、')}` }) : '',
-      el('div', {}, [
+      el('div', { className: 'detail-badges' }, [
         r.grade ? el('span', { className: `badge badge-grade badge-${r.grade}`, textContent: `分級 ${r.grade}` }) : '',
         outcomeBadge(r),
+        r.edited ? el('span', { className: 'badge badge-edited', textContent: '已修改' }) : '',
+        editBtn,
       ].filter(Boolean)),
     ].filter(Boolean)));
 
@@ -430,14 +525,11 @@
       await window.Store.addLog({
         recordId: r.id, date: today, text, outcome: outcomeSel.value, createdAt: Date.now(),
       });
-      const mine = {
-        recordId: r.id,
+      await saveState(r.id, {
         outcome: outcomeSel.value,
         nextDate: nextInput.value || null,
         lastDate: today,
-      };
-      await window.Store.setState(mine);
-      state.userStates.set(r.id, mine);
+      });
       state.logs = await window.Store.allLogs();
       toast('已儲存通話紀錄');
       render();
@@ -491,7 +583,140 @@
     $('#drawer').hidden = true;
     $('#importer').hidden = true;
     $('#syncSetup').hidden = true;
+    $('#editor').hidden = true;
     document.body.style.overflow = '';
+  }
+
+  /* ---------------- 編輯與新增客戶 ---------------- */
+
+  const EDIT_FIELDS = [
+    ['company', '公司名稱', 'text'],
+    ['taxId', '統一編號', 'text'],
+    ['grade', '分級', 'text'],
+    ['founded', '成立年', 'text'],
+    ['capital', '資本額（仟元）', 'text'],
+    ['phoneRaw', '電話', 'textarea'],
+    ['owner', '負責人', 'text'],
+    ['keyman', 'KEYMAN', 'text'],
+    ['industry', '產業別', 'text'],
+    ['address', '地址', 'textarea'],
+  ];
+
+  /** 產生編輯表單，回傳 { node, read }。 */
+  function editForm(values) {
+    const node = el('div', { className: 'edit-form' });
+    const inputs = {};
+    EDIT_FIELDS.forEach(([key, label, type]) => {
+      const control = type === 'textarea'
+        ? el('textarea', { rows: 2, value: values[key] || '' })
+        : el('input', { type: 'text', value: values[key] || '' });
+      inputs[key] = control;
+      node.append(el('label', { className: 'rule-field' }, [
+        el('span', { textContent: label }), control,
+      ]));
+    });
+    const nextDate = el('input', { type: 'date', value: values.nextDate || '' });
+    inputs.nextDate = nextDate;
+    node.append(el('label', { className: 'rule-field' }, [
+      el('span', { textContent: '下次聯絡日' }), nextDate,
+    ]));
+    return {
+      node,
+      read: () => {
+        const out = {};
+        EDIT_FIELDS.forEach(([key]) => { out[key] = inputs[key].value.trim(); });
+        out.nextDate = nextDate.value || null;
+        return out;
+      },
+    };
+  }
+
+  /** 編輯既有客戶：存成覆蓋層，重新匯入 PDF 不會被蓋掉，也會跟著雲端同步。 */
+  function openEditor(recordId) {
+    const raw = state.records.find((r) => r.id === recordId);
+    if (!raw) return;
+    const r = view(raw);
+    const host = $('#editorBody');
+    host.textContent = '';
+    host.append(el('h2', { textContent: '編輯客戶資料' }));
+    host.append(el('p', { className: 'muted',
+      textContent: '修改內容會蓋在原始名單之上。重新匯入同一份 PDF 不會覆蓋你改過的欄位，'
+        + '也會透過雲端同步帶到其他裝置。' }));
+
+    const form = editForm(r);
+    host.append(form.node);
+
+    const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存' });
+    save.onclick = async () => {
+      const values = form.read();
+      const nextDate = values.nextDate;
+      delete values.nextDate;
+      // 只記下跟原始資料不同的欄位，之後 PDF 更新了還看得出哪些是自己改的
+      const edits = {};
+      Object.entries(values).forEach(([key, value]) => {
+        if (value !== (raw[key] || '')) edits[key] = value;
+      });
+      const existing = state.userStates.get(recordId) || {};
+      await saveState(recordId, {
+        edits: Object.keys(edits).length ? edits : undefined,
+        nextDate: nextDate || existing.nextDate || null,
+      });
+      closeOverlays();
+      render();
+      openDetail(recordId);
+      toast(Object.keys(edits).length ? '已儲存修改' : '已清除先前的修改');
+      scheduleSync();
+    };
+    const revert = el('button', { className: 'btn', type: 'button', textContent: '還原成名單原始內容' });
+    revert.onclick = async () => {
+      await saveState(recordId, { edits: undefined });
+      closeOverlays();
+      render();
+      openDetail(recordId);
+      toast('已還原為 PDF 原始內容');
+      scheduleSync();
+    };
+    host.append(el('div', { className: 'card-actions' }, [save, r.edited ? revert : null].filter(Boolean)));
+    $('#editor').hidden = false;
+  }
+
+  /** 手動新增一筆客戶（例如客戶轉介或名片）。 */
+  function openNewCustomer() {
+    const host = $('#editorBody');
+    host.textContent = '';
+    host.append(el('h2', { textContent: '手動新增客戶' }));
+    host.append(el('p', { className: 'muted', textContent: '來源會標記為「手動新增」，和匯入的名單分開管理。' }));
+    const form = editForm({ nextDate: todayISO() });
+    host.append(form.node);
+
+    const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '新增' });
+    save.onclick = async () => {
+      const v = form.read();
+      if (!v.company && !v.phoneRaw) { toast('請至少填公司名稱或電話'); return; }
+      const source = '手動新增';
+      const id = window.Normalize.makeId(source, v.company, v.taxId);
+      if (state.records.some((r) => r.id === id)) { toast('已經有同名同統編的客戶了'); return; }
+      const record = {
+        id, source,
+        company: v.company, aliases: [], taxId: v.taxId,
+        grade: v.grade.toUpperCase(), founded: v.founded, capital: v.capital,
+        phoneRaw: v.phoneRaw, phones: window.Normalize.extractPhones(v.phoneRaw),
+        owner: v.owner, keyman: v.keyman, industry: v.industry,
+        nextDate: v.nextDate, lastDate: null, addedDate: todayISO(), country: '台灣',
+        address: v.address, notesRaw: '', timeline: [], outcome: 'new',
+        importedAt: Date.now(),
+      };
+      Object.assign(record, window.Normalize.parseAddress(v.address));
+      await window.Store.saveRecords([record]);
+      await reload();
+      closeOverlays();
+      render();
+      openDetail(id);
+      toast('已新增客戶');
+      scheduleSync();
+    };
+    host.append(el('div', { className: 'card-actions' }, [save]));
+    $('#editor').hidden = false;
   }
 
   /* ---------------- 匯入 ---------------- */
@@ -600,7 +825,7 @@
       '我的通話紀錄', 'PDF訪談內容'];
     const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
     const lines = [head.map(esc).join(',')];
-    state.records.map(view).forEach((r) => {
+    allViews().forEach((r) => {
       const mine = state.logs.filter((l) => l.recordId === r.id)
         .sort((a, b) => b.createdAt - a.createdAt)
         .map((l) => `${rocLabel(l.date)} [${OUTCOME_LABEL[l.outcome] || ''}] ${l.text}`)
@@ -681,6 +906,7 @@
   /* ---------------- 啟動 ---------------- */
 
   async function reload() {
+    touch();
     const [records, logs, states] = await Promise.all([
       window.Store.allRecords(), window.Store.allLogs(), window.Store.allStates(),
     ]);
@@ -690,7 +916,17 @@
   }
 
   function wireEvents() {
-    $('#search').oninput = (e) => { state.search = e.target.value; state.limit = PAGE_SIZE; render(); };
+    let searchTimer = null;
+    $('#search').oninput = (e) => {
+      const value = e.target.value;
+      clearTimeout(searchTimer);
+      // 每打一個字就重算幾百筆會頓，等使用者停一下再算
+      searchTimer = setTimeout(() => {
+        state.search = value;
+        state.limit = PAGE_SIZE;
+        render();
+      }, 120);
+    };
     $('#sortBy').onchange = (e) => { state.sort = e.target.value; render(); };
     $('#hideBlocked').onchange = (e) => { state.hideBlocked = e.target.checked; render(); };
     $('#btnMore').onclick = () => { state.limit += PAGE_SIZE; renderList(); };
@@ -735,7 +971,12 @@
       toast('已登出，下次同步會重新要求授權');
     };
     $('#btnPick').onclick = () => $('#filePick').click();
-    $('#filePick').onchange = (e) => importFiles(e.target.files);
+    $('#filePick').onchange = (e) => {
+      const files = [...e.target.files];
+      // 清空選擇，否則再選同一個檔案更新名單時不會觸發 change
+      e.target.value = '';
+      importFiles(files);
+    };
 
     const dz = $('#dropzone');
     ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => {
@@ -778,6 +1019,7 @@
             : '尚未同步過';
         });
       }
+      if (act === 'new-customer') openNewCustomer();
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }
@@ -835,6 +1077,7 @@
       await showSyncTime();
       runSync({ quiet: true });          // 背景靜默同步，失敗就等使用者自己按
     }
+    prebuildRules();
     if (!state.records.length) $('#importer').hidden = false;
   }
 
