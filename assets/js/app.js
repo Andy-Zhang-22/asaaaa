@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-25';
+  const APP_VERSION = '20260916-26';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -178,72 +178,6 @@
    *   - 其他 → 邊界無從得知（「大同鐵工廠乙建設股份有限公司」要從哪裡切？），
    *     硬拆只會拆錯，列出來讓使用者自己改，並且點一下就能開到那一筆。
    */
-  /*
-   * 延伸名單。
-   *
-   * 使用者要的是「可以立刻撥的電話」，而政府登記沒有電話欄位、外部名錄這邊也連不上。
-   * 但他手上這 800 多筆電話本來就在——缺的只是把「這家跟中租有往來」跟「那家還沒
-   * 接觸」之間的關係連起來。所以延伸線索從自己的名單長出來，電話天生就有。
-   */
-  function openProspects() {
-    const all = allViews();
-    const out = window.Prospect.build(all);
-    const host = $('#editorBody');
-    host.textContent = '';
-    host.append(el('h2', { textContent: '延伸名單' }));
-    host.append(el('p', { className: 'muted',
-      textContent: `以 ${out.stats.seeds} 家「跟中租往來過」的客戶為起點，從名單裡找出 `
-        + `${out.stats.owner + out.stats.cluster} 筆可以直接打的線索。`
-        + '這些公司本來就在名單裡，電話、地址、分級都是現成的。' }));
-
-    const section = (title, hint, items, render) => {
-      const sec = el('div', { className: 'detail-section' }, [
-        el('h3', { textContent: `${title}（${items.length}）` }),
-        el('p', { className: 'muted', textContent: hint }),
-      ]);
-      if (!items.length) {
-        sec.append(el('p', { className: 'rule-note', textContent: '這一類目前沒有找到。' }));
-      } else {
-        items.slice(0, 50).forEach((item) => sec.append(render(item)));
-        if (items.length > 50) {
-          sec.append(el('p', { className: 'rule-note', textContent: `※ 另外還有 ${items.length - 50} 筆，這裡只列前 50 筆。` }));
-        }
-      }
-      host.append(sec);
-    };
-
-    const card = (item) => {
-      const r = item.r;
-      const open = el('button', { className: 'btn btn-tiny', type: 'button', textContent: r.company });
-      open.onclick = () => { closeOverlays(); openDetail(r.id); };
-      const head = el('div', { className: 'card-actions' }, [open]);
-      if (r.territory === '優先區域') head.append(el('span', { className: 'badge badge-priority', textContent: '優先區域' }));
-      if (r.grade) head.append(el('span', { className: `badge badge-grade badge-${r.grade}`, textContent: r.grade }));
-      const box = el('div', { className: 'import-preview' }, [head]);
-      box.append(el('p', { className: 'rule-note', textContent: item.why }));
-      // 電話直接放出來並附複製鈕，看到就能打，不用再點進去
-      const tel = el('div', { className: 'card-actions' });
-      telLinks(r).forEach((a) => tel.append(a));
-      box.append(tel);
-      return box;
-    };
-
-    section('同一位負責人的其他公司', '中小企業老闆名下有兩三家公司是常態。其中一家已經在跟中租做，另一家最好切入——人已經認識你們了。',
-      out.owner, card);
-
-    section('同區域同產業', '已經成交的產業＋區域組合代表這個打法有效，同一格子裡還沒接觸的值得排前面。',
-      out.cluster, card);
-
-    section('訪談內容裡提到、名單上沒有的公司',
-      '這些是客戶自己講出來的公司名，通常是同業、關係企業或上下游。名單上沒有，所以沒有電話，要另外查。',
-      out.mentioned, (item) => el('div', { className: 'import-preview' }, [
-        el('strong', { textContent: item.name }),
-        el('p', { className: 'rule-note', textContent: `來自 ${item.via.company} 的訪談內容` }),
-      ]));
-
-    $('#editor').hidden = false;
-  }
-
   async function reviewCompanyNames() {
     const fixable = [];
     const manual = [];
@@ -2070,7 +2004,6 @@ export default {
       if (act === 'followup') { await repairFollowUps(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'check-names') { await reviewCompanyNames(); return; }
-      if (act === 'prospects') { openProspects(); return; }
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }
