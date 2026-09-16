@@ -424,6 +424,7 @@
       toast('已儲存通話紀錄');
       render();
       openDetail(r.id);
+      scheduleSync();
     };
     form.append(memo, el('div', { className: 'row' }, [
       el('span', { className: 'muted', textContent: '結果' }), outcomeSel,
@@ -471,6 +472,7 @@
   function closeOverlays() {
     $('#drawer').hidden = true;
     $('#importer').hidden = true;
+    $('#syncSetup').hidden = true;
     document.body.style.overflow = '';
   }
 
@@ -539,7 +541,9 @@
           logLine(`⚠️ ${file.name}：讀到表頭但沒有資料列。`, 'err');
           continue;
         }
-        await window.Store.deleteSource(file.name);   // 同名重匯 = 更新
+        const importedAt = Date.now();
+        records.forEach((r) => { r.importedAt = importedAt; });
+        await window.Store.deleteSource(file.name, { keepTombstone: false });   // 同名重匯 = 更新
         await window.Store.saveRecords(records);
         logLine(
           `✅ ${file.name}：${isCsv ? 'CSV' : `${pages} 頁`} → ${records.length} 筆客戶`
@@ -557,6 +561,7 @@
     }
     await reload();
     render();
+    scheduleSync();
   }
 
   /* ---------------- 匯出 ---------------- */
@@ -588,6 +593,71 @@
         OUTCOME_LABEL[r.outcome] || r.outcome, r.source, mine, r.notesRaw].map(esc).join(','));
     });
     download(`電話推廣名單_${todayISO()}.csv`, '﻿' + lines.join('\r\n'), 'text/csv;charset=utf-8');
+  }
+
+  /* ---------------- 雲端同步 ---------------- */
+
+  let syncTimer = null;
+
+  function setSyncButton(stateName, title) {
+    const btn = $('#btnSync');
+    btn.hidden = !window.DriveSync.isConfigured();
+    btn.classList.toggle('is-busy', stateName === 'busy');
+    btn.classList.toggle('is-error', stateName === 'error');
+    btn.textContent = stateName === 'busy' ? '⋯' : '⟳';
+    btn.title = title || '與雲端硬碟同步';
+  }
+
+  async function showSyncTime() {
+    const at = await window.Store.getMeta('lastSyncAt');
+    if (at) setSyncButton('idle', `上次同步 ${new Date(at).toLocaleString('zh-TW')}`);
+    else setSyncButton('idle', '尚未同步過');
+    return at;
+  }
+
+  /**
+   * @param {{interactive?:boolean, quiet?:boolean}} [opts]
+   *   interactive：允許跳出 Google 授權視窗（使用者主動按的時候才可以）
+   *   quiet：失敗時不要吵使用者
+   */
+  async function runSync(opts) {
+    const { interactive = false, quiet = false } = opts || {};
+    if (!window.DriveSync.isConfigured()) {
+      if (!quiet) toast('請先到「雲端同步設定」填入 Google 用戶端 ID');
+      return null;
+    }
+    setSyncButton('busy');
+    try {
+      const result = await window.DriveSync.sync({ interactive });
+      await reload();
+      render();
+      await showSyncTime();
+      if (!quiet) {
+        const g = result.gained;
+        const gained = [
+          g.records > 0 ? `名單 +${g.records}` : '',
+          g.logs > 0 ? `通話紀錄 +${g.logs}` : '',
+        ].filter(Boolean).join('、');
+        toast(result.firstTime ? '已建立雲端同步檔' : (gained ? `同步完成（${gained}）` : '同步完成，沒有新資料'));
+      }
+      const status = $('#syncStatus');
+      if (status) status.textContent = `上次同步：${new Date().toLocaleString('zh-TW')}`;
+      return result;
+    } catch (err) {
+      console.error(err);
+      setSyncButton('error', String(err.message || err));
+      if (!quiet) toast(`同步失敗：${err.message || err}`);
+      const status = $('#syncStatus');
+      if (status && !quiet) status.textContent = `同步失敗：${err.message || err}`;
+      return null;
+    }
+  }
+
+  /** 記完通話後過幾秒自動推上去，不要每按一次就打一次 API。 */
+  function scheduleSync() {
+    if (!window.DriveSync.isConfigured()) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => runSync({ quiet: true }), 4000);
   }
 
   /* ---------------- 啟動 ---------------- */
@@ -630,6 +700,22 @@
     };
 
     $('#btnImport').onclick = () => { $('#importer').hidden = false; };
+    $('#btnSync').onclick = () => runSync({ interactive: true });
+    $('#btnSaveClientId').onclick = async () => {
+      const id = $('#clientId').value.trim();
+      if (!id) { toast('請貼上 Google 用戶端 ID'); return; }
+      if (!/\.apps\.googleusercontent\.com$/.test(id)) {
+        toast('用戶端 ID 看起來不對，應該以 .apps.googleusercontent.com 結尾');
+        return;
+      }
+      window.DriveSync.setClientId(id);
+      setSyncButton('idle');
+      await runSync({ interactive: true });
+    };
+    $('#btnSyncSignOut').onclick = () => {
+      window.DriveSync.signOut();
+      toast('已登出，下次同步會重新要求授權');
+    };
     $('#btnPick').onclick = () => $('#filePick').click();
     $('#filePick').onchange = (e) => importFiles(e.target.files);
 
@@ -664,6 +750,16 @@
         document.documentElement.dataset.theme = next;
         localStorage.setItem('theme', next);
       }
+      if (act === 'sync-now') runSync({ interactive: true });
+      if (act === 'sync-setup') {
+        $('#clientId').value = window.DriveSync.clientId();
+        $('#syncSetup').hidden = false;
+        showSyncTime().then((at) => {
+          $('#syncStatus').textContent = at
+            ? `上次同步：${new Date(at).toLocaleString('zh-TW')}`
+            : '尚未同步過';
+        });
+      }
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }
@@ -686,9 +782,12 @@
       const file = e.target.files[0];
       if (!file) return;
       try {
-        await window.Store.importAll(JSON.parse(await file.text()));
+        const incoming = JSON.parse(await file.text());
+        if (!incoming || !Array.isArray(incoming.records)) throw new Error('備份檔格式不正確');
+        const merged = window.DriveSync.mergeDumps(await window.Store.exportAll(), incoming);
+        await window.Store.replaceAll(merged);
         await reload(); render();
-        toast('備份已還原');
+        toast(`已合併備份：共 ${merged.records.length} 筆客戶、${merged.logs.length} 則通話紀錄`);
       } catch (err) {
         toast(`還原失敗：${err.message}`);
       }
@@ -714,6 +813,10 @@
     wireEvents();
     await reload();
     render();
+    if (window.DriveSync.isConfigured()) {
+      await showSyncTime();
+      runSync({ quiet: true });          // 背景靜默同步，失敗就等使用者自己按
+    }
     if (!state.records.length) $('#importer').hidden = false;
   }
 

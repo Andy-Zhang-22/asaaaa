@@ -1,0 +1,273 @@
+/*
+ * sync.js — 透過使用者自己的 Google 雲端硬碟，在多台裝置之間同步名單與通話紀錄。
+ *
+ * 沒有後端：瀏覽器直接拿 OAuth token 去打 Drive API，資料寫成雲端硬碟裡的一個
+ * JSON 檔。客戶個資只會在「這台裝置」與「使用者自己的雲端硬碟」之間往返。
+ *
+ * 合併而不是覆蓋：兩台裝置各自記的通話紀錄都會保留，同一筆客戶的追蹤狀態
+ * 取比較新的那一份。刪除靠墓碑記錄，才不會下次同步又被救回來。
+ */
+(function (global) {
+  'use strict';
+
+  const FILE_NAME = '電話推廣名單-同步資料.json';
+  const SCOPE = 'https://www.googleapis.com/auth/drive.file';
+  const GIS_SRC = 'https://accounts.google.com/gsi/client';
+  const CLIENT_ID_KEY = 'driveClientId';
+
+  /* ---------------- 合併（純函式，與 Google 無關） ---------------- */
+
+  const asMap = (list, key) => {
+    const m = new Map();
+    (list || []).forEach((item) => { if (item && item[key]) m.set(item[key], item); });
+    return m;
+  };
+
+  function mergeTombstones(a, b) {
+    const out = { logs: {}, sources: {} };
+    ['logs', 'sources'].forEach((kind) => {
+      const left = (a && a[kind]) || {};
+      const right = (b && b[kind]) || {};
+      Object.keys(left).forEach((k) => { out[kind][k] = left[k]; });
+      Object.keys(right).forEach((k) => {
+        out[kind][k] = Math.max(out[kind][k] || 0, right[k]);
+      });
+    });
+    return out;
+  }
+
+  /**
+   * 合併兩份資料。兩邊地位相同，誰是本機誰是雲端都得到一樣的結果。
+   * @param {object} a
+   * @param {object} b
+   */
+  function mergeDumps(a, b) {
+    const left = a || {};
+    const right = b || {};
+    const tombstones = mergeTombstones(left.tombstones, right.tombstones);
+
+    // 名單：兩邊聯集。同一份 PDF 在不同裝置匯入會產生相同的 id，所以不會重複。
+    const records = new Map();
+    [...(left.records || []), ...(right.records || [])].forEach((r) => {
+      if (!r || !r.id) return;
+      const seen = records.get(r.id);
+      // 後匯入的版本比較新（解析邏輯可能已經改良過）
+      if (!seen || (r.importedAt || 0) >= (seen.importedAt || 0)) records.set(r.id, r);
+    });
+    for (const [id, r] of records) {
+      const killedAt = tombstones.sources[r.source];
+      if (killedAt && killedAt > (r.importedAt || 0)) records.delete(id);
+    }
+
+    // 通話紀錄：兩邊聯集，靠 uid 去重；被刪掉的不要救回來
+    const logs = new Map();
+    [...(left.logs || []), ...(right.logs || [])].forEach((l) => {
+      if (!l) return;
+      const uid = l.uid || `${l.recordId}|${l.createdAt}`;
+      if (tombstones.logs[uid]) return;
+      if (!logs.has(uid)) logs.set(uid, { ...l, uid });
+    });
+
+    // 追蹤狀態：同一筆客戶只能有一個，取比較新的
+    const states = new Map();
+    [...(left.states || []), ...(right.states || [])].forEach((st) => {
+      if (!st || !st.recordId) return;
+      const seen = states.get(st.recordId);
+      if (!seen || (st.updatedAt || 0) > (seen.updatedAt || 0)) states.set(st.recordId, st);
+    });
+
+    return {
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      records: [...records.values()],
+      logs: [...logs.values()].sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0)),
+      states: [...states.values()],
+      tombstones,
+    };
+  }
+
+  /** 合併前後的差異，用來跟使用者說「這次同步拿到什麼」。 */
+  function diffSummary(before, after) {
+    const count = (d, key) => ((d && d[key]) || []).length;
+    return {
+      records: count(after, 'records') - count(before, 'records'),
+      logs: count(after, 'logs') - count(before, 'logs'),
+      states: count(after, 'states') - count(before, 'states'),
+    };
+  }
+
+  /* ---------------- Google 授權 ---------------- */
+
+  let tokenClient = null;
+  let accessToken = null;
+  let tokenExpiry = 0;
+
+  const clientId = () => localStorage.getItem(CLIENT_ID_KEY) || '';
+  const setClientId = (id) => {
+    localStorage.setItem(CLIENT_ID_KEY, String(id || '').trim());
+    tokenClient = null;
+    accessToken = null;
+  };
+  const isConfigured = () => !!clientId();
+
+  function loadGis() {
+    if (global.google && global.google.accounts && global.google.accounts.oauth2) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[src="${GIS_SRC}"]`);
+      if (existing) {
+        existing.addEventListener('load', () => resolve());
+        existing.addEventListener('error', () => reject(new Error('無法載入 Google 登入元件')));
+        return;
+      }
+      const el = document.createElement('script');
+      el.src = GIS_SRC;
+      el.async = true;
+      el.onload = () => resolve();
+      el.onerror = () => reject(new Error('無法載入 Google 登入元件，請檢查網路'));
+      document.head.append(el);
+    });
+  }
+
+  /**
+   * 取得 access token。interactive=false 時只做靜默更新，
+   * 需要使用者點同意的話會失敗，讓呼叫端決定要不要跳出視窗。
+   */
+  async function getToken({ interactive }) {
+    if (!isConfigured()) throw new Error('尚未設定 Google 用戶端 ID');
+    if (accessToken && Date.now() < tokenExpiry - 60000) return accessToken;
+    await loadGis();
+
+    return new Promise((resolve, reject) => {
+      tokenClient = global.google.accounts.oauth2.initTokenClient({
+        client_id: clientId(),
+        scope: SCOPE,
+        callback: (res) => {
+          if (res && res.access_token) {
+            accessToken = res.access_token;
+            tokenExpiry = Date.now() + (Number(res.expires_in || 3600) * 1000);
+            resolve(accessToken);
+          } else {
+            reject(new Error((res && res.error) || '取得授權失敗'));
+          }
+        },
+        error_callback: (err) => {
+          reject(new Error(err && err.type === 'popup_closed'
+            ? '授權視窗被關閉'
+            : `授權失敗：${(err && err.type) || '未知錯誤'}`));
+        },
+      });
+      tokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' });
+    });
+  }
+
+  function signOut() {
+    accessToken = null;
+    tokenExpiry = 0;
+  }
+
+  /* ---------------- Drive 存取 ---------------- */
+
+  async function driveFetch(url, options, token) {
+    const res = await fetch(url, {
+      ...options,
+      headers: { Authorization: `Bearer ${token}`, ...((options || {}).headers || {}) },
+    });
+    if (res.status === 401 || res.status === 403) {
+      accessToken = null;
+      throw new Error('雲端硬碟拒絕存取，請重新授權');
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`雲端硬碟回應 ${res.status}${body ? `：${body.slice(0, 120)}` : ''}`);
+    }
+    return res;
+  }
+
+  async function findFile(token) {
+    const q = encodeURIComponent(`name='${FILE_NAME}' and trashed=false`);
+    const res = await driveFetch(
+      `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&pageSize=10`,
+      {}, token
+    );
+    const data = await res.json();
+    return (data.files || [])[0] || null;
+  }
+
+  async function downloadFile(fileId, token) {
+    const res = await driveFetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {}, token
+    );
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch (err) {
+      throw new Error('雲端硬碟上的同步檔內容毀損，無法解析');
+    }
+  }
+
+  async function uploadFile(fileId, dump, token) {
+    const body = JSON.stringify(dump);
+    if (fileId) {
+      await driveFetch(
+        `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body }, token
+      );
+      return fileId;
+    }
+    const boundary = 'tmsync' + Math.random().toString(36).slice(2);
+    const metadata = { name: FILE_NAME, mimeType: 'application/json' };
+    const payload = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`
+      + `${JSON.stringify(metadata)}\r\n--${boundary}\r\n`
+      + `Content-Type: application/json\r\n\r\n${body}\r\n--${boundary}--`;
+    const res = await driveFetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+        body: payload,
+      }, token
+    );
+    const data = await res.json();
+    return data.id;
+  }
+
+  /* ---------------- 同步流程 ---------------- */
+
+  let running = null;
+
+  /**
+   * 下載雲端資料 → 與本機合併 → 寫回雲端 → 覆蓋本機。
+   * @param {{interactive?:boolean}} [options] interactive=true 允許跳出授權視窗
+   */
+  function sync(options) {
+    if (running) return running;            // 同時間只跑一次
+    running = (async () => {
+      const interactive = !!(options && options.interactive);
+      const token = await getToken({ interactive });
+      const local = await global.Store.exportAll();
+      const file = await findFile(token);
+      const remote = file ? await downloadFile(file.id, token) : null;
+
+      const merged = mergeDumps(local, remote);
+      const fileId = await uploadFile(file ? file.id : null, merged, token);
+      await global.Store.replaceAll(merged);
+      await global.Store.setMeta('lastSyncAt', Date.now());
+      await global.Store.setMeta('driveFileId', fileId);
+
+      return {
+        merged,
+        gained: diffSummary(local, merged),
+        firstTime: !file,
+      };
+    })().finally(() => { running = null; });
+    return running;
+  }
+
+  global.DriveSync = {
+    sync, mergeDumps, diffSummary, mergeTombstones,
+    isConfigured, clientId, setClientId, signOut, getToken,
+    FILE_NAME, SCOPE,
+  };
+})(window);

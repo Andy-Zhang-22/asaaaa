@@ -26,12 +26,16 @@
   </div>
 
   <div class="topbar-actions">
+    <button id="btnSync" class="btn btn-ghost" title="與雲端硬碟同步" hidden>⟳</button>
     <button id="btnImport" class="btn btn-primary">匯入名單</button>
     <button id="btnMenu" class="btn btn-ghost" aria-haspopup="true" title="更多">⋯</button>
     <div id="menu" class="menu" hidden>
       <button data-act="export-csv">匯出 CSV（含通話紀錄）</button>
       <button data-act="export-json">下載備份 JSON</button>
-      <button data-act="import-json">還原備份 JSON</button>
+      <button data-act="import-json">還原備份 JSON（合併）</button>
+      <hr>
+      <button data-act="sync-now">立即同步雲端硬碟</button>
+      <button data-act="sync-setup">雲端同步設定</button>
       <hr>
       <button data-act="theme">切換深色／淺色</button>
       <button data-act="manage">管理已匯入名單</button>
@@ -131,6 +135,42 @@
   </div>
 </div>
 
+<!-- 雲端同步設定 -->
+<div id="syncSetup" class="drawer" hidden>
+  <div class="drawer-backdrop" data-close></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="雲端同步設定">
+    <button class="drawer-close" data-close aria-label="關閉">✕</button>
+    <h2>雲端同步設定</h2>
+    <p class="muted">
+      同步檔會存在<strong>你自己的 Google 雲端硬碟</strong>，檔名「電話推廣名單-同步資料.json」。
+      資料不會經過任何第三方伺服器。每台裝置登入同一個 Google 帳號就會互相同步，
+      通話紀錄是<strong>合併</strong>的，不會互相覆蓋。
+    </p>
+    <div class="filter-group">
+      <label for="clientId">Google 用戶端 ID（OAuth Client ID）</label>
+      <input id="clientId" type="text" placeholder="例如 1234567890-abcdef.apps.googleusercontent.com" autocomplete="off">
+    </div>
+    <div class="card-actions">
+      <button id="btnSaveClientId" class="btn btn-primary">儲存並立即同步</button>
+      <button id="btnSyncSignOut" class="btn">登出 Google</button>
+    </div>
+    <p id="syncStatus" class="muted"></p>
+    <details class="sync-help">
+      <summary>還沒有用戶端 ID？點這裡看設定步驟</summary>
+      <ol>
+        <li>到 <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud 主控台</a> 建一個專案（名稱隨意）。</li>
+        <li>左側「API 和服務 → 程式庫」，搜尋 <strong>Google Drive API</strong>，按啟用。</li>
+        <li>左側「OAuth 同意畫面」：User Type 選 <strong>外部</strong>，填應用程式名稱與你的信箱，
+            測試使用者加入你自己的 Gmail。</li>
+        <li>左側「憑證 → 建立憑證 → OAuth 用戶端 ID」，應用程式類型選 <strong>網頁應用程式</strong>。</li>
+        <li>「已授權的 JavaScript 來源」加入這個網站的網址（就是你現在瀏覽器網址列上、到網域為止的那一段）。</li>
+        <li>建立後把「用戶端 ID」複製貼到上面的欄位。</li>
+      </ol>
+      <p class="muted">同意畫面停在「測試」狀態就夠自己用，只是登入時會出現「這個應用程式未經驗證」的提醒，選「繼續」即可。</p>
+    </details>
+  </div>
+</div>
+
 <input id="jsonPick" type="file" accept="application/json,.json" hidden>
 <div id="toast" class="toast" hidden></div>
 
@@ -138,6 +178,7 @@
 <script src="assets/js/pdf-table.js"></script>
 <script src="assets/js/normalize.js"></script>
 <script src="assets/js/store.js"></script>
+<script src="assets/js/sync.js"></script>
 <script src="assets/js/app.js"></script>
 </body>
 </html>

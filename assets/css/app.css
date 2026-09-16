@@ -281,3 +281,11 @@ button, input, select { font: inherit; color: inherit; }
 .import-preview dt { color: var(--muted); }
 .import-preview dd { margin: 0; overflow-wrap: anywhere; }
 .import-preview dd.is-blank { color: var(--muted); opacity: .55; }
+
+.sync-help { margin-top: 16px; font-size: 13px; }
+.sync-help summary { cursor: pointer; color: var(--primary); }
+.sync-help ol { padding-right: 20px; margin: 10px 0; }
+.sync-help li { margin-bottom: 6px; }
+.sync-help a { color: var(--primary); }
+#btnSync.is-busy { opacity: .6; }
+#btnSync.is-error { color: var(--danger); border-color: var(--danger); }
