@@ -545,8 +545,12 @@
     return { records, header, skipped, shift, repaired };
   }
 
-  /** 最小可用的 CSV 解析（支援引號內的逗號與換行）。 */
-  function parseCsv(text) {
+  /**
+   * 最小可用的分隔文字解析，支援引號內的分隔符號與換行。
+   * 逗號用於 CSV，Tab 用於從 Excel／Google 試算表直接複製貼上。
+   */
+  function parseDelimited(text, delimiter) {
+    const delim = delimiter || ',';
     const rows = [];
     let row = [];
     let field = '';
@@ -561,7 +565,7 @@
         continue;
       }
       if (ch === '"') { quoted = true; continue; }
-      if (ch === ',') { row.push(field); field = ''; continue; }
+      if (ch === delim) { row.push(field); field = ''; continue; }
       if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; continue; }
       field += ch;
     }
@@ -569,8 +573,52 @@
     return rows.filter((r) => r.some((c) => c && c.trim()));
   }
 
+  const parseCsv = (text) => parseDelimited(text, ',');
+
+  /** 引號外的 Tab 比逗號多就當成 Excel 貼上的內容。 */
+  function detectDelimiter(text) {
+    let quoted = false;
+    let tabs = 0;
+    let commas = 0;
+    const src = String(text);
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '"') { quoted = !quoted; continue; }
+      if (quoted) continue;
+      if (ch === '\t') tabs++;
+      else if (ch === ',') commas++;
+    }
+    return tabs >= commas && tabs > 0 ? '\t' : ',';
+  }
+
+  /** 名單的標準欄位順序，貼上的內容沒有標題列時用這個補。 */
+  const STANDARD_HEADER = ['公司名稱', '統編', '分級', '成立', '資本額', '電話', '負責人',
+    'KEYMAN', '產業別', '下次聯絡日', '最近聯絡日', '訪談內容', '地址', '名單新增日期', '國家'];
+
+  /**
+   * 解析使用者從試算表複製貼上的內容。自動判斷分隔符號；
+   * 沒有標題列時補上標準欄位順序，再交給內容驗證去修正錯位。
+   */
+  function parsePasted(text, source) {
+    const delimiter = detectDelimiter(text);
+    let rows = parseDelimited(text, delimiter);
+    if (!rows.length) return { records: [], synthesized: false, delimiter, rows: [] };
+
+    let synthesized = false;
+    if (!detectHeader(rows)) {
+      const width = Math.max(...rows.map((r) => r.length));
+      const header = STANDARD_HEADER.slice(0, width);
+      while (header.length < width) header.push('');
+      rows = [header].concat(rows);
+      synthesized = true;
+    }
+    const out = toRecords(rows, source, { pageStarts: [0] });
+    return { ...out, synthesized, delimiter, rows };
+  }
+
   global.Normalize = {
-    toRecords, detectHeader, parseDate, extractPhones, parseNotes, splitCompanyNames, parseCsv,
+    toRecords, detectHeader, parseDate, extractPhones, parseNotes, splitCompanyNames,
+    parseCsv, parseDelimited, detectDelimiter, parsePasted, STANDARD_HEADER,
     validate, resolveRow, detectShift, VALIDATORS,
     parseAddress, guessOutcome, OUTCOME_LABEL, makeId, toHalfWidth,
   };

@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-2';
+  const APP_VERSION = '20260916-3';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -725,6 +725,106 @@
     $('#editor').hidden = false;
   }
 
+  /**
+   * 從試算表複製整列貼上新增客戶。走的是跟 CSV 匯入同一套解析與內容驗證，
+   * 所以訪談內容、多支電話、民國年都會正確處理。先預覽再寫入。
+   */
+  function openPasteImport() {
+    const host = $('#editorBody');
+    host.textContent = '';
+    host.append(el('h2', { textContent: '貼上新增客戶' }));
+    host.append(el('p', { className: 'muted',
+      textContent: '從 Excel 或 Google 試算表選取整列複製，貼在下面即可，一次多列也可以。'
+        + '沒有標題列的話會依名單的標準欄位順序判讀，並自動檢查內容有沒有放錯欄位。' }));
+
+    const box = el('textarea', {
+      className: 'paste-box', rows: 6,
+      placeholder: '公司名稱\t統編\t分級\t成立\t資本額\t電話\t負責人\t…（直接貼上即可）',
+    });
+    host.append(box);
+
+    const preview = el('div', { className: 'rule-result' });
+    const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '新增到名單' });
+    save.disabled = true;
+    host.append(el('div', { className: 'card-actions' }, [save]));
+    host.append(preview);
+
+    let parsed = null;
+    const SOURCE = '手動新增';
+
+    function run() {
+      const text = box.value;
+      preview.textContent = '';
+      parsed = null;
+      save.disabled = true;
+      if (!text.trim()) return;
+
+      try {
+        parsed = window.Normalize.parsePasted(text, SOURCE);
+      } catch (err) {
+        preview.append(el('p', { className: 'rule-verdict is-fail', textContent: `解析失敗：${err.message}` }));
+        return;
+      }
+      if (!parsed.records.length) {
+        preview.append(el('p', { className: 'rule-verdict is-fail',
+          textContent: '讀不出任何客戶。請確認有複製到整列，且至少包含公司名稱或電話。' }));
+        return;
+      }
+
+      const existing = new Set(state.records.map((r) => r.id));
+      const updating = parsed.records.filter((r) => existing.has(r.id)).length;
+      preview.append(el('p', { className: 'rule-verdict is-ok',
+        textContent: `讀到 ${parsed.records.length} 筆`
+          + `${updating ? `（其中 ${updating} 筆已存在，將更新）` : ''}`
+          + `，分隔符號：${parsed.delimiter === '\t' ? 'Tab（試算表）' : '逗號'}`
+          + `${parsed.synthesized ? '，未偵測到標題列，已依標準欄位順序判讀' : ''}` }));
+      if (parsed.shift) {
+        preview.append(el('p', { className: 'rule-note', textContent: `※ 偵測到欄位整體平移 ${parsed.shift > 0 ? '+' : ''}${parsed.shift} 格，已自動校正。` }));
+      }
+      if (parsed.repaired) {
+        preview.append(el('p', { className: 'rule-note', textContent: `※ 有 ${parsed.repaired} 筆的部分欄位內容對不上欄位名稱，已依內容重新歸位。` }));
+      }
+
+      parsed.records.slice(0, 5).forEach((r) => {
+        const dl = el('dl');
+        [['公司名稱', r.company], ['統編', r.taxId], ['分級', r.grade],
+          ['資本額', r.capital], ['電話', r.phoneRaw.replace(/\n/g, ' / ')],
+          ['負責人', r.owner], ['產業別', r.industry],
+          ['下次聯絡', r.nextDate || ''], ['地址', r.address],
+          ['訪談紀錄', r.timeline.length ? `${r.timeline.length} 則` : ''],
+        ].forEach(([k, v]) => {
+          if (!v) return;
+          dl.append(el('dt', { textContent: k }), el('dd', { textContent: v }));
+        });
+        preview.append(el('div', { className: 'import-preview' }, [dl]));
+      });
+      if (parsed.records.length > 5) {
+        preview.append(el('p', { className: 'muted', textContent: `…另外還有 ${parsed.records.length - 5} 筆` }));
+      }
+      save.disabled = false;
+    }
+
+    save.onclick = async () => {
+      if (!parsed || !parsed.records.length) return;
+      const importedAt = Date.now();
+      parsed.records.forEach((r) => { r.importedAt = importedAt; });
+      const existing = new Set(state.records.map((r) => r.id));
+      const added = parsed.records.filter((r) => !existing.has(r.id)).length;
+      await window.Store.saveRecords(parsed.records);   // 累加，不刪既有的「手動新增」
+      await reload();
+      closeOverlays();
+      render();
+      if (parsed.records.length === 1) openDetail(parsed.records[0].id);
+      toast(`已新增 ${added} 筆${parsed.records.length - added ? `、更新 ${parsed.records.length - added} 筆` : ''}`);
+      scheduleSync();
+    };
+
+    box.oninput = run;
+    box.onpaste = () => setTimeout(run, 0);
+    $('#editor').hidden = false;
+    setTimeout(() => box.focus(), 50);
+  }
+
   /* ---------------- 匯入 ---------------- */
 
   function logLine(text, cls) {
@@ -1026,6 +1126,7 @@
         });
       }
       if (act === 'new-customer') openNewCustomer();
+      if (act === 'paste-customer') openPasteImport();
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }
