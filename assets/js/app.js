@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-5';
+  const APP_VERSION = '20260916-6';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -27,7 +27,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), industry: '' },
+    filters: { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -80,6 +80,8 @@
       starred: !!(mine && mine.starred),
       edited: !!edits,
     };
+    out.scale = capitalScale(out);
+    out.territory = territory(out);
     // 電話與地址改過就要重新解析，撥號鍵與縣市篩選才會跟著正確
     if (edits && edits.phoneRaw !== undefined) out.phones = window.Normalize.extractPhones(edits.phoneRaw);
     if (edits && edits.address !== undefined) Object.assign(out, window.Normalize.parseAddress(edits.address));
@@ -93,6 +95,23 @@
     state.userStates.set(recordId, merged);
     touch();
     return merged;
+  }
+
+  /*
+   * 服務範圍：新竹以北加宜蘭都能服務，其中新北市這九個區是首要目標。
+   * 範圍外的客戶依【一般組】行銷規範第(三)項要走協銷，卡片上先標出來，
+   * 免得打到一半才發現。
+   */
+  const PRIORITY_DISTRICTS = new Set(['新莊區', '三重區', '林口區', '泰山區', '五股區',
+    '八里區', '淡水區', '蘆洲區', '樹林區']);
+  const SERVICE_CITIES = new Set(['臺北市', '新北市', '基隆市', '桃園市',
+    '新竹市', '新竹縣', '宜蘭縣']);
+
+  function territory(record) {
+    const city = record.city || '';
+    if (!city) return '';
+    if (city === '新北市' && PRIORITY_DISTRICTS.has(record.district)) return '優先區域';
+    return SERVICE_CITIES.has(city) ? '服務範圍' : '範圍外';
   }
 
   /** 資本額（仟元）≤ 10,000 者屬微型企業營業處客戶範疇，見規則頁。 */
@@ -118,7 +137,6 @@
     viewsCache = state.records.map((record) => {
       const v = view(record);
       v.bucket = dueBucket(v.nextDate);
-      v.scale = capitalScale(v);
       v.blob = [v.company, v.aliases.join(' '), v.taxId, v.owner, v.keyman, v.industry,
         v.phoneRaw, v.address, v.notesRaw, v.source].join(' ').toLowerCase();
       return v;
@@ -150,6 +168,7 @@
       if (f.outcome.size && !f.outcome.has(r.outcome)) return false;
       if (f.city.size && !f.city.has(r.city || '其他')) return false;
       if (f.scale.size && !f.scale.has(r.scale || '未填資本額')) return false;
+      if (f.territory.size && !f.territory.has(r.territory || '未填地址')) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (f.due) {
         const b = r.bucket;
@@ -174,6 +193,11 @@
       grade: (a, b) => (gradeRank[a.grade] ?? 9) - (gradeRank[b.grade] ?? 9),
       capital: (a, b) => num(b.capital) - num(a.capital),
       company: (a, b) => a.company.localeCompare(b.company, 'zh-Hant'),
+      territory: (a, b) => {
+        const rank = { 優先區域: 0, 服務範圍: 1, '': 2, 範圍外: 3 };
+        return (rank[a.territory] ?? 2) - (rank[b.territory] ?? 2)
+          || (a.nextDate || '9999').localeCompare(b.nextDate || '9999');
+      },
     }[state.sort];
     list.sort((a, b) => cmp(a, b) || a.company.localeCompare(b.company, 'zh-Hant'));
     return list;
@@ -244,6 +268,7 @@
     chips($('#fltOutcome'), 'outcome', tally((r) => r.outcome), state.filters.outcome, (v) => OUTCOME_LABEL[v] || v);
     chips($('#fltCity'), 'city', tally((r) => r.city || '其他').slice(0, 12), state.filters.city);
     chips($('#fltScale'), 'scale', tally((r) => r.scale || '未填資本額'), state.filters.scale);
+    chips($('#fltTerritory'), 'territory', tally((r) => r.territory || '未填地址'), state.filters.territory);
 
     const industries = [...new Set(all.map((r) => r.industry).filter(Boolean))].sort();
     $('#industryList').textContent = '';
@@ -321,6 +346,8 @@
       r.grade ? el('span', { className: `badge badge-grade badge-${r.grade}`, textContent: r.grade }) : '',
       outcomeBadge(r),
       (r.scale || capitalScale(r)) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
+      r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
+      r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
     ].filter(Boolean));
     node.append(top);
 
@@ -353,11 +380,13 @@
   let listKey = '';
 
   function renderList() {
-    // 條件沒變就不用重建幾百個節點（例如從統計切回來時）
-    const f = state.filters;
-    const key = [dataVersion, state.tab, state.search, state.sort, state.limit, state.hideBlocked,
-      f.due, f.industry, [...f.source].join(), [...f.grade].join(),
-      [...f.outcome].join(), [...f.city].join(), [...f.scale].join()].join('|');
+    // 條件沒變就不用重建幾百個節點（例如從統計切回來時）。
+    // 篩選條件用走訪的方式組 key，以後新增篩選才不會忘了加進來而讓畫面不更新。
+    const filterKey = Object.entries(state.filters)
+      .map(([name, value]) => `${name}:${value instanceof Set ? [...value].sort().join(',') : value}`)
+      .join('|');
+    const key = [dataVersion, state.tab, state.search, state.sort,
+      state.limit, state.hideBlocked, filterKey].join('|');
     if (listKey === key) return;
     listKey = key;
 
@@ -537,6 +566,12 @@
       if (!v) return;
       dl.append(el('dt', { textContent: k }), el('dd', { textContent: v }));
     });
+    if (r.territory) {
+      dl.append(el('dt', { textContent: '服務區域' }),
+        el('dd', { textContent: r.territory === '範圍外'
+          ? '範圍外——依【一般組】行銷規範第(三)項應採協銷辦理'
+          : r.territory }));
+    }
     if (r.address) {
       dl.append(el('dt', { textContent: '地址' }));
       const dd = el('dd');
@@ -1108,7 +1143,7 @@
     $('#btnMore').onclick = () => { state.limit += PAGE_SIZE; renderList(); };
     $('#fltIndustry').oninput = (e) => { state.filters.industry = e.target.value.trim(); state.limit = PAGE_SIZE; render(); };
     $('#btnResetFilters').onclick = () => {
-      state.filters = { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), industry: '' };
+      state.filters = { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), industry: '' };
       $('#fltIndustry').value = '';
       state.limit = PAGE_SIZE;
       render();
