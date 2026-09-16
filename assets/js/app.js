@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-19';
+  const APP_VERSION = '20260916-20';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1286,7 +1286,9 @@ export default {
         note('每個來源都失敗了。', 'rule-verdict is-fail');
         (res.attempts || []).forEach((a) => {
           note(`${a.label}：${a.reason}`);
-          if (a.body) note(`　　伺服器回應：${a.body}`);
+          // 實際收到什麼比任何推測都有用，沒收到內容也要講「空白」而不是不講
+          if (a.body) note(`　　實際收到：${a.body}`);
+          if (a.url) note(`　　查詢網址：${a.url}`);
         });
         if (!res.attempts || !res.attempts.length) note(res.reason);
         if (!mirror.checked && !window.Registry.getProxy()) {
