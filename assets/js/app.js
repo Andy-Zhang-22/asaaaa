@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-21';
+  const APP_VERSION = '20260916-22';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -165,6 +165,91 @@
       scheduleSync();
     };
     return btn;
+  }
+
+  /*
+   * 檢查公司名稱。
+   *
+   * 名稱錯就沒辦法拿去比對商工登記——使用者就是卡在這裡。而錯的名稱多半是解析
+   * 留下的痕跡：兩家黏在一起、地址或日期溢進來、整段過長。
+   *
+   * 分成兩堆處理，因為能做的事不一樣：
+   *   - 兩家以上都有公司字尾 → 邊界明確，直接拆，第一家當公司名、其餘進別名。
+   *   - 其他 → 邊界無從得知（「大同鐵工廠乙建設股份有限公司」要從哪裡切？），
+   *     硬拆只會拆錯，列出來讓使用者自己改，並且點一下就能開到那一筆。
+   */
+  async function reviewCompanyNames() {
+    const fixable = [];
+    const manual = [];
+    state.records.forEach((rec) => {
+      const r = view(rec);
+      const why = window.Normalize.suspiciousName(r.company);
+      if (!why) return;
+      const split = window.Normalize.splitGluedName(r.company);
+      if (split) fixable.push({ rec, r, why, split });
+      else manual.push({ rec, r, why });
+    });
+
+    if (!fixable.length && !manual.length) { toast('公司名稱看起來都正常'); return; }
+
+    const host = $('#editorBody');
+    host.textContent = '';
+    host.append(el('h2', { textContent: '公司名稱檢查' }));
+    host.append(el('p', { className: 'muted',
+      textContent: `名單共 ${state.records.length} 筆，找到 ${fixable.length + manual.length} 筆名稱看起來有問題。`
+        + '名稱不對就沒辦法拿去比對商工登記，所以要先處理這裡。' }));
+
+    if (fixable.length) {
+      const sec = el('div', { className: 'detail-section' }, [
+        el('h3', { textContent: `可以自動拆開（${fixable.length} 筆）` }),
+        el('p', { className: 'muted', textContent: '兩家以上都有公司字尾，邊界很明確。第一家留作公司名，其餘存成別名，搜尋一樣找得到。' }),
+      ]);
+      fixable.slice(0, 15).forEach(({ r, split }) => {
+        sec.append(el('div', { className: 'import-preview' }, [
+          el('p', { textContent: `${r.company}` }),
+          el('p', { className: 'rule-note', textContent: `→ ${split.company}　＋別名：${split.aliases.join('、')}` }),
+        ]));
+      });
+      if (fixable.length > 15) sec.append(el('p', { className: 'rule-note', textContent: `※ 另外還有 ${fixable.length - 15} 筆，這裡只列前 15 筆。` }));
+
+      const go = el('button', { className: 'btn btn-primary', type: 'button', textContent: `拆開這 ${fixable.length} 筆` });
+      go.onclick = async () => {
+        go.disabled = true;
+        for (const { rec, split } of fixable) {
+          const existing = state.userStates.get(rec.id) || {};
+          await saveState(rec.id, {
+            edits: { ...(existing.edits || {}), company: split.company },
+            editsAt: Date.now(),
+          });
+        }
+        await reload();
+        closeOverlays();
+        render();
+        toast(`已拆開 ${fixable.length} 筆公司名稱`);
+        scheduleSync();
+      };
+      sec.append(el('div', { className: 'card-actions' }, [go]));
+      host.append(sec);
+    }
+
+    if (manual.length) {
+      const sec = el('div', { className: 'detail-section' }, [
+        el('h3', { textContent: `要自己確認（${manual.length} 筆）` }),
+        el('p', { className: 'muted',
+          textContent: '這幾筆看得出不對，但正確的斷點無從判斷，自動改只會改錯。點公司名稱可以直接開啟那一筆修改。' }),
+      ]);
+      manual.slice(0, 40).forEach(({ rec, r, why }) => {
+        const link = el('button', { className: 'btn btn-tiny', type: 'button', textContent: r.company || '（空白）' });
+        link.onclick = () => { closeOverlays(); openDetail(rec.id); };
+        sec.append(el('div', { className: 'import-preview' }, [
+          link, el('p', { className: 'rule-note', textContent: why }),
+        ]));
+      });
+      if (manual.length > 40) sec.append(el('p', { className: 'rule-note', textContent: `※ 另外還有 ${manual.length - 40} 筆，這裡只列前 40 筆。` }));
+      host.append(sec);
+    }
+
+    $('#editor').hidden = false;
   }
 
   async function repairFollowUps() {
@@ -1894,6 +1979,7 @@ export default {
       if (act === 'registry') { openRegistryUpdate(); return; }
       if (act === 'followup') { await repairFollowUps(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
+      if (act === 'check-names') { await reviewCompanyNames(); return; }
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }

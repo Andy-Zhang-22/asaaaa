@@ -75,6 +75,64 @@
     return names.length ? names : [lines.join('')];
   }
 
+  /*
+   * 這個公司名稱看起來對不對。
+   *
+   * 名稱錯就沒辦法拿去比對商工登記，而錯的名稱通常是解析時留下的痕跡：
+   * 兩家黏在一起、地址或日期溢進來、整段過長。挑出來讓使用者自己改，
+   * 比讓他一筆一筆翻 872 筆快得多。
+   *
+   * 只回報「看得出哪裡不對」的，不做模糊猜測——誤報會讓人失去信任，
+   * 之後真的有問題也懶得看。
+   */
+  function suspiciousName(raw) {
+    const name = String(raw || '').replace(/\s+/g, '');
+    if (!name) return '名稱是空的';
+
+    NAME_SUFFIX.lastIndex = 0;
+    const suffixes = name.match(NAME_SUFFIX) || [];
+    if (suffixes.length > 1) return `疑似兩家以上黏在一起（出現 ${suffixes.length} 個公司字尾）`;
+
+    /*
+     * 「大同鐵工廠乙建設股份有限公司」這種：前一家是商號（鐵工廠、五金行…），
+     * 這些字眼不在 NAME_SUFFIX 裡，所以整串只數得到一個公司字尾，上面那條抓不到。
+     *
+     * 這裡改看「商號字眼出現在中間，後面還接著一個完整的公司名」。
+     * 必須說清楚的是：這個判斷一定會有誤報——「台灣工廠設備有限公司」跟
+     * 「大同鐵工廠|乙建設股份有限公司」在結構上完全一樣，沒有任何規則分得開。
+     * 但這只是列進「請你確認」的清單、不會自動改任何東西，所以寧可多報：
+     * 誤報只花使用者一眼，漏報卻讓那筆永遠比對不到商工登記。
+     */
+    const SHOP_WORDS = /(鐵工廠|機械廠|加工廠|五金行|材料行|水電行|車行|商號|銀樓|農場|牧場|藥局|診所)/g;
+    SHOP_WORDS.lastIndex = 0;
+    let m;
+    while ((m = SHOP_WORDS.exec(name)) !== null) {
+      const tail = name.slice(m.index + m[0].length);
+      if (tail.length < 4) continue;                 // 商號字眼落在結尾，是正常名稱
+      NAME_SUFFIX.lastIndex = 0;
+      if (NAME_SUFFIX.test(tail)) {
+        return `可能是兩家黏在一起：「${name.slice(0, m.index + m[0].length)}」＋「${tail}」，請確認`;
+      }
+    }
+
+    if (/\d{2,4}\/\d{1,2}\/\d{1,2}/.test(name)) return '名稱裡有日期，可能混到訪談內容';
+    if (looksLikeAddress(name)) return '名稱看起來是地址';
+    if (/^\d/.test(name)) return '名稱開頭是數字，可能混到統編或資本額';
+    if (name.length > 24) return `名稱過長（${name.length} 字），可能黏到別欄的內容`;
+    return '';
+  }
+
+  /**
+   * 拆得開就拆，拆不開就回 null。
+   * 「大同鐵工廠乙建設股份有限公司」這種前一家沒有可辨識字尾的，邊界在哪無從得知，
+   * 硬拆只會拆錯——這種要讓使用者自己判斷，不要自作聰明。
+   */
+  function splitGluedName(raw) {
+    const parts = splitCompanyNames(raw);
+    if (parts.length < 2) return null;
+    return { company: parts[0], aliases: parts.slice(1) };
+  }
+
   /** 找出表頭那一列，回傳 { index, map }；找不到回傳 null。 */
   function detectHeader(rows) {
     for (let i = 0; i < Math.min(rows.length, 8); i++) {
@@ -907,6 +965,7 @@
     detectRelations, relationKinds, RELATION_LABEL,
     detectDealing, latestNote, DEALING_LABEL,
     detectBlocked,
+    suspiciousName, splitGluedName,
     findFollowUp,
     looksLikeAddress,
     validateAddress: (t) => VALIDATORS.address(t) || '',
