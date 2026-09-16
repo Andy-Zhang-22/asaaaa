@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-31';
+  const APP_VERSION = '20260916-32';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -464,6 +464,7 @@
       const v = view(record);
       v.bucket = dueBucket(v.nextDate);
       v.addedBucket = addedBucket(v.addedDate);
+      v.dueDays = v.nextDate ? dayDiff(v.nextDate) : null;
       v.blob = [v.company, v.aliases.join(' '), v.taxId, v.owner, v.keyman, v.industry,
         v.phoneRaw, v.address, v.notesRaw, v.source].join(' ').toLowerCase();
       return v;
@@ -495,6 +496,31 @@
 
   const ADDED_ORDER = ['今天新增', '7 天內', '30 天內', '一年內', '更早', '未填'];
 
+  /*
+   * 聯絡時程的區間。
+   *
+   * 原本只有「今天以前（待打）」「逾期」「一週內」「未排定」四個。問題是這位使用者
+   * 870 筆裡有 384 筆待打——一顆按鈕給你 384 筆，等於沒篩，而且看不出輕重：
+   * 逾期一天跟逾期三個月要做的事完全不同，前者補打就好，後者多半要重新評估。
+   *
+   * 所以拆細，而且刻意保留會互相重疊的區間（例如「待打」涵蓋今天與各段逾期）：
+   * 這一組是單選，重疊不會互相干擾，反而讓使用者可以先用大範圍看總量，
+   * 再切進某一段處理。
+   *
+   * match 收到的是「離下次聯絡日還有幾天」：負數是逾期，0 是今天，null 是沒排。
+   */
+  const DUE_RANGES = [
+    ['', '全部', () => true],
+    ['due', '今天以前（待打）', (d) => d !== null && d <= 0],
+    ['today', '今天到期', (d) => d === 0],
+    ['od7', '逾期 1–7 天', (d) => d !== null && d < 0 && d >= -7],
+    ['od30', '逾期 8–30 天', (d) => d !== null && d < -7 && d >= -30],
+    ['odOld', '逾期超過 30 天', (d) => d !== null && d < -30],
+    ['tomorrow', '明天', (d) => d === 1],
+    ['week', '未來 7 天', (d) => d !== null && d >= 1 && d <= 7],
+    ['none', '未排定', (d) => d === null],
+  ];
+
   function dueBucket(iso) {
     if (!iso) return 'none';
     const diff = dayDiff(iso);
@@ -523,11 +549,8 @@
       if (f.added.size && !f.added.has(r.addedBucket)) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (f.due) {
-        const b = r.bucket;
-        if (f.due === 'due' && !(b === 'overdue' || b === 'today')) return false;
-        if (f.due === 'overdue' && b !== 'overdue') return false;
-        if (f.due === 'week' && !(b === 'overdue' || b === 'today' || b === 'week')) return false;
-        if (f.due === 'none' && b !== 'none') return false;
+        const range = DUE_RANGES.find(([key]) => key === f.due);
+        if (range && !range[2](r.dueDays)) return false;
       }
       if (terms.length && !terms.every((t) => r.blob.includes(t))) return false;
       return true;
@@ -603,11 +626,17 @@
 
     const dueHost = $('#fltDue');
     dueHost.textContent = '';
-    [['', '全部'], ['due', '今天以前（待打）'], ['overdue', '逾期'],
-      ['week', '一週內'], ['none', '未排定']].forEach(([value, label]) => {
-      const btn = el('button', { className: 'chip', type: 'button', textContent: label });
+    DUE_RANGES.forEach(([value, label, match]) => {
+      const btn = el('button', { className: 'chip', type: 'button' });
       btn.dataset.filter = 'due';
       btn.dataset.value = value;
+      // 每一段都標筆數。沒有數字就看不出哪一段積最多，也就無從決定今天先處理哪一堆
+      if (value) {
+        const n = all.filter((r) => match(r.dueDays)).length;
+        btn.append(el('small', { textContent: String(n) }), document.createTextNode(' ' + label));
+      } else {
+        btn.textContent = label;
+      }
       btn.onclick = () => { state.filters.due = value; state.limit = PAGE_SIZE; render(); };
       dueHost.append(btn);
     });
