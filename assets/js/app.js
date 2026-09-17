@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-51';
+  const APP_VERSION = '20260916-52';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -27,7 +27,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), added: new Set(), industry: '' },
+    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), added: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -653,7 +653,6 @@
     let list = allViews().filter((r) => {
       if (state.hideBlocked && r.blocked) return false;
       if (f.source.size && !f.source.has(r.source)) return false;
-      if (f.grade.size && !f.grade.has(r.grade || '未分級')) return false;
       if (f.outcome.size && !f.outcome.has(r.blocked ? 'blocked' : r.outcome)) return false;
       if (f.city.size && !f.city.has(r.city || '其他')) return false;
       if (f.scale.size && !f.scale.has(r.scale || '未填資本額')) return false;
@@ -668,12 +667,10 @@
     });
 
 
-    const gradeRank = { S: 0, 'S?': 1, A: 2, B: 3, C: 4 };
     const num = (s) => Number(String(s || '').replace(/[^\d]/g, '')) || 0;
     const cmp = {
       next: (a, b) => (a.nextDate || '9999').localeCompare(b.nextDate || '9999'),
       last: (a, b) => (b.lastDate || '').localeCompare(a.lastDate || ''),
-      grade: (a, b) => (gradeRank[a.grade] ?? 9) - (gradeRank[b.grade] ?? 9),
       capital: (a, b) => num(b.capital) - num(a.capital),
       company: (a, b) => a.company.localeCompare(b.company, 'zh-Hant'),
       territory: (a, b) => {
@@ -756,7 +753,6 @@
     });
 
     chips($('#fltSource'), 'source', tally((r) => r.source), state.filters.source, (v) => v.replace(/\.pdf$/i, ''));
-    chips($('#fltGrade'), 'grade', tally((r) => r.grade || '未分級'), state.filters.grade);
     // 禁打以 blocked 為準：outcome 可能已經被後來的通話紀錄蓋掉了
     // 順序固定、每一種都顯示（含 0 筆），「未撥打」才不會因為暫時沒有而消失
     const outcomeTally = new Map(tally((r) => (r.blocked ? 'blocked' : r.outcome)));
@@ -858,7 +854,6 @@
     });
     const top = el('div', { className: 'card-top' }, [
       el('span', { className: 'card-name', textContent: r.company }),
-      r.grade ? el('span', { className: `badge badge-grade badge-${r.grade}`, textContent: r.grade }) : '',
       outcomeBadge(r),
       (r.scale || capitalScale(r)) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
       r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
@@ -997,7 +992,6 @@
       host.append(box);
     };
     section('洽談狀態', group((r) => r.outcome), (k) => OUTCOME_LABEL[k] || k);
-    section('分級', group((r) => r.grade));
     section('名單來源', group((r) => r.source), (k) => k.replace(/\.pdf$/i, ''));
     section('縣市 Top 12', group((r) => r.city));
     section('產業別 Top 12', group((r) => r.industry));
@@ -1064,7 +1058,6 @@
       el('h2', { textContent: r.company }),
       r.aliases.length ? el('p', { className: 'detail-alias', textContent: `關係企業：${r.aliases.join('、')}` }) : '',
       el('div', { className: 'detail-badges' }, [
-        r.grade ? el('span', { className: `badge badge-grade badge-${r.grade}`, textContent: `分級 ${r.grade}` }) : '',
         outcomeBadge(r),
         r.edited ? el('span', { className: 'badge badge-edited', textContent: '已修改' }) : '',
         editBtn,
