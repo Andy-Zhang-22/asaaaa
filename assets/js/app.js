@@ -116,7 +116,13 @@
     out.territory = territory(out);
     out.relations = window.Normalize.detectRelations(out.notesRaw);
     out.relationKinds = window.Normalize.relationKinds(out.relations);
-    out.dealing = window.Normalize.detectDealing(out.notesRaw);
+    // 往來情形看的是「最新一次談話」，在網站上記的通話也算：打完電話聽到
+    // 對方說已經解約，這筆就該立刻歸到沒有往來，不用等下次匯入檔案。
+    const mineNotes = state.logs
+      .filter((l) => l.recordId === record.id && l.text)
+      .map((l) => `${(l.date || '').replace(/-/g, '/')} ${l.text}`)
+      .join('\n');
+    out.dealing = window.Normalize.detectDealing(mineNotes ? `${mineNotes}\n${out.notesRaw || ''}` : out.notesRaw);
     out.dealingKind = out.dealing.kind;
     /*
      * 禁止推廣獨立於 outcome。
