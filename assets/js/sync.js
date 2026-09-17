@@ -47,6 +47,12 @@
       out.editsAt = older.editsAt;
     }
     if (!out.edits) delete out.edits;
+    // 同老闆的公司連結也一樣：解除（把 group 清掉）也算一次改動
+    if ((older.groupAt || 0) > (newer.groupAt || 0)) {
+      out.group = older.group;
+      out.groupAt = older.groupAt;
+    }
+    if (!out.group) delete out.group;
     return out;
   }
 
