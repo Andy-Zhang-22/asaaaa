@@ -502,3 +502,7 @@ button, input, select { font: inherit; color: inherit; }
 .date-with-hint { display: inline-flex; align-items: center; gap: 6px; }
 .date-hint { font-size: 13px; color: var(--muted); white-space: nowrap; }
 .date-hint:empty { display: none; }
+/* 聯絡時程的自選區間：兩個日期框並排，塞不下就換行 */
+.due-range { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.due-range label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.due-range input[type="date"] { font-size: 13px; padding: 4px 6px; flex: 1; min-width: 0; }

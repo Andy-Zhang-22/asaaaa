@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-38';
+  const APP_VERSION = '20260916-39';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -27,7 +27,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), added: new Set(), industry: '' },
+    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), added: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -94,9 +94,13 @@
     const mine = state.userStates.get(record.id);
     const edits = (mine && mine.edits) || null;
     const base = edits ? { ...record, ...edits } : record;
+    // 檔案裡「下次聯絡日」跟「最近聯絡日」填同一天，是使用者的習慣寫法，
+    // 意思是那次沒有約下一次；照字面收會讓 19 筆沒約的客戶掛著逾期好幾個月。
+    // 只套在檔案帶進來的值，使用者自己在網站上記的下次聯絡日照原樣。
+    const fileNext = base.nextDate && base.nextDate === base.lastDate ? null : base.nextDate;
     const out = {
       ...base,
-      nextDate: (mine && mine.nextDate) || base.nextDate,
+      nextDate: (mine && mine.nextDate) || fileNext,
       lastDate: (mine && mine.lastDate) || base.lastDate,
       outcome: (mine && mine.outcome) || base.outcome,
       starred: !!(mine && mine.starred),
@@ -486,7 +490,6 @@
       const v = view(record);
       v.bucket = dueBucket(v.nextDate);
       v.addedBucket = addedBucket(v.addedDate);
-      v.dueDays = v.nextDate ? dayDiff(v.nextDate) : null;
       v.blob = [v.company, v.aliases.join(' '), v.taxId, v.owner, v.keyman, v.industry,
         v.phoneRaw, v.address, v.notesRaw, v.source].join(' ').toLowerCase();
       return v;
@@ -519,29 +522,65 @@
   const ADDED_ORDER = ['今天新增', '7 天內', '30 天內', '一年內', '更早', '未填'];
 
   /*
-   * 聯絡時程的區間。
+   * 聯絡時程改成「自選日期區間」。
    *
-   * 原本只有「今天以前（待打）」「逾期」「一週內」「未排定」四個。問題是這位使用者
-   * 870 筆裡有 384 筆待打——一顆按鈕給你 384 筆，等於沒篩，而且看不出輕重：
-   * 逾期一天跟逾期三個月要做的事完全不同，前者補打就好，後者多半要重新評估。
+   * 之前是九顆互相重疊的區間按鈕（今天以前、逾期 1–7 天、逾期 8–30 天……），
+   * 使用者用過之後說不合用：他要看的常常是「這週」「下週」「這個月」這種
+   * 行事曆上的一段，而不是以今天為原點往前後數幾天。所以改成兩個日期框直接
+   * 框「下次聯絡日」，旁邊放幾顆快速鍵把常用的區間一鍵填進去；快速鍵填完
+   * 的日期還能再手動微調。
    *
-   * 所以拆細，而且刻意保留會互相重疊的區間（例如「待打」涵蓋今天與各段逾期）：
-   * 這一組是單選，重疊不會互相干擾，反而讓使用者可以先用大範圍看總量，
-   * 再切進某一段處理。
-   *
-   * match 收到的是「離下次聯絡日還有幾天」：負數是逾期，0 是今天，null 是沒排。
+   * 週以星期一為起點、星期日為終點，跟業務的行事曆一致。
    */
-  const DUE_RANGES = [
-    ['', '全部', () => true],
-    ['due', '今天以前（待打）', (d) => d !== null && d <= 0],
-    ['today', '今天到期', (d) => d === 0],
-    ['od7', '逾期 1–7 天', (d) => d !== null && d < 0 && d >= -7],
-    ['od30', '逾期 8–30 天', (d) => d !== null && d < -7 && d >= -30],
-    ['odOld', '逾期超過 30 天', (d) => d !== null && d < -30],
-    ['tomorrow', '明天', (d) => d === 1],
-    ['week', '未來 7 天', (d) => d !== null && d >= 1 && d <= 7],
-    ['none', '未排定', (d) => d === null],
+  function weekOf(iso, offsetWeeks) {
+    const d = new Date(`${iso}T00:00:00`);
+    const monday = addDays(iso, -((d.getDay() + 6) % 7) + offsetWeeks * 7);
+    return [monday, addDays(monday, 6)];
+  }
+  function monthOf(iso) {
+    const [y, m] = iso.split('-').map(Number);
+    const last = new Date(y, m, 0).getDate();
+    return [`${iso.slice(0, 7)}-01`, `${iso.slice(0, 7)}-${String(last).padStart(2, '0')}`];
+  }
+  /** 每顆快速鍵回傳 { from, to } 或 { none: true }；空字串代表不設限。 */
+  const DUE_QUICK = [
+    ['', '全部', () => ({ from: '', to: '' })],
+    ['overdue', '逾期', (t) => ({ from: '', to: addDays(t, -1) })],
+    ['today', '今天', (t) => ({ from: t, to: t })],
+    ['week', '本週', (t) => { const [a, b] = weekOf(t, 0); return { from: a, to: b }; }],
+    ['nextWeek', '下週', (t) => { const [a, b] = weekOf(t, 1); return { from: a, to: b }; }],
+    ['month', '本月', (t) => { const [a, b] = monthOf(t); return { from: a, to: b }; }],
+    ['none', '未排定', () => ({ none: true })],
   ];
+
+  /** 下次聯絡日落在目前設定的區間內？沒設限就全過。 */
+  function matchDue(f, nextDate) {
+    if (f.dueNone) return !nextDate;
+    if (!f.dueFrom && !f.dueTo) return true;
+    if (!nextDate) return false;
+    if (f.dueFrom && nextDate < f.dueFrom) return false;
+    if (f.dueTo && nextDate > f.dueTo) return false;
+    return true;
+  }
+
+  function applyDueQuick(key) {
+    const quick = DUE_QUICK.find(([k]) => k === key);
+    const got = quick ? quick[2](todayISO()) : { from: '', to: '' };
+    state.filters.due = key;
+    state.filters.dueNone = !!got.none;
+    state.filters.dueFrom = got.from || '';
+    state.filters.dueTo = got.to || '';
+    syncDueInputs();
+  }
+
+  function syncDueInputs() {
+    const from = $('#dueFrom');
+    const to = $('#dueTo');
+    if (!from || !to) return;
+    from.value = state.filters.dueFrom;
+    to.value = state.filters.dueTo;
+    from.disabled = to.disabled = state.filters.dueNone;
+  }
 
   function dueBucket(iso) {
     if (!iso) return 'none';
@@ -570,10 +609,7 @@
       if (f.relation.size && !f.relation.has(r.dealingKind)) return false;
       if (f.added.size && !f.added.has(r.addedBucket)) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
-      if (f.due) {
-        const range = DUE_RANGES.find(([key]) => key === f.due);
-        if (range && !range[2](r.dueDays)) return false;
-      }
+      if (!matchDue(f, r.nextDate)) return false;
       if (terms.length && !terms.every((t) => r.blob.includes(t))) return false;
       return true;
     });
@@ -648,18 +684,21 @@
 
     const dueHost = $('#fltDue');
     dueHost.textContent = '';
-    DUE_RANGES.forEach(([value, label, match]) => {
+    const today = todayISO();
+    DUE_QUICK.forEach(([value, label, rangeOf]) => {
       const btn = el('button', { className: 'chip', type: 'button' });
       btn.dataset.filter = 'due';
       btn.dataset.value = value;
-      // 每一段都標筆數。沒有數字就看不出哪一段積最多，也就無從決定今天先處理哪一堆
+      // 每顆都標筆數。沒有數字就看不出哪一段積最多，也就無從決定今天先處理哪一堆
       if (value) {
-        const n = all.filter((r) => match(r.dueDays)).length;
+        const got = rangeOf(today);
+        const probe = { dueNone: !!got.none, dueFrom: got.from || '', dueTo: got.to || '' };
+        const n = all.filter((r) => matchDue(probe, r.nextDate)).length;
         btn.append(el('small', { textContent: String(n) }), document.createTextNode(' ' + label));
       } else {
         btn.textContent = label;
       }
-      btn.onclick = () => { state.filters.due = value; state.limit = PAGE_SIZE; render(); };
+      btn.onclick = () => { applyDueQuick(value); state.limit = PAGE_SIZE; render(); };
       dueHost.append(btn);
     });
 
@@ -2293,11 +2332,28 @@ export default {
     $('#hideBlocked').onchange = (e) => { state.hideBlocked = e.target.checked; render(); };
     $('#btnMore').onclick = () => { state.limit += PAGE_SIZE; renderList(); };
     $('#fltIndustry').oninput = (e) => { state.filters.industry = e.target.value.trim(); state.limit = PAGE_SIZE; render(); };
+    // 聯絡時程的兩個日期框：手動改了就不再對應任何快速鍵
+    const dueFrom = el('input', { type: 'date', id: 'dueFrom' });
+    const dueTo = el('input', { type: 'date', id: 'dueTo' });
+    $('#fltDueRange').append(
+      el('label', {}, [el('span', { className: 'muted', textContent: '從' }), dueFrom]),
+      el('label', {}, [el('span', { className: 'muted', textContent: '到' }), dueTo])
+    );
+    const onDueInput = () => {
+      state.filters.due = 'custom';
+      state.filters.dueNone = false;
+      state.filters.dueFrom = dueFrom.value || '';
+      state.filters.dueTo = dueTo.value || '';
+      state.limit = PAGE_SIZE;
+      render();
+    };
+    dueFrom.oninput = onDueInput;
+    dueTo.oninput = onDueInput;
     $('#btnResetFilters').onclick = () => {
       // 就地清空，不要換掉整個 state.filters 物件：chip 的 onclick 抓的是 Set 的參照，
       // 一旦換成新物件，按鈕改到的就是被丟掉的舊 Set，按下去完全沒反應。
       Object.values(state.filters).forEach((v) => { if (v instanceof Set) v.clear(); });
-      state.filters.due = '';
+      applyDueQuick('');
       state.filters.industry = '';
       $('#fltIndustry').value = '';
       state.limit = PAGE_SIZE;
