@@ -9,8 +9,14 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-60';
+  const APP_VERSION = '20260916-61';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
+  // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
+  const REG_KIND_LABEL = {
+    capitalUp: '增資', capitalDown: '減資', address: '變更登記地址', owner: '負責人異動',
+    other: '其他', none: '無變更', unchecked: '未查核',
+  };
+  const REG_KIND_ORDER = ['capitalUp', 'capitalDown', 'address', 'owner', 'other', 'none', 'unchecked'];
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -28,7 +34,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), taxKind: new Set(), added: new Set(), industry: '' },
+    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), taxKind: new Set(), regChange: new Set(), added: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -165,6 +171,12 @@
     out.visitKind = out.visit.visited ? 'yes' : 'no';
     // 有沒有統編：欄位裡有數字就算有（編輯過的以編輯後為準）
     out.taxKind = /\d/.test(String(out.taxId || '')) ? 'yes' : 'no';
+    // 變更登記：最近一次查到異動的種類；查過但從沒異動＝無變更；沒查過＝未查核
+    out.regChange = (mine && mine.regChange) || null;
+    out.regAt = (mine && mine.regAt) || 0;
+    out.regKinds = out.regChange && out.regChange.kinds && out.regChange.kinds.length
+      ? out.regChange.kinds
+      : (out.regAt ? ['none'] : ['unchecked']);
     /*
      * 禁止推廣獨立於 outcome。
      *
@@ -682,6 +694,7 @@
       if (f.relation.size && !f.relation.has(r.dealingKind)) return false;
       if (f.visit.size && !f.visit.has(r.visitKind)) return false;
       if (f.taxKind.size && !f.taxKind.has(r.taxKind)) return false;
+      if (f.regChange.size && !r.regKinds.some((k) => f.regChange.has(k))) return false;
       if (f.added.size && !f.added.has(r.addedBucket)) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (!matchDue(f, r.nextDate)) return false;
@@ -803,6 +816,11 @@
     all.forEach((r) => { taxCounts[r.taxKind === 'yes' ? 0 : 1][1] += 1; });
     chips($('#fltTax'), 'taxKind', taxCounts, state.filters.taxKind, (v) => TAX_LABEL[v]);
 
+    // 變更登記：固定順序含 0 筆；一家可能同時算在好幾顆裡，所以總和可以超過名單筆數
+    const regCounts = new Map(REG_KIND_ORDER.map((k) => [k, 0]));
+    all.forEach((r) => { r.regKinds.forEach((k) => regCounts.set(k, (regCounts.get(k) || 0) + 1)); });
+    chips($('#fltRegChange'), 'regChange', REG_KIND_ORDER.map((k) => [k, regCounts.get(k)]), state.filters.regChange, (v) => REG_KIND_LABEL[v]);
+
     // 順序固定成由新到舊，不依筆數排——「今天新增」永遠在第一個位置才好按
     const addedCounts = new Map(ADDED_ORDER.map((k) => [k, 0]));
     all.forEach((r) => { addedCounts.set(r.addedBucket, (addedCounts.get(r.addedBucket) || 0) + 1); });
@@ -887,6 +905,8 @@
       outcomeBadge(r),
       (r.scale || capitalScale(r)) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
       (r.scale || capitalScale(r)) === '大企部範疇' ? el('span', { className: 'badge badge-large', textContent: '大企部範疇' }) : '',
+      r.regChange && r.regKinds[0] !== 'none' && r.regKinds[0] !== 'unchecked'
+        ? el('span', { className: 'badge badge-regchange', textContent: r.regKinds.map((k) => REG_KIND_LABEL[k]).join('、') }) : '',
       r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
       r.blocked ? el('span', { className: 'badge badge-blocked', textContent: '禁止推廣' }) : '',
@@ -1176,6 +1196,22 @@
     };
     addrRow('登記地址', r.addressRegistered);
     addrRow('實際地址', r.addressActual);
+    // 變更登記：查核結果與異動明細
+    {
+      dl.append(el('dt', { textContent: '變更登記' }));
+      const dd = el('dd');
+      if (r.regChange) {
+        dd.append(document.createTextNode(`${r.regKinds.map((k) => REG_KIND_LABEL[k]).join('、')}（${dateLabel(r.regChange.date)} 查到）`));
+        Object.entries(r.regChange.changes || {}).forEach(([key, ch]) => {
+          const label = (REGISTRY_FIELDS.find(([k]) => k === key) || [, key])[1];
+          dd.append(el('div', { className: 'muted', textContent: `${label}：${ch.from || '（空）'} → ${ch.to}` }));
+        });
+      } else {
+        dd.append(document.createTextNode(r.regAt ? '無變更' : '未查核'));
+      }
+      if (r.regAt) dd.append(el('div', { className: 'muted', textContent: `最近查核 ${dateLabel(new Date(r.regAt).toISOString().slice(0, 10))}` }));
+      dl.append(dd);
+    }
     // 名單來源放最後，看的頻率最低
     if (r.source) dl.append(el('dt', { textContent: '名單來源' }), el('dd', { textContent: r.source }));
     body.append(dl);
@@ -1654,6 +1690,7 @@ export default {
   async function registryBatch(targets, { blanksOnly, useMirror, onProgress, isCancelled, delay = 300 }) {
     const diffs = [];
     const failures = [];
+    const checked = [];   // 每一筆查成功的都在這裡，含沒差異的；變更登記的分類靠它
     for (let i = 0; i < targets.length; i++) {
       if (isCancelled && isCancelled()) break;
       const { rec, r } = targets[i];
@@ -1665,19 +1702,62 @@ export default {
       if (!res.ok) { failures.push({ company: r.company, reason: res.reason }); }
       else {
         const changes = {};
+        const all = {};
         REGISTRY_FIELDS.forEach(([key]) => {
           const now = listValue(key, r);
           const next = registryValue(key, res.data);
+          if (next && next !== now) all[key] = { from: now, to: next };
           if (blanksOnly && now) return;   // 只補空白模式：本來就有值的一律不碰
           if (next && next !== now) changes[key] = { from: now, to: next };
         });
+        checked.push({ rec, r, changes: all });
         if (Object.keys(changes).length) diffs.push({ rec, r, changes, status: res.data.status });
       }
       // 一筆一筆送，別對政府網站造成負擔；連續失敗太多就是被擋了，不用再耗
       if (failures.length >= 8 && diffs.length === 0 && failures.length === i + 1) break;
       if (delay) await new Promise((done) => setTimeout(done, delay));
     }
-    return { diffs, failures };
+    return { diffs, failures, checked };
+  }
+
+  /**
+   * 把查核結果分類成「變更登記」：
+   * 增資／減資看資本額數字、登記地址不同、負責人不同、其他欄位（統編、成立年）算其他。
+   * 原本空白後來補上的不算變更——那是名單缺資料，不是公司變更登記。
+   */
+  function classifyRegistryChanges(changes) {
+    const kinds = new Set();
+    const num = (v) => Number(String(v || '').replace(/[^\d.]/g, '')) || 0;
+    Object.entries(changes || {}).forEach(([key, ch]) => {
+      if (!String(ch.from || '').trim()) return;
+      if (key === 'capital') {
+        const a = num(ch.from); const b = num(ch.to);
+        if (b > a) kinds.add('capitalUp'); else if (b < a) kinds.add('capitalDown');
+      } else if (key === 'address') kinds.add('address');
+      else if (key === 'owner') kinds.add('owner');
+      else kinds.add('other');
+    });
+    return REG_KIND_ORDER.filter((k) => kinds.has(k));
+  }
+
+  /**
+   * 把這次查核記到每筆的追蹤狀態：regAt＝最近查核時間；有異動的另外記 regChange
+   * （日期、種類、欄位前後值），沒異動的保留上一次的 regChange，篩選才看得到
+   * 「這家今年增資過」，不會隔天套用完就變回無變更。
+   */
+  async function recordRegistryChecks(checked) {
+    const now = Date.now();
+    const date = todayISO();
+    for (const c of checked) {
+      const kinds = classifyRegistryChanges(c.changes);
+      const patch = { regAt: now };
+      if (kinds.length) {
+        const kept = {};
+        Object.entries(c.changes).forEach(([key, ch]) => { if (String(ch.from || '').trim()) kept[key] = ch; });
+        patch.regChange = { date, kinds, changes: kept };
+      }
+      await saveState(c.rec.id, patch);
+    }
   }
 
   /** 把差異寫成「編輯」：看得出是後來動過的，同步到其他裝置，詳細頁可還原。 */
@@ -1711,20 +1791,17 @@ export default {
     if (registryPref('registry-auto-last') === today) return;
     registryPref('registry-auto-last', today);   // 先記，避免同一天多個分頁重複跑
     const targets = state.records.map((rec) => ({ rec, r: view(rec) }));
-    const { diffs, failures } = await registryBatch(targets, {
+    const { diffs, failures, checked } = await registryBatch(targets, {
       blanksOnly: false, useMirror: registryPref('registry-mirror') === '1', delay: 300,
     });
+    if (checked.length) await recordRegistryChecks(checked);
     if (!diffs.length && failures.length && failures.length >= Math.min(8, targets.length)) {
       registryPref('registry-auto-summary', `全部失敗（${failures[0].reason.split('\n')[0]}）`);
       toast('商工登記自動更新失敗：來源連不上，明天再試。細節在選單「從商工登記更新公司資料」。');
       return;
     }
-    if (diffs.length) {
-      await applyRegistryDiffs(diffs);
-      await reload();
-      render();
-      scheduleSync();
-    }
+    if (diffs.length) await applyRegistryDiffs(diffs);
+    if (checked.length) { await reload(); render(); scheduleSync(); }
     registryPref('registry-auto-summary', `查 ${targets.length} 筆，更新 ${diffs.length} 筆，${failures.length} 筆查不到`);
     toast(diffs.length ? `商工登記自動更新：已更新 ${diffs.length} 筆` : '商工登記自動更新：資料都是最新的');
   }
@@ -2060,11 +2137,13 @@ export default {
       const progress = el('p', { className: 'rule-verdict is-ok', textContent: '準備中…' });
       result.append(progress);
 
-      const { diffs, failures } = await registryBatch(all, {
+      const { diffs, failures, checked } = await registryBatch(all, {
         blanksOnly, useMirror: mirror.checked,
         onProgress: (i, n, r) => { progress.textContent = `查詢中 ${i} / ${n}：${r.company}`; },
         isCancelled: () => cancelled,
       });
+      // 查到的結果先記成「變更登記」分類（不管要不要套用），篩選那邊馬上看得到
+      if (checked.length) { await recordRegistryChecks(checked); await reload(); render(); scheduleSync(); }
 
       stop.hidden = true; stop.textContent = '停止'; tryOne.disabled = false;
       result.textContent = '';
