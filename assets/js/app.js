@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-53';
+  const APP_VERSION = '20260916-54';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1556,7 +1556,13 @@ export default {
     }
 
     try {
-      const upstream = await fetch(target, { headers: { Accept: 'application/json' } });
+      const upstream = await fetch(target, {
+        headers: {
+          Accept: 'application/json',
+          // 政府網站對沒有瀏覽器 UA 的請求有時直接回空白，帶一個一般瀏覽器的
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36',
+        },
+      });
       return new Response(upstream.body, {
         status: upstream.status,
         headers: {
@@ -1577,7 +1583,106 @@ export default {
     ['capital', '資本額（仟元）'],
     ['owner', '負責人'],
     ['address', '登記地址'],
+    ['founded', '成立年'],
   ];
+  // 登記給的是完整日期（2016/03/01），名單上只記年份：比對與寫入都只用年
+  const registryValue = (key, data) => {
+    const v = String(data[key] || '').trim();
+    if (key === 'founded') { const m = v.match(/^(\d{4})/); return m ? m[1] : ''; }
+    return v;
+  };
+  const listValue = (key, r) => {
+    const v = String(r[key] || '').trim();
+    if (key === 'founded') { const m = v.match(/(\d{4})/); return m ? m[1] : v; }
+    return v;
+  };
+
+  const registryPref = (key, value) => {
+    try {
+      if (value === undefined) return localStorage.getItem(key) || '';
+      if (value) localStorage.setItem(key, value); else localStorage.removeItem(key);
+    } catch (e) { /* 無痕模式 */ }
+    return value;
+  };
+
+  /** 一批客戶逐一查商工登記，回傳差異與失敗清單；不寫入。 */
+  async function registryBatch(targets, { blanksOnly, useMirror, onProgress, isCancelled, delay = 300 }) {
+    const diffs = [];
+    const failures = [];
+    for (let i = 0; i < targets.length; i++) {
+      if (isCancelled && isCancelled()) break;
+      const { rec, r } = targets[i];
+      if (onProgress) onProgress(i + 1, targets.length, r);
+      const opts = { useMirror };
+      const res = /^\d{8}$/.test(String(r.taxId || '').replace(/\D/g, ''))
+        ? await window.Registry.lookupByTaxId(r.taxId, opts)
+        : await window.Registry.lookupByName(r.company, opts);
+      if (!res.ok) { failures.push({ company: r.company, reason: res.reason }); }
+      else {
+        const changes = {};
+        REGISTRY_FIELDS.forEach(([key]) => {
+          const now = listValue(key, r);
+          const next = registryValue(key, res.data);
+          if (blanksOnly && now) return;   // 只補空白模式：本來就有值的一律不碰
+          if (next && next !== now) changes[key] = { from: now, to: next };
+        });
+        if (Object.keys(changes).length) diffs.push({ rec, r, changes, status: res.data.status });
+      }
+      // 一筆一筆送，別對政府網站造成負擔；連續失敗太多就是被擋了，不用再耗
+      if (failures.length >= 8 && diffs.length === 0 && failures.length === i + 1) break;
+      if (delay) await new Promise((done) => setTimeout(done, delay));
+    }
+    return { diffs, failures };
+  }
+
+  /** 把差異寫成「編輯」：看得出是後來動過的，同步到其他裝置，詳細頁可還原。 */
+  async function applyRegistryDiffs(diffs) {
+    for (const d of diffs) {
+      const existing = state.userStates.get(d.rec.id) || {};
+      const edits = { ...(existing.edits || {}) };
+      Object.entries(d.changes).forEach(([key, ch]) => { edits[key] = ch.to; });
+      await saveState(d.rec.id, { edits, editsAt: Date.now() });
+    }
+  }
+
+  function autoRegistrySummary() {
+    const last = registryPref('registry-auto-last');
+    const info = registryPref('registry-auto-summary');
+    if (!last) return '還沒有自動更新過。';
+    return `上次自動更新：${dateLabel(last)}${info ? `，${info}` : ''}`;
+  }
+
+  /*
+   * 每天第一次打開網站時，在背景把全部名單對一次商工登記。
+   *
+   * 沒有後端，所以「每天自動」只能靠使用者打開網站這個時機。查的是全部校正
+   * （登記資料是使用者要的正確版本），差異直接套用；一路失敗就停下來，
+   * 當天不再重試，把原因記在設定視窗裡。
+   */
+  async function maybeAutoRegistry() {
+    if (registryPref('registry-auto') !== '1') return;
+    if (!state.records.length) return;
+    const today = todayISO();
+    if (registryPref('registry-auto-last') === today) return;
+    registryPref('registry-auto-last', today);   // 先記，避免同一天多個分頁重複跑
+    const targets = state.records.map((rec) => ({ rec, r: view(rec) }));
+    const { diffs, failures } = await registryBatch(targets, {
+      blanksOnly: false, useMirror: registryPref('registry-mirror') === '1', delay: 300,
+    });
+    if (!diffs.length && failures.length && failures.length >= Math.min(8, targets.length)) {
+      registryPref('registry-auto-summary', `全部失敗（${failures[0].reason.split('\n')[0]}）`);
+      toast('商工登記自動更新失敗：來源連不上，明天再試。細節在選單「從商工登記更新公司資料」。');
+      return;
+    }
+    if (diffs.length) {
+      await applyRegistryDiffs(diffs);
+      await reload();
+      render();
+      scheduleSync();
+    }
+    registryPref('registry-auto-summary', `查 ${targets.length} 筆，更新 ${diffs.length} 筆，${failures.length} 筆查不到`);
+    toast(diffs.length ? `商工登記自動更新：已更新 ${diffs.length} 筆` : '商工登記自動更新：資料都是最新的');
+  }
 
   function openRegistryUpdate() {
     const host = $('#editorBody');
@@ -1590,18 +1695,32 @@ export default {
     // 官方 API 實測會被 CORS 擋掉，所以這裡要讓使用者選別的路走。
     // 鏡像預設不開：那是第三方，就算只送出公開的統編，也該由使用者自己決定。
     const mirror = el('input', { type: 'checkbox', id: 'useMirror' });
+    mirror.checked = registryPref('registry-mirror') === '1';
+    mirror.onchange = () => registryPref('registry-mirror', mirror.checked ? '1' : '');
     host.append(el('label', { className: 'rule-field' }, [
       mirror,
       el('span', { textContent: ' 允許使用 g0v 社群鏡像（官方被擋時的替代來源，只會送出統一編號）' }),
     ]));
 
     /*
-     * 資料集網址可以自己填。
+     * 每天自動更新。
      *
-     * 程式裡預設的那串 GUID 實測是錯的（不帶查詢條件要一筆也回空的），但開發環境
-     * 連不上政府網站，查不出正確的編號。與其讓使用者等我改一版再部署一次，
-     * 不如讓他從開放資料平臺複製網址貼進來——這種只有他那端查得到的資訊，
-     * 本來就不該寫死在程式裡。
+     * 網站沒有後端，沒辦法真的在半夜自己跑；做法是「每天第一次打開網站時在背景跑
+     * 一次全部校正」，對使用者來說效果一樣：每天看到的都是當天查過的登記資料。
+     * 查完直接套用（登記資料就是使用者要的正確資訊），套用的內容記成「已修改」，
+     * 詳細頁隨時可以還原。
+     */
+    const auto = el('input', { type: 'checkbox', id: 'autoRegistry' });
+    auto.checked = registryPref('registry-auto') === '1';
+    auto.onchange = () => registryPref('registry-auto', auto.checked ? '1' : '');
+    const autoInfo = el('p', { className: 'muted', textContent: autoRegistrySummary() });
+    host.append(el('label', { className: 'rule-field' }, [
+      auto,
+      el('span', { textContent: ' 每天自動更新全部名單（每天第一次打開網站時在背景查一次，查到的差異直接套用）' }),
+    ]), autoInfo);
+
+    /*
+     * 兩個資料集網址都可以自己填：萬一政府改了編號，不用等改版。
      */
     const dataset = el('input', {
       id: 'datasetUrl', type: 'url', className: 'paste-box',
@@ -1609,21 +1728,18 @@ export default {
       value: window.Registry.getBase() === window.Registry.DEFAULT_BASE ? '' : window.Registry.getBase(),
     });
     host.append(el('label', { className: 'rule-field' }, [
-      el('span', { textContent: '資料集 API 網址（目前程式內建的那組是錯的，需要換）' }), dataset,
+      el('span', { textContent: '用名稱查的資料集網址（公司登記關鍵字查詢；留空用內建）' }), dataset,
     ]));
     dataset.onchange = () => { window.Registry.setBase(dataset.value); };
-    host.append(el('details', { className: 'proxy-guide' }, [
-      el('summary', { textContent: '去哪裡找正確的網址' }),
-      el('ol', {}, [
-        el('li', { textContent: '打開 data.gcis.nat.gov.tw（商工行政資料開放平臺）。' }),
-        el('li', { textContent: '找「公司登記基本資料」這個資料集。' }),
-        el('li', { textContent: '點它的「API」或「資料集描述」，裡面會有一段 https://data.gcis.nat.gov.tw/od/data/api/XXXX 的網址。' }),
-        el('li', { textContent: '把那段貼進上面的欄位（後面的 ?$format=... 有沒有一起貼都可以，程式會自己去掉）。' }),
-        el('li', { textContent: '按「先試一筆」。' }),
-      ]),
-      el('p', { className: 'muted',
-        textContent: '貼進來之後就存在這台裝置的瀏覽器裡，跟代理網址一樣不會同步。' }),
+    const datasetTax = el('input', {
+      id: 'datasetTaxUrl', type: 'url', className: 'paste-box',
+      placeholder: window.Registry.DEFAULT_TAXID_BASE,
+      value: window.Registry.getTaxIdBase() === window.Registry.DEFAULT_TAXID_BASE ? '' : window.Registry.getTaxIdBase(),
+    });
+    host.append(el('label', { className: 'rule-field' }, [
+      el('span', { textContent: '用統編查的資料集網址（公司登記基本資料；留空用內建）' }), datasetTax,
     ]));
+    datasetTax.onchange = () => { window.Registry.setTaxIdBase(datasetTax.value); };
 
     const proxy = el('input', {
       id: 'proxyUrl', type: 'url', className: 'paste-box', placeholder: 'https://你的-worker.workers.dev/（選填）',
@@ -1744,6 +1860,11 @@ export default {
     refreshSummary();
 
     const note = (text, cls) => result.append(el('p', { className: cls || 'rule-note', textContent: text }));
+    const openLink = (url) => result.append(el('p', { className: 'rule-note' }, [
+      document.createTextNode('　　'),
+      el('a', { href: url, target: '_blank', rel: 'noopener', textContent: '在新分頁打開這個查詢網址' }),
+      el('span', { className: 'muted', textContent: `　${url.slice(0, 120)}${url.length > 120 ? '…' : ''}` }),
+    ]));
 
     tryOne.onclick = async () => {
       result.textContent = '';
@@ -1782,8 +1903,10 @@ export default {
           note(`${a.label}：${a.reason}`);
           // 實際收到什麼比任何推測都有用，沒收到內容也要講「空白」而不是不講
           if (a.body) note(`　　實際收到：${a.body}`);
-          if (a.url) note(`　　查詢網址：${a.url}`);
+          if (a.upstream || a.url) openLink(a.upstream || a.url);
         });
+        note('把上面任何一個「在新分頁打開」點開：那是你的瀏覽器直接連政府網站，不受跨網域限制。'
+          + '有看到 JSON 資料就是查詢語法對了、只是代理那段有問題；看到空白就是這個統編／名稱在登記上查不到。');
         if (!res.attempts || !res.attempts.length) note(res.reason);
         /*
          * 沒填代理時要直接講。
@@ -1813,22 +1936,21 @@ export default {
         const allEmpty = responded.length
           && responded.every((a) => /空白回應|查無資料/.test(`${a.reason} ${a.body || ''}`));
         if (allEmpty) {
-          note('正在確認資料集本身有沒有反應（不帶查詢條件要一筆）…');
+          note(`正在確認整條路通不通（改查一家一定存在的公司：台積電，統編 ${window.Registry.PROBE_TAXID}）…`);
           const probe = await window.Registry.probeDataset();
           if (probe.ok) {
-            note(`資料集是好的：不帶條件要得到資料（經由${probe.label}）。`
-              + '所以問題出在查詢條件，不是網址。', 'rule-verdict is-fail');
+            note(`路是通的：查台積電查得到（經由${probe.label}）。`
+              + '所以剛才那家只是登記上查不到，換別家試試，或用「全部更新」跑跑看。', 'rule-verdict is-fail');
             note(`這支 API 實際的欄位名稱：${probe.keys.join('、')}`);
             showRaw(probe.row);
             note('把上面這段給我，我照真正的欄位名稱改查詢條件與對應表。');
           } else {
-            note('資料集本身也要不到任何資料，代表我用的資料集編號是錯的，'
-              + '再怎麼調查詢條件都沒用。', 'rule-verdict is-fail');
+            note('連台積電都查不到，代表整條路不通：不是資料集編號錯、就是政府網站把代理的請求擋掉了。', 'rule-verdict is-fail');
             (probe.tried || []).forEach((t) => {
               note(`${t.label}：${t.reason}`);
-              note(`　　網址：${t.url}`);
+              openLink(t.upstream || t.url);
             });
-            note('把上面這段給我，我換一個資料集編號。');
+            note('請點開上面的網址看政府網站直接回什麼，把畫面貼給我。');
           }
         }
         return;
@@ -1845,7 +1967,7 @@ export default {
       const dl = el('dl');
       REGISTRY_FIELDS.forEach(([key, label]) => {
         dl.append(el('dt', { textContent: label }),
-          el('dd', { textContent: `名單：${target[key] || '（空）'}　→　登記：${res.data[key] || '（查無）'}` }));
+          el('dd', { textContent: `名單：${listValue(key, target) || '（空）'}　→　登記：${registryValue(key, res.data) || '（查無）'}` }));
       });
       if (res.data.status) dl.append(el('dt', { textContent: '營業狀態' }), el('dd', { textContent: res.data.status }));
       result.append(dl);
@@ -1876,31 +1998,11 @@ export default {
       const progress = el('p', { className: 'rule-verdict is-ok', textContent: '準備中…' });
       result.append(progress);
 
-      const diffs = [];
-      const failures = [];
-      const fields = REGISTRY_FIELDS;
-      for (let i = 0; i < all.length; i++) {
-        if (cancelled) break;
-        const { rec, r } = all[i];
-        progress.textContent = `查詢中 ${i + 1} / ${all.length}：${r.company}`;
-        const opts = { useMirror: mirror.checked };
-        const res = /^\d{8}$/.test(String(r.taxId || '').replace(/\D/g, ''))
-          ? await window.Registry.lookupByTaxId(r.taxId, opts)
-          : await window.Registry.lookupByName(r.company, opts);
-        if (!res.ok) { failures.push({ company: r.company, reason: res.reason }); }
-        else {
-          const changes = {};
-          fields.forEach(([key]) => {
-            const now = String(r[key] || '').trim();
-            const next = String(res.data[key] || '').trim();
-            // 只補空白模式：本來就有值的一律不碰
-            if (blanksOnly && now) return;
-            if (next && next !== now) changes[key] = { from: now, to: next };
-          });
-          if (Object.keys(changes).length) diffs.push({ rec, r, changes, status: res.data.status });
-        }
-        await new Promise((done) => setTimeout(done, 300));
-      }
+      const { diffs, failures } = await registryBatch(all, {
+        blanksOnly, useMirror: mirror.checked,
+        onProgress: (i, n, r) => { progress.textContent = `查詢中 ${i} / ${n}：${r.company}`; },
+        isCancelled: () => cancelled,
+      });
 
       stop.hidden = true; stop.textContent = '停止'; tryOne.disabled = false;
       result.textContent = '';
@@ -1934,12 +2036,7 @@ export default {
         textContent: blanksOnly ? `填入這 ${diffs.length} 筆` : `套用這 ${diffs.length} 筆更新` });
       apply.onclick = async () => {
         apply.disabled = true;
-        for (const d of diffs) {
-          const existing = state.userStates.get(d.rec.id) || {};
-          const edits = { ...(existing.edits || {}) };
-          Object.entries(d.changes).forEach(([key, ch]) => { edits[key] = ch.to; });
-          await saveState(d.rec.id, { edits, editsAt: Date.now() });
-        }
+        await applyRegistryDiffs(diffs);
         await reload();
         closeOverlays();
         render();
@@ -2941,6 +3038,7 @@ export default {
     }
     prebuildRules();
     checkForUpdate(false);
+    maybeAutoRegistry().catch((err) => console.error('自動更新商工登記失敗', err));
     /*
      * 切回這個分頁時再檢查一次。
      *

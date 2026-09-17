@@ -19,17 +19,22 @@
   'use strict';
 
   /*
-   * 商工行政資料開放平臺的資料集網址。
+   * 商工行政資料開放平臺的資料集。
    *
-   * 這裡預設的那串 GUID 是憑記憶寫的，實測「不帶任何查詢條件跟它要一筆」也回空的，
-   * 代表編號是錯的。但我連不上政府網站，沒辦法自己查出正確的編號。
+   * 之前把「不帶查詢條件要一筆也回空的」當成資料集編號錯了，其實這支 API 沒有
+   * $filter 就回空白，那個判斷本身是錯的。實測（使用者代理）回的是 Content-Type
+   * 為 JSON 的空白，正是「有收到、查無資料」的樣子，所以問題在查詢條件，不在編號。
    *
-   * 所以改成可以在介面上填。使用者從開放資料平臺複製正確網址貼進來就能用，
-   * 不必等我改一版程式再部署一次——這種「只有使用者那一端查得到」的資訊，
-   * 本來就不該寫死在程式裡。
+   * 兩個資料集，各有各的用途：
+   *   - 用統編查：236EE382-…（公司登記基本資料，Business_Accounting_NO eq 統編）
+   *   - 用名稱查：5F64D864-…（公司登記關鍵字查詢，Company_Name like 名稱 and
+   *     Company_Status eq 01——沒帶 Company_Status 就查不到，這是它的規矩）
+   * 兩個都可以在介面上改，萬一政府改了編號不用等改版。
    */
   const DEFAULT_BASE = 'https://data.gcis.nat.gov.tw/od/data/api/5F64D864-61CB-4D0D-8AD9-492047CC1EA6';
+  const DEFAULT_TAXID_BASE = 'https://data.gcis.nat.gov.tw/od/data/api/236EE382-4942-41A9-BD03-CA0709025E7C';
   const BASE_KEY = 'registry-dataset-url';
+  const TAXID_BASE_KEY = 'registry-dataset-taxid-url';
 
   const getBase = () => {
     try { return localStorage.getItem(BASE_KEY) || DEFAULT_BASE; } catch (e) { return DEFAULT_BASE; }
@@ -41,21 +46,32 @@
       else localStorage.removeItem(BASE_KEY);
     } catch (e) { /* 無痕模式寫不進去，不影響當次使用 */ }
   };
+  const getTaxIdBase = () => {
+    try { return localStorage.getItem(TAXID_BASE_KEY) || DEFAULT_TAXID_BASE; } catch (e) { return DEFAULT_TAXID_BASE; }
+  };
+  const setTaxIdBase = (url) => {
+    try {
+      const clean = String(url || '').trim().split('?')[0];
+      if (clean) localStorage.setItem(TAXID_BASE_KEY, clean);
+      else localStorage.removeItem(TAXID_BASE_KEY);
+    } catch (e) { /* 同上 */ }
+  };
 
   /*
-   * 查詢網址給的是「候選清單」而不是一條。
-   *
-   * 實測代理通了之後收到「回應不是 JSON」，代表政府那端收下了請求但回的不是資料，
-   * 多半是查詢語法不合它的胃口。OData 的字串比對通常要加單引號，但這支 API 的
-   * 文件範例又常寫成不加——我從開發環境連不上，沒辦法驗證是哪一種。
-   * 與其賭一個寫法，不如把幾種都試過去，第一個回得出 JSON 的就是對的。
+   * 查詢網址用 OData 的寫法組：$format、$filter、$skip、$top。
+   * $ 一律照字面寫，不要編碼成 %24——政府那端怎麼解 %24 沒人保證；
+   * 篩選條件的值（公司名稱）才做 URL 編碼。
    */
+  const odata = (base, filter, top) =>
+    `${base}?$format=json&$filter=${encodeURIComponent(filter)}&$skip=0&$top=${top}`;
+
+  /** 用統編查：先用統編專用的資料集，再拿關鍵字資料集當備援。 */
   const officialByTaxId = (taxId) => {
-    const id = encodeURIComponent(taxId);
+    const id = String(taxId).replace(/\D/g, '');
     return [
-      `${getBase()}?%24format=json&%24filter=Business_Accounting_NO%20eq%20${id}&%24skip=0&%24top=1`,
-      `${getBase()}?%24format=json&%24filter=Business_Accounting_NO%20eq%20%27${id}%27&%24skip=0&%24top=1`,
-      `${getBase()}?$format=json&$filter=Business_Accounting_NO eq ${taxId}&$skip=0&$top=1`,
+      odata(getTaxIdBase(), `Business_Accounting_NO eq ${id}`, 1),
+      odata(getBase(), `Business_Accounting_NO eq ${id} and Company_Status eq 01`, 1),
+      odata(getBase(), `Business_Accounting_NO eq ${id}`, 1),
     ];
   };
 
@@ -78,9 +94,8 @@
   const officialByName = (name) => {
     const urls = [];
     for (const variant of nameVariants(name)) {
-      const q = encodeURIComponent(variant);
-      urls.push(`${getBase()}?%24format=json&%24filter=Company_Name%20like%20${q}&%24skip=0&%24top=5`);
-      urls.push(`${getBase()}?%24format=json&%24filter=Company_Name%20eq%20%27${q}%27&%24skip=0&%24top=5`);
+      urls.push(odata(getBase(), `Company_Name like ${variant} and Company_Status eq 01`, 5));
+      urls.push(odata(getBase(), `Company_Name like ${variant}`, 5));
     }
     return urls;
   };
@@ -109,6 +124,16 @@
   };
 
   const viaProxy = (url) => `${getProxy().replace(/\/$/, '')}?url=${encodeURIComponent(url)}`;
+  /** 代理網址裡包的那個政府網址；不是代理就原樣回。給使用者在新分頁自己打開看。 */
+  const upstreamOf = (url) => {
+    // 只解碼一層：searchParams.get 會把裡面的 %20 也還原成空白，網址就不再是原樣
+    const m = String(url).match(/[?&]url=([^&]+)/);
+    if (!m) return url;
+    try {
+      const inner = decodeURIComponent(m[1]);
+      return /^https:\/\/data\.gcis\.nat\.gov\.tw\//.test(inner) ? inner : url;
+    } catch (e) { return url; }
+  };
 
   const SOURCES = {
     official: {
@@ -295,24 +320,18 @@
   }
 
   /*
-   * 不帶篩選條件、直接跟資料集要一筆。
+   * 拿一家一定存在的公司來探路：台灣積體電路製造（統編 22099131）。
    *
-   * 實測用統編查三種寫法都回「Content-Type 是 JSON，但內容一個字都沒有」。
-   * 那個症狀分不出三件事：
-   *   (a) 這個統編剛好沒有資料
-   *   (b) 篩選語法不對
-   *   (c) 資料集編號根本是錯的（那串 GUID 是憑印象寫的，沒驗證過）
-   *
-   * 把篩選拿掉就分得出來了：資料集存在的話，$top=1 一定給得出一筆。
-   * 給不出來就是 (c)，再怎麼調語法都沒用。
-   *
-   * 順便還解掉另一個懸而未決的問題——回傳那一筆的欄位名稱，就是這支 API 真正的
-   * 欄位名稱，不必再靠候選清單猜。
+   * 這支 API 沒有 $filter 就回空白，所以「不帶條件要一筆」永遠是空的，
+   * 分不出任何事。改成查一家保證查得到的：查得到就代表路是通的、資料集是對的，
+   * 回來那一筆的欄位名稱也正是這支 API 真正的欄位名稱。
    */
+  const PROBE_TAXID = '22099131';
   function bareUrls() {
-    const plain = `${getBase()}?%24format=json&%24skip=0&%24top=1`;
-    const urls = [{ label: '官方（直接連）', url: plain }];
-    if (getProxy()) urls.unshift({ label: '自架代理', url: viaProxy(plain) });
+    const urls = [];
+    const direct = officialByTaxId(PROBE_TAXID);
+    if (getProxy()) direct.forEach((u, i) => urls.push({ label: `自架代理（寫法 ${i + 1}）`, url: viaProxy(u), upstream: u }));
+    direct.forEach((u, i) => urls.push({ label: `官方（直接連，寫法 ${i + 1}）`, url: u, upstream: u }));
     return urls;
   }
 
@@ -322,7 +341,7 @@
       try {
         const rows = await request(url);
         if (!rows.length) {
-          tried.push({ label, url, reason: '資料集回了空的，連一筆都拿不到' });
+          tried.push({ label, url, reason: `連台積電（統編 ${PROBE_TAXID}）都查不到，回的是空的` });
           continue;
         }
         return {
@@ -330,7 +349,7 @@
           keys: Object.keys(rows[0]), tried,
         };
       } catch (err) {
-        tried.push({ label, url, reason: explain(err, label === '自架代理' ? 'proxy' : 'official'), body: err.body });
+        tried.push({ label, url, reason: explain(err, /代理/.test(label) ? 'proxy' : 'official'), body: err.body });
       }
     }
     return { ok: false, tried };
@@ -354,7 +373,7 @@
         try {
           const rows = await request(urls[i]);
           if (!rows.length) {
-            attempts.push({ source: key, label: tag, reason: '查無資料' });
+            attempts.push({ source: key, label: tag, reason: '查無資料', url: urls[i], upstream: upstreamOf(urls[i]) });
             continue;   // 同一個來源的其他寫法還有機會
           }
           return {
@@ -362,7 +381,7 @@
             data: mapRow(rows[0]), candidates: rows.map(mapRow), raw: rows[0], attempts,
           };
         } catch (err) {
-          attempts.push({ source: key, label: tag, reason: explain(err, key), body: err.body, url: urls[i] });
+          attempts.push({ source: key, label: tag, reason: explain(err, key), body: err.body, url: urls[i], upstream: upstreamOf(urls[i]) });
           // 跨網域被擋是整個來源的問題，換寫法沒有意義
           if (err instanceof TypeError) break;
         }
@@ -391,6 +410,7 @@
   global.Registry = {
     lookupByTaxId, lookupByName, mapRow, toThousands, tidyDate,
     SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, nameVariants,
-    getBase, setBase, DEFAULT_BASE, FIELD_CANDIDATES,
+    getBase, setBase, DEFAULT_BASE, getTaxIdBase, setTaxIdBase, DEFAULT_TAXID_BASE, FIELD_CANDIDATES,
+    officialByTaxId, officialByName, upstreamOf, PROBE_TAXID,
   };
 })(window);
