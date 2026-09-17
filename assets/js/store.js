@@ -197,7 +197,28 @@
     },
 
     /** 直接覆寫成合併後的結果（同步用），不留墓碑。 */
+    /*
+     * 會跟著同步的設定（商工登記的代理網址、資料集網址、鏡像、每天自動更新）。
+     * 這些原本只存在各台裝置的 localStorage，在電腦上設定好、手機打開還是空的，
+     * 使用者看到的是「這台不能用、那台可以」。存一份到 meta 跟著雲端走，
+     * 合併時同一個鍵取比較新的，套用時再寫回 localStorage（registry.js 讀的地方）。
+     */
+    async setSetting(key, value) {
+      const all = (await api.getMeta('settings')) || {};
+      all[key] = { v: value || '', at: Date.now() };
+      await api.setMeta('settings', all);
+      try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch (e) { /* 無痕模式 */ }
+    },
+
+    applySettings(settings) {
+      Object.entries(settings || {}).forEach(([key, entry]) => {
+        if (!entry || typeof entry !== 'object') return;
+        try { if (entry.v) localStorage.setItem(key, entry.v); else localStorage.removeItem(key); } catch (e) { /* 無痕模式 */ }
+      });
+    },
+
     async replaceAll(dump) {
+      if (dump.settings) { await api.setMeta('settings', dump.settings); api.applySettings(dump.settings); }
       await tx(['records', 'logs', 'state'], 'readwrite', (records, logs, state) => {
         records.clear(); logs.clear(); state.clear();
         (dump.records || []).forEach((r) => records.put(r));
@@ -212,13 +233,13 @@
     },
 
     async exportAll() {
-      const [records, logs, states, tombstones] = await Promise.all([
-        api.allRecords(), api.allLogs(), api.allStates(), api.getTombstones(),
+      const [records, logs, states, tombstones, settings] = await Promise.all([
+        api.allRecords(), api.allLogs(), api.allStates(), api.getTombstones(), api.getMeta('settings'),
       ]);
       return {
         version: 2,
         exportedAt: new Date().toISOString(),
-        records, logs, states, tombstones,
+        records, logs, states, tombstones, settings: settings || {},
       };
     },
 

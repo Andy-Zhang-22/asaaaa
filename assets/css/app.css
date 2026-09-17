@@ -335,6 +335,7 @@ button, input, select { font: inherit; color: inherit; }
 .rule-verdict.is-controlled { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .rule-verdict.is-warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 18%, transparent); }
 .rule-verdict.is-fail { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.rule-result a, .rule-result .muted { word-break: break-all; }
 .rule-note { margin: 0 0 8px; font-size: 13px; color: var(--warn); line-height: 1.7; }
 
 .rule-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13.5px; }

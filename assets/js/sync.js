@@ -65,6 +65,14 @@
     const left = a || {};
     const right = b || {};
     const tombstones = mergeTombstones(left.tombstones, right.tombstones);
+    // 設定：同一個鍵取改得比較新的那份
+    const settings = {};
+    [left.settings || {}, right.settings || {}].forEach((side) => {
+      Object.entries(side).forEach(([key, entry]) => {
+        if (!entry || typeof entry !== 'object') return;
+        if (!settings[key] || (entry.at || 0) > (settings[key].at || 0)) settings[key] = entry;
+      });
+    });
 
     // 名單：兩邊聯集。同一份 PDF 在不同裝置匯入會產生相同的 id，所以不會重複。
     const records = new Map();
@@ -140,6 +148,7 @@
       logs: [...logs.values()].sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0)),
       states: [...states.values()],
       tombstones,
+      settings,
     };
   }
 
