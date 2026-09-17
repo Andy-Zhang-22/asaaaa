@@ -96,9 +96,23 @@
     // 追蹤狀態：同一筆客戶只能有一個，取比較新的。
     // 但「編輯過的客戶資料」要分開比對自己的時間戳，否則另一台只是記了一通電話
     // （updatedAt 比較新、但身上沒有編輯內容），就會把這台的編輯洗掉。
+    //
+    // 客戶已經不在（整份清掉、單筆刪掉）的狀態要一起丟；比墓碑還舊的狀態也一樣。
+    // 狀態本身沒有墓碑，借用客戶的：清除名單之後再匯入同一個檔案，id 會一模一樣，
+    // 雲端上留著的舊狀態若照舊合併回來，上面記的下次聯絡日、編輯內容會直接蓋掉
+    // 新檔案的欄位——使用者看到的就是「檔案裡沒約的客戶卻顯示逾期」。
+    const stateDead = (st) => {
+      const r = records.get(st.recordId);
+      if (!r) return true;
+      const stamp = st.updatedAt || 0;
+      const sourceKilled = tombstones.sources[r.source];
+      if (sourceKilled && sourceKilled > stamp) return true;
+      const selfKilled = tombstones.records[st.recordId];
+      return !!(selfKilled && selfKilled > stamp);
+    };
     const states = new Map();
     [...(left.states || []), ...(right.states || [])].forEach((st) => {
-      if (!st || !st.recordId) return;
+      if (!st || !st.recordId || stateDead(st)) return;
       const seen = states.get(st.recordId);
       states.set(st.recordId, seen ? mergeState(seen, st) : st);
     });

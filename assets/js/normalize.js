@@ -288,6 +288,7 @@
     for (let i = 0; i < Math.min(rows.length, 8); i++) {
       const cells = rows[i].map(squash);
       const map = {};
+      const ignored = [];
       let hits = 0;
       cells.forEach((cell, col) => {
         if (!cell) return;
@@ -297,8 +298,17 @@
           if (map[field] !== undefined) {
             // 同一個欄位出現兩次時（例如「名單新增日期(必填)」跟「名單新增日期(更新版)」），
             // 使用者確認過「更新版」才是正確的，所以標著「更新」的那欄優先。
+            //
+            // 落選的那欄要記下來：它有表頭、內容也是正經的日期，但不是我們要的。
+            // 不記的話 resolveRow 會把它當成「不知道屬於誰的日期」，塞給空著的
+            // 下次聯絡日——結果一堆根本沒約的客戶全變成逾期。
             const prev = cells[map[field]] || '';
-            if (cell.includes('更新') && !prev.includes('更新')) map[field] = col;
+            if (cell.includes('更新') && !prev.includes('更新')) {
+              ignored.push(map[field]);
+              map[field] = col;
+            } else {
+              ignored.push(col);
+            }
             return;
           }
           map[field] = col;
@@ -306,7 +316,7 @@
           return;
         }
       });
-      if (hits >= 4 && map.company !== undefined) return { index: i, map };
+      if (hits >= 4 && map.company !== undefined) return { index: i, map, ignored };
     }
     return null;
   }
@@ -655,8 +665,9 @@
    * 把一列的每個欄位安置到正確的格子：先用表頭位置，位置上的內容驗證不過，
    * 就在整列裡找一個驗證得過、而且還沒被別人用走的格子。
    */
-  function resolveRow(cells, map) {
-    const used = new Set();
+  function resolveRow(cells, map, ignored) {
+    // 表頭裡落選的重複欄位一開始就標成用過，任何一輪都不准撿它的內容
+    const used = new Set(ignored || []);
     const out = {};
 
     // 第零輪：地址優先卡位。
@@ -989,6 +1000,7 @@
     // 都會跟著錯，所以要在合併跨頁殘列之前就修好。
     const { shift } = detectShift(body, map);
     if (shift) Object.keys(map).forEach((k) => { map[k] += shift; });
+    const ignored = (header.ignored || []).map((c) => c + shift);
 
     const merged = mergeContinuations(
       body,
@@ -1001,7 +1013,7 @@
     let repaired = 0;
 
     for (const row of merged.rows) {
-      const field = resolveRow(row, map);
+      const field = resolveRow(row, map, ignored);
       const company = field.company || '';
       const phoneRaw = field.phone || '';
       if (!company && !phoneRaw) continue;

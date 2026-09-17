@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-37';
+  const APP_VERSION = '20260916-38';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -48,21 +48,27 @@
     d.setDate(d.getDate() + n);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
-  const rocLabel = (iso) => {
+  /*
+   * 日期一律顯示西元 yyyy/mm/dd。
+   *
+   * 曾經改成民國年，使用者用了之後要求改回西元：他的 Excel 母檔、104 與
+   * 商工登記全是西元，名單上混著民國反而要換算。
+   */
+  const dateLabel = (iso) => {
     if (!iso) return '—';
     const [y, m, d] = iso.split('-');
-    return `${+y - 1911}/${m}/${d}`;
+    return `${y}/${m}/${d}`;
   };
   /*
-   * 日期輸入框旁邊即時顯示民國年。
+   * 日期輸入框旁邊即時顯示 yyyy/mm/dd。
    *
    * <input type="date"> 的顯示格式跟著瀏覽器語系走，在使用者的電腦上是 mm/dd/yyyy，
    * 網頁改不了。選擇器本身很好用（有月曆、有快速鍵），不想換掉，
-   * 所以在旁邊補一個民國年的標示，選了什麼一眼就對得上名單其他地方的寫法。
+   * 所以在旁邊補一個跟名單同格式的標示，選了什麼一眼就對得上。
    */
-  function withRocHint(input) {
-    const hint = el('span', { className: 'roc-hint' });
-    const sync = () => { hint.textContent = input.value ? rocLabel(input.value) : ''; };
+  function withDateHint(input) {
+    const hint = el('span', { className: 'date-hint' });
+    const sync = () => { hint.textContent = input.value ? dateLabel(input.value) : ''; };
     input.addEventListener('input', sync);
     input.addEventListener('change', sync);
     sync();
@@ -376,7 +382,7 @@
     if (!targets.length) { toast('訪談內容裡沒有找到可以補的下次聯絡日'); return; }
 
     const samples = targets.slice(0, 5)
-      .map((t) => `　・${t.r.company}\n　　「${t.found.snippet}」→ ${rocLabel(t.found.iso)}`).join('\n');
+      .map((t) => `　・${t.r.company}\n　　「${t.found.snippet}」→ ${dateLabel(t.found.iso)}`).join('\n');
     const ok = confirm(`找到 ${targets.length} 筆客戶的訪談內容寫了再聯絡的日期，但日期欄是空的或已經過期：\n\n`
       + `${samples}\n\n`
       + '要把這些日期補進去嗎？\n（已經排好、還沒到的約訪不會被動到；補進去的可以在詳細頁改回來）');
@@ -770,8 +776,8 @@
       (r.keyman || r.owner) && `👤 ${r.keyman || r.owner}`,
       (r.city || r.address) && `📍 ${r.city}${r.district}`,
       r.capital && `💰 ${r.capital} 仟元`,
-      r.nextDate && `📅 下次 ${rocLabel(r.nextDate)}${bucket === 'overdue' ? `（逾期 ${-dayDiff(r.nextDate)} 天）` : ''}`,
-      r.lastDate && `🕘 最近 ${rocLabel(r.lastDate)}`,
+      r.nextDate && `📅 下次 ${dateLabel(r.nextDate)}${bucket === 'overdue' ? `（逾期 ${-dayDiff(r.nextDate)} 天）` : ''}`,
+      r.lastDate && `🕘 最近 ${dateLabel(r.lastDate)}`,
       `📄 ${r.source.replace(/\.pdf$/i, '')}`,
     ].filter(Boolean);
     bits.forEach((b) => meta.append(el('span', { textContent: b })));
@@ -985,9 +991,9 @@
       ['統一編號', r.taxId], ['負責人', r.owner], ['KEYMAN', r.keyman],
       ['產業別', r.industry], ['成立年', r.founded],
       ['資本額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
-      ['下次聯絡', r.nextDate ? rocLabel(r.nextDate) : ''],
-      ['最近聯絡', r.lastDate ? rocLabel(r.lastDate) : ''],
-      ['名單新增', r.addedDate ? rocLabel(r.addedDate) : ''],
+      ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) : ''],
+      ['最近聯絡', r.lastDate ? dateLabel(r.lastDate) : ''],
+      ['名單新增', r.addedDate ? dateLabel(r.addedDate) : ''],
     ];
     rows.forEach(([k, v]) => {
       if (!v) return;
@@ -1028,7 +1034,7 @@
       const b = el('button', { className: 'btn btn-tiny', type: 'button', textContent: label });
       b.onclick = () => {
         nextInput.value = addDays(todayISO(), days);
-        // 直接改 value 不會觸發事件，旁邊的民國年提示要靠這個才會跟著換
+        // 直接改 value 不會觸發事件，旁邊的日期提示要靠這個才會跟著換
         nextInput.dispatchEvent(new Event('change'));
       };
       quick.append(b);
@@ -1061,14 +1067,14 @@
         lastDate: today,
       });
       state.logs = await window.Store.allLogs();
-      toast(auto ? `已儲存，並依內容把下次聯絡日設為 ${rocLabel(auto.iso)}` : '已儲存通話紀錄');
+      toast(auto ? `已儲存，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : '已儲存通話紀錄');
       render();
       openDetail(r.id);
       scheduleSync();
     };
     form.append(memo, el('div', { className: 'row' }, [
       el('span', { className: 'muted', textContent: '結果' }), outcomeSel,
-      el('span', { className: 'muted', textContent: '下次聯絡' }), withRocHint(nextInput), save,
+      el('span', { className: 'muted', textContent: '下次聯絡' }), withDateHint(nextInput), save,
     ]));
     form.append(quick);
     section.append(form);
@@ -1117,7 +1123,7 @@
         const li = el('li');
         li.append(el('time', {
           className: e.mine ? 'is-mine' : '',
-          textContent: `${e.date ? rocLabel(e.date) : (e.dateRaw || '日期未標示')}${e.mine ? ' · 我的紀錄' : ''}`,
+          textContent: `${e.date ? dateLabel(e.date) : (e.dateRaw || '日期未標示')}${e.mine ? ' · 我的紀錄' : ''}`,
         }));
         li.append(el('p', { textContent: e.text }));
         if (e.mine) {
@@ -1136,7 +1142,7 @@
             const when = el('input', { type: 'date', value: e.date || todayISO() });
             const ok = el('button', { className: 'btn btn-primary btn-tiny', type: 'button', textContent: '儲存' });
             const cancel = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '取消' });
-            const editor = el('div', {}, [box, el('div', { className: 'row' }, [withRocHint(when), ok, cancel])]);
+            const editor = el('div', {}, [box, el('div', { className: 'row' }, [withDateHint(when), ok, cancel])]);
             li.replaceChild(editor, actions);
             box.focus();
             cancel.onclick = () => { li.replaceChild(actions, editor); };
@@ -1212,7 +1218,7 @@
     const nextDate = el('input', { type: 'date', value: values.nextDate || '' });
     inputs.nextDate = nextDate;
     node.append(el('label', { className: 'rule-field' }, [
-      el('span', { textContent: '下次聯絡日' }), withRocHint(nextDate),
+      el('span', { textContent: '下次聯絡日' }), withDateHint(nextDate),
     ]));
     return {
       node,
@@ -2144,11 +2150,11 @@ export default {
     allViews().forEach((r) => {
       const mine = state.logs.filter((l) => l.recordId === r.id)
         .sort((a, b) => b.createdAt - a.createdAt)
-        .map((l) => `${rocLabel(l.date)} [${OUTCOME_LABEL[l.outcome] || ''}] ${l.text}`)
+        .map((l) => `${dateLabel(l.date)} [${OUTCOME_LABEL[l.outcome] || ''}] ${l.text}`)
         .join('\n');
       lines.push([r.company, r.aliases.join('、'), r.taxId, r.grade, r.founded, r.capital,
         r.phoneRaw, r.owner, r.keyman, r.industry, r.city, r.address,
-        r.nextDate ? rocLabel(r.nextDate) : '', r.lastDate ? rocLabel(r.lastDate) : '',
+        r.nextDate ? dateLabel(r.nextDate) : '', r.lastDate ? dateLabel(r.lastDate) : '',
         OUTCOME_LABEL[r.outcome] || r.outcome, r.source, mine, r.notesRaw].map(esc).join(','));
     });
     download(`電話推廣名單_${todayISO()}.csv`, '﻿' + lines.join('\r\n'), 'text/csv;charset=utf-8');
@@ -2458,7 +2464,6 @@ export default {
       runSync({ quiet: true });          // 背景靜默同步，失敗就等使用者自己按
     }
     prebuildRules();
-    $('#menuVersion').textContent = `版本 ${APP_VERSION}`;
     checkForUpdate(false);
     /*
      * 切回這個分頁時再檢查一次。
