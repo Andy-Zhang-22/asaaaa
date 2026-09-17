@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-46';
+  const APP_VERSION = '20260916-47';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -136,6 +136,7 @@
     if (edits && edits.address !== undefined) Object.assign(out, window.Normalize.parseAddress(edits.address));
 
     out.scale = capitalScale(out);
+    out.priority = window.Normalize.priorityScore(out);
     out.territory = territory(out);
     out.relations = window.Normalize.detectRelations(out.notesRaw);
     out.relationKinds = window.Normalize.relationKinds(out.relations);
@@ -667,6 +668,8 @@
     const num = (s) => Number(String(s || '').replace(/[^\d]/g, '')) || 0;
     const cmp = {
       next: (a, b) => (a.nextDate || '9999').localeCompare(b.nextDate || '9999'),
+      priority: (a, b) => b.priority.score - a.priority.score
+        || (a.nextDate || '9999').localeCompare(b.nextDate || '9999'),
       last: (a, b) => (b.lastDate || '').localeCompare(a.lastDate || ''),
       grade: (a, b) => (gradeRank[a.grade] ?? 9) - (gradeRank[b.grade] ?? 9),
       capital: (a, b) => num(b.capital) - num(a.capital),
@@ -865,6 +868,7 @@
       (r.keyman || r.owner) && `👤 ${r.keyman || r.owner}`,
       (r.city || r.address) && `📍 ${r.city}${r.district}`,
       r.capital && `💰 ${r.capital} 仟元`,
+      `⭐ 優先 ${r.priority.score}`,
       r.nextDate && `📅 下次 ${dateLabel(r.nextDate)}${bucket === 'overdue' ? `（逾期 ${-dayDiff(r.nextDate)} 天）` : ''}`,
       r.lastDate && `🕘 最近 ${dateLabel(r.lastDate)}`,
       `📄 ${r.source.replace(/\.pdf$/i, '')}`,
@@ -1118,6 +1122,7 @@
       ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) : ''],
       ['最近聯絡', r.lastDate ? dateLabel(r.lastDate) : ''],
       ['名單新增', r.addedDate ? dateLabel(r.addedDate) : ''],
+      ['優先分數', `${r.priority.score}${r.priority.why ? `（${r.priority.why}）` : ''}`],
     ];
     rows.forEach(([k, v]) => {
       if (!v) return;
@@ -2321,7 +2326,7 @@ export default {
 
   function exportCsv() {
     const head = ['公司名稱', '關係企業', '統編', '分級', '成立年', '資本額(仟元)', '電話', '負責人',
-      'KEYMAN', '產業別', '縣市', '地址', '下次聯絡日', '最近聯絡日', '洽談狀態', '名單來源',
+      'KEYMAN', '產業別', '縣市', '地址', '下次聯絡日', '最近聯絡日', '洽談狀態', '優先分數', '名單來源',
       '我的通話紀錄', 'PDF訪談內容'];
     const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
     const lines = [head.map(esc).join(',')];
@@ -2333,7 +2338,7 @@ export default {
       lines.push([r.company, r.aliases.join('、'), r.taxId, r.grade, r.founded, r.capital,
         r.phoneRaw, r.owner, r.keyman, r.industry, r.city, r.address,
         r.nextDate ? dateLabel(r.nextDate) : '', r.lastDate ? dateLabel(r.lastDate) : '',
-        OUTCOME_LABEL[r.outcome] || r.outcome, r.source, mine, r.notesRaw].map(esc).join(','));
+        OUTCOME_LABEL[r.outcome] || r.outcome, r.priority.score, r.source, mine, r.notesRaw].map(esc).join(','));
     });
     download(`電話推廣名單_${todayISO()}.csv`, '﻿' + lines.join('\r\n'), 'text/csv;charset=utf-8');
   }

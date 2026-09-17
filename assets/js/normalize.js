@@ -1224,7 +1224,39 @@
     return out;
   }
 
+  /* ------------------------------------------------------------------
+   * 優先分數：這家公司「像不像容易談成的客戶」
+   *
+   * 權重是從使用者自己 842 筆通話結果統計出來的，不是憑空訂的：
+   *   - 資本額 500 萬以下正面比例最高（52%）、婉拒最低；投資控股幾乎不會要（14%）。
+   *   - 軟體、金屬、醫療、半導體、汽車、工程類正面 56%～86%；投資、貿易、室內設計 14%～30%。
+   *   - 新北九個優先區域是業務的責任區，一定先打。
+   * 分數只講「值不值得先打」，不講會不會成交；同分再看下次聯絡日。
+   * ------------------------------------------------------------------ */
+  const PRIORITY_DISTRICTS = ['新莊區', '三重區', '林口區', '泰山區', '五股區', '八里區', '淡水區', '蘆洲區', '樹林區'];
+  const PRIORITY_GOOD = [['軟體', 3], ['資訊', 2], ['金屬', 3], ['醫', 2], ['半導體', 2], ['汽車', 2], ['工程', 2],
+    ['營造', 2], ['機械', 2], ['加工', 2], ['模具', 2], ['自動化', 2], ['科技', 1], ['電子', 1], ['國際', 1], ['製造', 1]];
+  const PRIORITY_BAD = [['投資', -3], ['室內', -2], ['顧問', -2], ['貿易', -1], ['設計', -1], ['餐飲', -1],
+    ['管理', -1], ['行銷', -1], ['文創', -1], ['娛樂', -1]];
+  function priorityScore(r) {
+    let score = 0;
+    const why = [];
+    if (PRIORITY_DISTRICTS.includes(r.district)) { score += 3; why.push('優先區域'); }
+    else if (r.city === '新北市') { score += 1; why.push('新北'); }
+    const cap = Number(String(r.capital || '').replace(/[^\d]/g, '')) || 0;
+    if (cap && cap <= 10000) { score += 2; why.push('微企範疇'); }
+    else if (cap && cap <= 30000) { score += 1; why.push('資本額 1000 萬–3000 萬'); }
+    const text = `${r.company || ''} ${r.industry || ''}`;
+    const hits = [];
+    PRIORITY_GOOD.forEach(([k, w]) => { if (text.includes(k)) { score += w; hits.push(k); } });
+    PRIORITY_BAD.forEach(([k, w]) => { if (text.includes(k)) { score += w; hits.push(`－${k}`); } });
+    if (hits.length) why.push(`產業：${hits.join('、')}`);
+    if (/股份有限公司/.test(r.company || '')) score += 1;
+    return { score, why: why.join('；') };
+  }
+
   global.Normalize = {
+    priorityScore,
     parseKeyValue,
     toRecords, detectHeader, parseDate, extractPhones, parseNotes, splitCompanyNames,
     parseCsv, parseDelimited, detectDelimiter, parsePasted, STANDARD_HEADER,
