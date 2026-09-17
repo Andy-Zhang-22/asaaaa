@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-48';
+  const APP_VERSION = '20260916-49';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -2530,23 +2530,38 @@ export default {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  function exportCsv() {
-    const head = ['公司名稱', '關係企業', '統編', '分級', '成立年', '資本額(仟元)', '電話', '負責人',
-      'KEYMAN', '產業別', '縣市', '地址', '下次聯絡日', '最近聯絡日', '洽談狀態', '名單來源',
-      '我的通話紀錄', 'PDF訪談內容'];
-    const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
-    const lines = [head.map(esc).join(',')];
+  /*
+   * 匯出 Excel。
+   *
+   * 欄位順序照使用者自己的名單母檔（也就是匯入時認得的標準欄位）排，匯出的檔案
+   * 在 Excel 裡改完可以直接再拖回網站更新。網站上記的通話寫進「訪談內容」最前面，
+   * 格式跟母檔一樣是「日期 [結果] 內容」，一行一則、新的在上。
+   * 資本額一律仟元；日期一律 yyyy/mm/dd。
+   */
+  function exportXlsx() {
+    if (!window.XLSX) { toast('Excel 元件沒有載入，請重新整理頁面再試'); return; }
+    const head = ['公司名稱', '統編', '分級', '成立年', '資本額(仟元)', '電話', '負責人', 'KEYMAN', '產業別',
+      '下次聯絡日', '最近聯絡日', '訪談內容', '地址', '名單新增日期', '國家',
+      '洽談狀態', '往來情形', '關係企業', '名單來源'];
+    const rows = [head];
     allViews().forEach((r) => {
       const mine = state.logs.filter((l) => l.recordId === r.id)
         .sort((a, b) => b.createdAt - a.createdAt)
-        .map((l) => `${dateLabel(l.date)} [${OUTCOME_LABEL[l.outcome] || ''}] ${l.text}`)
-        .join('\n');
-      lines.push([r.company, r.aliases.join('、'), r.taxId, r.grade, r.founded, r.capital,
-        r.phoneRaw, r.owner, r.keyman, r.industry, r.city, r.address,
-        r.nextDate ? dateLabel(r.nextDate) : '', r.lastDate ? dateLabel(r.lastDate) : '',
-        OUTCOME_LABEL[r.outcome] || r.outcome, r.source, mine, r.notesRaw].map(esc).join(','));
+        .map((l) => `${dateLabel(l.date)} [${OUTCOME_LABEL[l.outcome] || ''}] ${l.text}`);
+      const notes = [...mine, r.notesRaw || ''].filter(Boolean).join('\n');
+      rows.push([r.company, r.taxId, r.grade, r.founded, r.capital, r.phoneRaw, r.owner, r.keyman, r.industry,
+        r.nextDate ? dateLabel(r.nextDate) : '', r.lastDate ? dateLabel(r.lastDate) : '', notes,
+        r.address, r.addedDate ? dateLabel(r.addedDate) : '', r.country || '台灣',
+        OUTCOME_LABEL[r.outcome] || r.outcome, window.Normalize.DEALING_LABEL[r.dealingKind] || '',
+        r.aliases.join('、'), r.source]);
     });
-    download(`電話推廣名單_${todayISO()}.csv`, '﻿' + lines.join('\r\n'), 'text/csv;charset=utf-8');
+    const ws = window.XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [26, 10, 5, 8, 12, 18, 10, 10, 18, 11, 11, 60, 36, 12, 6, 9, 12, 20, 22].map((w) => ({ wch: w }));
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, '名單');
+    const out = window.XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    download(`電話推廣名單_${todayISO()}.xlsx`, out,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }
 
   /* ---------------- 雲端同步 ---------------- */
@@ -2783,7 +2798,7 @@ export default {
       const act = e.target.dataset && e.target.dataset.act;
       if (!act) return;
       $('#menu').hidden = true;
-      if (act === 'export-csv') exportCsv();
+      if (act === 'export-xlsx') exportXlsx();
       if (act === 'export-json') {
         download(`電話推廣名單備份_${todayISO()}.json`,
           JSON.stringify(await window.Store.exportAll()), 'application/json');
