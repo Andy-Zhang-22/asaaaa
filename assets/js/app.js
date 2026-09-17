@@ -2742,6 +2742,14 @@ export default {
       window.DriveSync.signOut();
       toast('已登出，下次同步會重新要求授權');
     };
+    // 匯入視窗把四種新增方式集中在一起：檔案、104 截圖、貼上整列、手動輸入
+    $('#importer').addEventListener('click', (e) => {
+      const btn = e.target.closest && e.target.closest('[data-act]');
+      const act = btn && btn.dataset.act;
+      if (!act) return;
+      if (act === 'paste-customer') { $('#importer').hidden = true; openPasteImport(); }
+      if (act === 'new-customer') { $('#importer').hidden = true; openNewCustomer(); }
+    });
     $('#btnPick').onclick = () => $('#filePick').click();
     $('#filePick').onchange = (e) => {
       const files = [...e.target.files];
@@ -2799,8 +2807,6 @@ export default {
         });
       }
       if (act === 'new-customer') openNewCustomer();
-      if (act === 'paste-customer') openPasteImport();
-      if (act === 'shots') { $('#importer').hidden = false; $('#shotPick').click(); }
       if (act === 'registry') { openRegistryUpdate(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'check-names') { await reviewCompanyNames(); return; }

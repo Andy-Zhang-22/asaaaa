@@ -27,12 +27,9 @@
 
   <div class="topbar-actions">
     <button id="btnSync" class="btn btn-ghost" title="與雲端硬碟同步" hidden>⟳</button>
-    <button id="btnImport" class="btn btn-primary">匯入名單</button>
+    <button id="btnImport" class="btn btn-primary">新增客戶</button>
     <button id="btnMenu" class="btn btn-ghost" aria-haspopup="true" title="更多">⋯</button>
     <div id="menu" class="menu" hidden>
-      <button data-act="shots">匯入 104 截圖</button>
-      <button data-act="paste-customer">貼上新增客戶</button>
-      <button data-act="new-customer">手動新增客戶</button>
       <hr>
       <button data-act="export-csv">匯出 CSV（含通話紀錄）</button>
       <button data-act="export-json">下載備份 JSON</button>
@@ -151,20 +148,31 @@
   <div class="drawer-backdrop" data-close></div>
   <div class="modal" role="dialog" aria-modal="true" aria-label="匯入名單">
     <button class="drawer-close" data-close aria-label="關閉">✕</button>
-    <h2>匯入電話推廣名單</h2>
-    <p class="muted">選擇 Google 雲端硬碟「電話推廣名單」資料夾裡的 PDF（可一次多選）。系統會自動還原表格欄位，資料只留在這台裝置。也可以改丟試算表匯出的 CSV。</p>
+    <h2>新增客戶名單</h2>
+    <p class="muted">四種方式都從這裡進來。資料只留在這台裝置，開了雲端同步才會複製到你自己的雲端硬碟。</p>
+    <div class="import-ways">
+      <button id="btnPick" class="way" type="button">
+        <strong>📄 檔案：PDF、Excel、CSV</strong>
+        <small>公司名單匯出檔、經濟部設立登記清冊，可一次多選</small>
+      </button>
+      <button id="btnShotPick" class="way" type="button">
+        <strong>📷 104 截圖</strong>
+        <small>手機相簿或電腦裡的「公司簡介」頁截圖，在本機辨識後可查商工登記補資料</small>
+      </button>
+      <button class="way" type="button" data-act="paste-customer">
+        <strong>📋 貼上試算表整列</strong>
+        <small>從 Excel 或 Google 試算表複製一列或多列直接貼上</small>
+      </button>
+      <button class="way" type="button" data-act="new-customer">
+        <strong>✍️ 手動輸入一筆</strong>
+        <small>名片或轉介的客戶；可貼上商工登記資料自動填表</small>
+      </button>
+    </div>
     <div id="dropzone" class="dropzone">
-      <strong>把 PDF、Excel、CSV 或 104 截圖拖進來</strong>
-      <span>或</span>
-      <button id="btnPick" class="btn btn-primary">選擇檔案</button>
-      <input id="filePick" type="file" accept="application/pdf,.pdf,text/csv,.csv,.xlsx,.xls,image/*,.png,.jpg,.jpeg" multiple hidden>
+      <strong>也可以直接把檔案或截圖拖到這裡</strong>
     </div>
-    <!-- 手機專用：accept 只給 image/*，iPhone 會直接開相簿，不用再從「選擇檔案」裡找 -->
-    <div class="shot-pick">
-      <button id="btnShotPick" class="btn" type="button">📷 從手機相簿選 104 截圖</button>
-      <input id="shotPick" type="file" accept="image/*" multiple hidden>
-      <p class="muted">可一次選多張。截圖在你的手機上辨識，不會上傳。</p>
-    </div>
+    <input id="filePick" type="file" accept="application/pdf,.pdf,text/csv,.csv,.xlsx,.xls,image/*,.png,.jpg,.jpeg" multiple hidden>
+    <input id="shotPick" type="file" accept="image/*" multiple hidden>
     <div id="importLog" class="import-log"></div>
   </div>
 </div>
