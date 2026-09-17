@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-42';
+  const APP_VERSION = '20260916-43';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -90,8 +90,27 @@
   }
 
   /** 使用者自己記的狀態會覆蓋 PDF 裡的原始值。 */
+  // 每筆客戶最新的一則通話紀錄（依建立時間），跟著資料版本快取
+  let lastLogKey = '';
+  let lastLogMap = new Map();
+  function latestLog(recordId) {
+    const key = String(dataVersion);
+    if (lastLogKey !== key) {
+      lastLogKey = key;
+      lastLogMap = new Map();
+      state.logs.forEach((l) => {
+        const seen = lastLogMap.get(l.recordId);
+        if (!seen || (l.createdAt || 0) > (seen.createdAt || 0)) lastLogMap.set(l.recordId, l);
+      });
+    }
+    return lastLogMap.get(recordId) || null;
+  }
+
   function view(record) {
     const mine = state.userStates.get(record.id);
+    // 狀態（結果、最近聯絡日）跟通話紀錄是分開存的；狀態若在同步時弄丟了，
+    // 紀錄本身通常還在，就從最新一則紀錄把結果與最近聯絡日補回來。
+    const lastLog = latestLog(record.id);
     const edits = (mine && mine.edits) || null;
     const base = edits ? { ...record, ...edits } : record;
     // 檔案裡「下次聯絡日」跟「最近聯絡日」填同一天，是使用者的習慣寫法，
@@ -101,11 +120,11 @@
     const out = {
       ...base,
       nextDate: (mine && mine.nextDate) || fileNext,
-      lastDate: (mine && mine.lastDate) || base.lastDate,
+      lastDate: (mine && mine.lastDate) || (lastLog && lastLog.date) || base.lastDate,
       // 洽談狀態每次都從訪談內容重新判讀，不用匯入時存下來的那份：
       // 判讀規則會改（例如「最上面沒日期＝未撥打」），改了要對已經在名單上的
       // 客戶也生效，不能只對之後匯入的有效。使用者自己記的結果照樣優先。
-      outcome: (mine && mine.outcome) || window.Normalize.guessOutcome(base.notesRaw || ''),
+      outcome: (mine && mine.outcome) || (lastLog && lastLog.outcome) || window.Normalize.guessOutcome(base.notesRaw || ''),
       starred: !!(mine && mine.starred),
       edited: !!edits,
       group: (mine && mine.group) || '',
@@ -466,8 +485,9 @@
    *
    * 業務的客戶常常一個人名下好幾家公司（股份有限公司＋有限公司、母公司＋子公司），
    * 打一通電話談的是整組，但名單上是好幾張卡片。做法：
-   *   - 使用者自己把公司連成一組（同名不同人的很多，所以不自動連，只在連結
-   *     視窗裡把同負責人／同 KEYMAN 的列在最前面當候選）。
+   *   - 使用者自己把公司連成一組。不猜：曾經拿同負責人、同 KEYMAN 當候選，
+   *     結果 KEYMAN 欄位塞著「2023」這種東西，八家毫不相干的公司被列成候選，
+   *     使用者說根本是不同負責人。所以視窗就是列出名單內全部企業＋搜尋，自己勾。
    *   - 組別記在每筆的追蹤狀態裡（group + groupAt），跟編輯內容一樣有自己的
    *     時間戳，雲端合併時才不會被一通電話的紀錄洗掉。
    *   - 記通話時可以一次記到整組：每家各寫一則紀錄、各自更新狀態，這樣任何
@@ -487,23 +507,12 @@
     for (const id of ids) await saveState(id, { group: group || undefined, groupAt: at });
   }
 
-  /** 找同負責人／同 KEYMAN 的其他公司，當連結視窗的候選。 */
-  function groupCandidates(r) {
-    const norm = (v) => String(v || '').replace(/[\s()（）]/g, '');
-    const owner = norm(r.owner);
-    const keyman = norm(r.keyman);
-    return allViews().filter((x) => x.id !== r.id && (
-      (owner && (norm(x.owner) === owner || norm(x.keyman) === owner))
-      || (keyman && keyman.length >= 2 && (norm(x.keyman) === keyman || norm(x.owner) === keyman))
-    ));
-  }
-
   function openGroupEditor(r) {
     const host = $('#editorBody');
     host.textContent = '';
     host.append(el('h2', { textContent: `連結同一老闆的公司：${r.company}` }));
     host.append(el('p', { className: 'muted',
-      textContent: '勾選跟這家同一個老闆的公司。連結後卡片會互相標示，記通話時可以一次記到整組。' }));
+      textContent: '從名單裡勾選跟這家同一個老闆的公司（可搜尋）。連結後卡片會互相標示，記通話時可以一次記到整組。' }));
 
     const members = groupMembers(r);
     const picked = new Set(members.map((m) => m.id));
@@ -529,20 +538,14 @@
     const paintList = (q) => {
       listBox.textContent = '';
       const terms = q.trim().split(/\s+/).filter(Boolean);
-      const cands = groupCandidates(r);
-      const candIds = new Set(cands.map((x) => x.id));
       let shown = 0;
       const show = (x) => { listBox.append(rowFor(x)); shown++; };
-      // 已連結的與同負責人的先列
+      // 已連結的先列，接著是名單內全部企業（照名稱排），有打字就只列符合的
       members.forEach(show);
-      if (!terms.length) {
-        cands.filter((x) => !picked.has(x.id)).forEach(show);
-        if (cands.length) listBox.prepend(el('p', { className: 'rule-note', textContent: '同負責人／同 KEYMAN 的公司：' }));
-        else listBox.prepend(el('p', { className: 'rule-note', textContent: '沒有同負責人的公司，請用上面的搜尋框找。' }));
-        return;
-      }
-      allViews().filter((x) => x.id !== r.id && !picked.has(x.id) && terms.every((t) => x.blob.includes(t)))
-        .slice(0, 30).forEach(show);
+      const rest = allViews()
+        .filter((x) => x.id !== r.id && !picked.has(x.id) && terms.every((t) => x.blob.includes(t)))
+        .sort((a, b) => a.company.localeCompare(b.company, 'zh-Hant'));
+      rest.forEach(show);
       if (!shown) listBox.append(el('p', { className: 'rule-note', textContent: '找不到符合的公司。' }));
     };
     const search = el('input', { type: 'search', placeholder: '搜尋公司名稱、負責人、統編…' });
@@ -1202,10 +1205,7 @@
         });
         sec.append(ul);
       } else {
-        const cands = groupCandidates(r);
-        sec.append(el('p', { className: 'muted', textContent: cands.length
-          ? `名單上還有 ${cands.length} 家同負責人的公司：${cands.slice(0, 3).map((c) => c.company).join('、')}${cands.length > 3 ? '…' : ''}`
-          : '這家還沒連結其他公司。' }));
+        sec.append(el('p', { className: 'muted', textContent: '這家還沒連結其他公司。' }));
       }
       body.append(sec);
     }
@@ -1321,8 +1321,8 @@
       sec.append(el('p', { className: `dealing-verdict dealing-${r.dealingKind}` }, [
         el('strong', { textContent: window.Normalize.DEALING_LABEL[r.dealingKind] }),
         el('span', { className: 'muted', textContent: r.dealingKind === 'active'
-          ? `（最新一期${r.dealing.date ? ` ${r.dealing.date} ` : ''}有提到本餘）`
-          : '（最新一期沒提到本餘）' }),
+          ? `（最新一期${r.dealing.date ? ` ${r.dealing.date} ` : ''}有提到本餘或還在往來）`
+          : `（最新一期${r.dealing.ended ? '寫到合作已結束' : '沒提到本餘或往來'}）` }),
       ]));
       if (r.dealing.snippet) {
         sec.append(el('p', { className: 'relation-snippet', textContent: `「…${r.dealing.snippet}…」` }));

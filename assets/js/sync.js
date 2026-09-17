@@ -107,10 +107,20 @@
     // 狀態本身沒有墓碑，借用客戶的：清除名單之後再匯入同一個檔案，id 會一模一樣，
     // 雲端上留著的舊狀態若照舊合併回來，上面記的下次聯絡日、編輯內容會直接蓋掉
     // 新檔案的欄位——使用者看到的就是「檔案裡沒約的客戶卻顯示逾期」。
+    //
+    // 「多新」不能只看 updatedAt：舊版存狀態時時間戳會卡在第一次的值，清除名單前
+    // 建的狀態就算之後又記了好幾通電話，時間戳還是停在清除之前，照字面比會被
+    // 當成死的，通話結果、最近聯絡日就這樣不見（紀錄本身還在，狀態卻沒了）。
+    // 所以把該客戶最新一則通話紀錄的時間也算進去：清除之後還在記電話，狀態就是活的。
+    const lastLogAt = new Map();
+    logs.forEach((l) => {
+      const at = Math.max(l.createdAt || 0, l.updatedAt || 0);
+      if (at > (lastLogAt.get(l.recordId) || 0)) lastLogAt.set(l.recordId, at);
+    });
     const stateDead = (st) => {
       const r = records.get(st.recordId);
       if (!r) return true;
-      const stamp = st.updatedAt || 0;
+      const stamp = Math.max(st.updatedAt || 0, st.editsAt || 0, st.groupAt || 0, lastLogAt.get(st.recordId) || 0);
       const sourceKilled = tombstones.sources[r.source];
       if (sourceKilled && sourceKilled > stamp) return true;
       const selfKilled = tombstones.records[st.recordId];

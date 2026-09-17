@@ -815,6 +815,25 @@
   // 字眼只收明確講「結束」的，「到期」「續約」這種可能還在談的不收。
   const ENDED_RE = /解約|結清|還清|繳清|繳完|還完|已結束|結束了|合作結束|往來結束|沒繼續|沒有繼續|不再往來|沒再往來|沒往來了|已經沒有往來|終止合作|終止往來|停止往來/;
 
+  // 「還在往來」的寫法。使用者在網站上記的通話多半不會寫本餘，會寫「目前還在跟中租
+  // 往來」「跟大企有配合」這種話，一樣要歸到有往來。
+  // 同一小句裡有否定字（沒往來、不再合作）就不算——句子以逗號、句號切開。
+  const ACTIVE_RES = [
+    /(還在|仍在|有在|正在|持續|目前|現在|一直|尚在)[^，。,；;\n]{0,10}(往來|合作|配合|承作|進件|有案)/g,
+    /(跟|與|和|在)(中租|大企|微企|融專|城北|長租|設備組|一版組)[^，。,；;\n]{0,8}(往來|合作|配合|承作|有案|做)/g,
+  ];
+  const NEGATED_RE = /沒|無|不|未|停|結束|解約/;
+  function findActive(text) {
+    for (const re of ACTIVE_RES) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (!NEGATED_RE.test(m[0])) return m;
+      }
+    }
+    return null;
+  }
+
   const DEALING_LABEL = {
     active: '有跟其他單位往來',
     none: '沒有跟中租往來',
@@ -840,7 +859,7 @@
     const around = (m) => text.slice(Math.max(0, m.index - 20), m.index + 50).replace(/\s+/g, ' ').trim();
     const ended = text.match(ENDED_RE);
     if (ended) return { kind: 'none', date: latest.date || null, snippet: around(ended), ended: true };
-    const m = text.match(BALANCE_RE);
+    const m = text.match(BALANCE_RE) || findActive(text);
     if (!m) return { kind: 'none', date: latest.date || null, snippet: '' };
     return { kind: 'active', date: latest.date || null, snippet: around(m) };
   }
