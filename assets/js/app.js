@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-47';
+  const APP_VERSION = '20260916-48';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -2742,6 +2742,14 @@ export default {
       window.DriveSync.signOut();
       toast('已登出，下次同步會重新要求授權');
     };
+    // 匯入視窗把四種新增方式集中在一起：檔案、104 截圖、貼上整列、手動輸入
+    $('#importer').addEventListener('click', (e) => {
+      const btn = e.target.closest && e.target.closest('[data-act]');
+      const act = btn && btn.dataset.act;
+      if (!act) return;
+      if (act === 'paste-customer') { $('#importer').hidden = true; openPasteImport(); }
+      if (act === 'new-customer') { $('#importer').hidden = true; openNewCustomer(); }
+    });
     $('#btnPick').onclick = () => $('#filePick').click();
     $('#filePick').onchange = (e) => {
       const files = [...e.target.files];
@@ -2799,8 +2807,6 @@ export default {
         });
       }
       if (act === 'new-customer') openNewCustomer();
-      if (act === 'paste-customer') openPasteImport();
-      if (act === 'shots') { $('#importer').hidden = false; $('#shotPick').click(); }
       if (act === 'registry') { openRegistryUpdate(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'check-names') { await reviewCompanyNames(); return; }
