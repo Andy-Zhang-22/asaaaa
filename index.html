@@ -7,7 +7,7 @@
 <meta name="description" content="把電話推廣名單 PDF 轉成可搜尋、可撥號、可追蹤的工作台。資料只存在本機瀏覽器。">
 <meta name="theme-color" content="#0f172a">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>">
-<link rel="stylesheet" href="assets/css/app.css?v=20260916-46">
+<link rel="stylesheet" href="assets/css/app.css?v=20260916-47">
 </head>
 <body data-theme="auto">
 
@@ -30,6 +30,7 @@
     <button id="btnImport" class="btn btn-primary">匯入名單</button>
     <button id="btnMenu" class="btn btn-ghost" aria-haspopup="true" title="更多">⋯</button>
     <div id="menu" class="menu" hidden>
+      <button data-act="shots">匯入 104 截圖</button>
       <button data-act="paste-customer">貼上新增客戶</button>
       <button data-act="new-customer">手動新增客戶</button>
       <hr>
@@ -153,10 +154,16 @@
     <h2>匯入電話推廣名單</h2>
     <p class="muted">選擇 Google 雲端硬碟「電話推廣名單」資料夾裡的 PDF（可一次多選）。系統會自動還原表格欄位，資料只留在這台裝置。也可以改丟試算表匯出的 CSV。</p>
     <div id="dropzone" class="dropzone">
-      <strong>把 PDF、Excel 或 CSV 拖進來</strong>
+      <strong>把 PDF、Excel、CSV 或 104 截圖拖進來</strong>
       <span>或</span>
       <button id="btnPick" class="btn btn-primary">選擇檔案</button>
-      <input id="filePick" type="file" accept="application/pdf,.pdf,text/csv,.csv,.xlsx,.xls" multiple hidden>
+      <input id="filePick" type="file" accept="application/pdf,.pdf,text/csv,.csv,.xlsx,.xls,image/*,.png,.jpg,.jpeg" multiple hidden>
+    </div>
+    <!-- 手機專用：accept 只給 image/*，iPhone 會直接開相簿，不用再從「選擇檔案」裡找 -->
+    <div class="shot-pick">
+      <button id="btnShotPick" class="btn" type="button">📷 從手機相簿選 104 截圖</button>
+      <input id="shotPick" type="file" accept="image/*" multiple hidden>
+      <p class="muted">可一次選多張。截圖在你的手機上辨識，不會上傳。</p>
     </div>
     <div id="importLog" class="import-log"></div>
   </div>
@@ -224,14 +231,16 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="assets/vendor/pdfjs/pdf.min.js?v=20260916-46"></script>
-<script src="assets/vendor/xlsx/xlsx.min.js?v=20260916-46"></script>
-<script src="assets/js/pdf-table.js?v=20260916-46"></script>
-<script src="assets/js/normalize.js?v=20260916-46"></script>
-<script src="assets/js/registry.js?v=20260916-46"></script>
-<script src="assets/js/rules.js?v=20260916-46"></script>
-<script src="assets/js/store.js?v=20260916-46"></script>
-<script src="assets/js/sync.js?v=20260916-46"></script>
-<script src="assets/js/app.js?v=20260916-46"></script>
+<script src="assets/vendor/pdfjs/pdf.min.js?v=20260916-47"></script>
+<script src="assets/vendor/xlsx/xlsx.min.js?v=20260916-47"></script>
+<script src="assets/vendor/tesseract/tesseract.min.js"></script>
+<script src="assets/js/pdf-table.js?v=20260916-47"></script>
+<script src="assets/js/normalize.js?v=20260916-47"></script>
+<script src="assets/js/registry.js?v=20260916-47"></script>
+<script src="assets/js/ocr.js?v=20260916-47"></script>
+<script src="assets/js/rules.js?v=20260916-47"></script>
+<script src="assets/js/store.js?v=20260916-47"></script>
+<script src="assets/js/sync.js?v=20260916-47"></script>
+<script src="assets/js/app.js?v=20260916-47"></script>
 </body>
 </html>
