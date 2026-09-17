@@ -169,9 +169,6 @@ button, input, select { font: inherit; color: inherit; }
   display: inline-block; padding: 1px 8px; border-radius: 999px;
   font-size: 12px; border: 1px solid var(--border); background: var(--surface-2);
 }
-.badge-grade { font-weight: 700; }
-.badge-S, .badge-A { background: color-mix(in srgb, var(--ok) 18%, transparent); border-color: var(--ok); color: var(--ok); }
-.badge-B { background: color-mix(in srgb, var(--warn) 18%, transparent); border-color: var(--warn); color: var(--warn); }
 .out-blocked { background: color-mix(in srgb, var(--danger) 16%, transparent); border-color: var(--danger); color: var(--danger); }
 .out-declined { color: var(--muted); }
 .out-meeting, .out-interested { background: color-mix(in srgb, var(--ok) 16%, transparent); border-color: var(--ok); color: var(--ok); }
