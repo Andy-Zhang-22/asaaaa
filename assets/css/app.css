@@ -412,6 +412,16 @@ button, input, select { font: inherit; color: inherit; }
 /* ---------- 編輯客戶資料 ---------- */
 .detail-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
 .badge-edited { border-color: var(--warn); color: var(--warn); }
+/* 同一老闆的公司 */
+.badge-group { border-color: var(--primary); color: var(--primary); }
+.group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.group-head h3 { margin: 0; }
+.group-members { margin: 6px 0 0; padding-left: 18px; }
+.group-members li { margin: 2px 0; }
+.group-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 50vh; overflow: auto; }
+.group-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.group-row span { display: flex; flex-direction: column; }
+.apply-group { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
 .edit-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 12px; margin: 16px 0; }
 @media (max-width: 520px) { .edit-form { grid-template-columns: 1fr; } }
 .edit-form textarea { min-height: 52px; resize: vertical; }

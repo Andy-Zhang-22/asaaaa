@@ -438,6 +438,10 @@
   function guessOutcome(notes) {
     const t = squash(notes);
     if (!t) return 'new';
+    // 最上面那則沒有標日期，代表那是背景資料（徵才資訊、產品線），不是一通電話。
+    // 使用者的規則：最新一次紀錄沒日期＝還沒撥打。
+    const entries = parseNotes(notes);
+    if (entries.length && !entries[0].date) return 'new';
     if (/禁止推廣|禁推|別再撥打|不要再打|打死不想/.test(t)) return 'blocked';
     if (/約訪|拜訪|約時間|約下|約他|點到公司/.test(t)) return 'meeting';
     if (/資金需求|有興趣|有些興趣|想了解|報價|額度需求|請他提供資料/.test(t)) return 'interested';
@@ -447,7 +451,7 @@
   }
 
   const OUTCOME_LABEL = {
-    new: '尚未接觸',
+    new: '未撥打',
     noanswer: '未接通',
     contacted: '已聯絡',
     interested: '有意願',

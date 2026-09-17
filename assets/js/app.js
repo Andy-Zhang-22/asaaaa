@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-40';
+  const APP_VERSION = '20260916-41';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -105,6 +105,7 @@
       outcome: (mine && mine.outcome) || base.outcome,
       starred: !!(mine && mine.starred),
       edited: !!edits,
+      group: (mine && mine.group) || '',
     };
     // 電話與地址改過就要先重新解析，再去算衍生欄位。
     // 順序不能反過來：服務區域是從地址拆出來的縣市與行政區算的，先算就會拿到
@@ -448,11 +449,140 @@
   }
 
   async function saveState(recordId, patch) {
-    const merged = { ...(state.userStates.get(recordId) || { recordId }), ...patch, recordId };
+    // updatedAt 要在這裡明確蓋掉：舊狀態本身就帶著上一次的 updatedAt，
+    // 展開之後它會蓋過 Store.setState 補的 Date.now()，時間戳永遠停在第一次。
+    const merged = { ...(state.userStates.get(recordId) || { recordId }), ...patch, recordId, updatedAt: Date.now() };
     await window.Store.setState(merged);
     state.userStates.set(recordId, merged);
     touch();
     return merged;
+  }
+
+  /* ------------------------------------------------------------------
+   * 同一老闆的多家公司
+   *
+   * 業務的客戶常常一個人名下好幾家公司（股份有限公司＋有限公司、母公司＋子公司），
+   * 打一通電話談的是整組，但名單上是好幾張卡片。做法：
+   *   - 使用者自己把公司連成一組（同名不同人的很多，所以不自動連，只在連結
+   *     視窗裡把同負責人／同 KEYMAN 的列在最前面當候選）。
+   *   - 組別記在每筆的追蹤狀態裡（group + groupAt），跟編輯內容一樣有自己的
+   *     時間戳，雲端合併時才不會被一通電話的紀錄洗掉。
+   *   - 記通話時可以一次記到整組：每家各寫一則紀錄、各自更新狀態，這樣任何
+   *     一家單獨看都是完整的。
+   * ------------------------------------------------------------------ */
+  function groupMembers(r) {
+    if (!r.group) return [];
+    const out = [];
+    state.userStates.forEach((st, id) => {
+      if (st.group === r.group && id !== r.id && state.records.some((x) => x.id === id)) out.push(id);
+    });
+    return out.map((id) => view(state.records.find((x) => x.id === id)));
+  }
+
+  async function setGroup(ids, group) {
+    const at = Date.now();
+    for (const id of ids) await saveState(id, { group: group || undefined, groupAt: at });
+  }
+
+  /** 找同負責人／同 KEYMAN 的其他公司，當連結視窗的候選。 */
+  function groupCandidates(r) {
+    const norm = (v) => String(v || '').replace(/[\s()（）]/g, '');
+    const owner = norm(r.owner);
+    const keyman = norm(r.keyman);
+    return allViews().filter((x) => x.id !== r.id && (
+      (owner && (norm(x.owner) === owner || norm(x.keyman) === owner))
+      || (keyman && keyman.length >= 2 && (norm(x.keyman) === keyman || norm(x.owner) === keyman))
+    ));
+  }
+
+  function openGroupEditor(r) {
+    const host = $('#editorBody');
+    host.textContent = '';
+    host.append(el('h2', { textContent: `連結同一老闆的公司：${r.company}` }));
+    host.append(el('p', { className: 'muted',
+      textContent: '勾選跟這家同一個老闆的公司。連結後卡片會互相標示，記通話時可以一次記到整組。' }));
+
+    const members = groupMembers(r);
+    const picked = new Set(members.map((m) => m.id));
+    const chosenBox = el('div', { className: 'chips' });
+    const listBox = el('div', { className: 'group-list' });
+
+    const rowFor = (x) => {
+      const cb = el('input', { type: 'checkbox' });
+      cb.checked = picked.has(x.id);
+      cb.onchange = () => { cb.checked ? picked.add(x.id) : picked.delete(x.id); paintChosen(); };
+      const meta = [x.owner && `負責人 ${x.owner}`, x.keyman && `KEYMAN ${x.keyman}`, x.city].filter(Boolean).join('　');
+      return el('label', { className: 'group-row' }, [cb,
+        el('span', {}, [el('strong', { textContent: x.company }), el('small', { className: 'muted', textContent: meta })])]);
+    };
+    const paintChosen = () => {
+      chosenBox.textContent = '';
+      [...picked].forEach((id) => {
+        const x = state.records.find((y) => y.id === id);
+        if (x) chosenBox.append(el('span', { className: 'chip', textContent: x.company }));
+      });
+      if (!picked.size) chosenBox.append(el('span', { className: 'muted', textContent: '（還沒選任何公司）' }));
+    };
+    const paintList = (q) => {
+      listBox.textContent = '';
+      const terms = q.trim().split(/\s+/).filter(Boolean);
+      const cands = groupCandidates(r);
+      const candIds = new Set(cands.map((x) => x.id));
+      let shown = 0;
+      const show = (x) => { listBox.append(rowFor(x)); shown++; };
+      // 已連結的與同負責人的先列
+      members.forEach(show);
+      if (!terms.length) {
+        cands.filter((x) => !picked.has(x.id)).forEach(show);
+        if (cands.length) listBox.prepend(el('p', { className: 'rule-note', textContent: '同負責人／同 KEYMAN 的公司：' }));
+        else listBox.prepend(el('p', { className: 'rule-note', textContent: '沒有同負責人的公司，請用上面的搜尋框找。' }));
+        return;
+      }
+      allViews().filter((x) => x.id !== r.id && !picked.has(x.id) && terms.every((t) => x.blob.includes(t)))
+        .slice(0, 30).forEach(show);
+      if (!shown) listBox.append(el('p', { className: 'rule-note', textContent: '找不到符合的公司。' }));
+    };
+    const search = el('input', { type: 'search', placeholder: '搜尋公司名稱、負責人、統編…' });
+    search.style.width = "100%";
+    search.oninput = () => paintList(search.value.toLowerCase());
+
+    const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存連結' });
+    const cancel = el('button', { className: 'btn', type: 'button', textContent: '取消' });
+    const unlink = el('button', { className: 'btn', type: 'button', textContent: '解除這家的連結' });
+    unlink.hidden = !r.group;
+    save.onclick = async () => {
+      const ids = [r.id, ...picked];
+      // 把原本同組但這次沒勾的移出去
+      const dropped = members.filter((m) => !picked.has(m.id)).map((m) => m.id);
+      if (dropped.length) await setGroup(dropped, '');
+      if (picked.size) {
+        const group = r.group || `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        await setGroup(ids, group);
+      } else if (r.group) {
+        await setGroup([r.id], '');
+      }
+      $('#editor').hidden = true;
+      toast(picked.size ? `已連結 ${picked.size + 1} 家公司` : '已解除連結');
+      render();
+      openDetail(r.id);
+      scheduleSync();
+    };
+    unlink.onclick = async () => {
+      await setGroup([r.id], '');
+      $('#editor').hidden = true;
+      toast('已解除連結');
+      render();
+      openDetail(r.id);
+      scheduleSync();
+    };
+    cancel.onclick = () => { $('#editor').hidden = true; };
+
+    host.append(el('p', { className: 'muted', textContent: '目前選的：' }), chosenBox, search, listBox,
+      el('div', { className: 'card-actions' }, [save, unlink, cancel]));
+    paintChosen();
+    paintList('');
+    $('#editor').hidden = false;
+    search.focus();
   }
 
   /*
@@ -492,8 +622,13 @@
   function allViews() {
     const key = `${dataVersion}|${todayISO()}`;
     if (viewsKey === key) return viewsCache;
+    const groupCount = new Map();
+    state.userStates.forEach((st, id) => {
+      if (st.group && state.records.some((x) => x.id === id)) groupCount.set(st.group, (groupCount.get(st.group) || 0) + 1);
+    });
     viewsCache = state.records.map((record) => {
       const v = view(record);
+      v.groupSize = v.group ? (groupCount.get(v.group) || 0) : 0;
       v.bucket = dueBucket(v.nextDate);
       v.addedBucket = addedBucket(v.addedDate);
       v.blob = [v.company, v.aliases.join(' '), v.taxId, v.owner, v.keyman, v.industry,
@@ -812,6 +947,7 @@
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
       r.blocked ? el('span', { className: 'badge badge-blocked', textContent: '禁止推廣' }) : '',
       r.dealingKind === 'active' ? el('span', { className: 'badge badge-dealing', textContent: '有往來' }) : '',
+      r.groupSize > 1 ? el('span', { className: 'badge badge-group', textContent: `同老闆 ${r.groupSize} 家` }) : '',
     ].filter(Boolean));
     node.append(top);
 
@@ -1042,6 +1178,33 @@
       body.append(el('p', { className: 'muted', textContent: `電話：${r.phoneRaw}` }));
     }
 
+    // 同一老闆的公司
+    const members = groupMembers(r);
+    {
+      const sec = el('div', { className: 'detail-section group-section' });
+      const head = el('div', { className: 'group-head' }, [el('h3', { textContent: `同一老闆的公司${members.length ? `（${members.length + 1} 家）` : ''}` })]);
+      const linkBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: members.length ? '修改連結' : '連結其他公司' });
+      linkBtn.onclick = () => openGroupEditor(r);
+      head.append(linkBtn);
+      sec.append(head);
+      if (members.length) {
+        const ul = el('ul', { className: 'group-members' });
+        members.forEach((m) => {
+          const a = el('a', { href: '#', textContent: m.company });
+          a.onclick = (e) => { e.preventDefault(); openDetail(m.id); };
+          const bits = [m.nextDate && `下次 ${dateLabel(m.nextDate)}`, OUTCOME_LABEL[m.outcome]].filter(Boolean).join('　');
+          ul.append(el('li', {}, [a, el('small', { className: 'muted', textContent: bits ? `　${bits}` : '' })]));
+        });
+        sec.append(ul);
+      } else {
+        const cands = groupCandidates(r);
+        sec.append(el('p', { className: 'muted', textContent: cands.length
+          ? `名單上還有 ${cands.length} 家同負責人的公司：${cands.slice(0, 3).map((c) => c.company).join('、')}${cands.length > 3 ? '…' : ''}`
+          : '這家還沒連結其他公司。' }));
+      }
+      body.append(sec);
+    }
+
     const dl = el('dl', { className: 'detail-grid' });
     const rows = [
       ['統一編號', r.taxId], ['負責人', r.owner], ['KEYMAN', r.keyman],
@@ -1114,25 +1277,36 @@
         auto = window.Normalize.findFollowUp(text, today);
         if (auto) picked = auto.iso;
       }
-      await window.Store.addLog({
-        recordId: r.id, date: today, text, outcome: outcomeSel.value, createdAt: Date.now(),
-      });
-      await saveState(r.id, {
-        outcome: outcomeSel.value,
-        nextDate: picked || null,
-        lastDate: today,
-      });
+      // 勾了「同時記到整組」就每家各寫一則：任何一家單獨看都要是完整的
+      const targets = [r.id, ...(applyAll.checked ? members.map((m) => m.id) : [])];
+      for (const id of targets) {
+        await window.Store.addLog({
+          recordId: id, date: today, text, outcome: outcomeSel.value, createdAt: Date.now(),
+        });
+        await saveState(id, {
+          outcome: outcomeSel.value,
+          nextDate: picked || null,
+          lastDate: today,
+        });
+      }
       state.logs = await window.Store.allLogs();
-      toast(auto ? `已儲存，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : '已儲存通話紀錄');
+      const extra = targets.length > 1 ? `（同時記到 ${targets.length} 家）` : '';
+      toast(auto ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : `已儲存通話紀錄${extra}`);
       render();
       openDetail(r.id);
       scheduleSync();
     };
+    const applyAll = el('input', { type: 'checkbox', id: 'applyGroup' });
+    applyAll.checked = members.length > 0;
     form.append(memo, el('div', { className: 'row' }, [
       el('span', { className: 'muted', textContent: '結果' }), outcomeSel,
       el('span', { className: 'muted', textContent: '下次聯絡' }), withDateHint(nextInput), save,
     ]));
     form.append(quick);
+    if (members.length) {
+      form.append(el('label', { className: 'apply-group' }, [applyAll,
+        el('span', { textContent: `同時記到同一老闆的其他 ${members.length} 家（${members.map((m) => m.company).join('、')}）` })]));
+    }
     section.append(form);
     body.append(section);
 
@@ -1196,19 +1370,35 @@
           edit.onclick = () => {
             const box = el('textarea', { className: 'paste-box', rows: 3, value: e.text });
             const when = el('input', { type: 'date', value: e.date || todayISO() });
+            // 改紀錄時順便能改下次聯絡日：談話內容改了，約的時間多半也跟著改
+            const nextEdit = el('input', { type: 'date', value: r.nextDate || '' });
             const ok = el('button', { className: 'btn btn-primary btn-tiny', type: 'button', textContent: '儲存' });
             const cancel = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '取消' });
-            const editor = el('div', {}, [box, el('div', { className: 'row' }, [withDateHint(when), ok, cancel])]);
+            const editor = el('div', {}, [box,
+              el('div', { className: 'row' }, [
+                el('span', { className: 'muted', textContent: '紀錄日期' }), withDateHint(when),
+                el('span', { className: 'muted', textContent: '下次聯絡' }), withDateHint(nextEdit),
+                ok, cancel]),
+            ]);
             li.replaceChild(editor, actions);
             box.focus();
             cancel.onclick = () => { li.replaceChild(actions, editor); };
             ok.onclick = async () => {
-              await window.Store.updateLog(e.logId, { text: box.value.trim(), date: when.value || e.date });
+              const text = box.value.trim();
+              await window.Store.updateLog(e.logId, { text, date: when.value || e.date });
               state.logs = await window.Store.allLogs();
+              // 下次聯絡日：有改就照改的；沒填的話從內容找「約10/20再拜訪」這種寫法
+              let next = nextEdit.value || null;
+              let auto = null;
+              if (!next && text) {
+                auto = window.Normalize.findFollowUp(text, todayISO());
+                if (auto) next = auto.iso;
+              }
+              if ((next || null) !== (r.nextDate || null)) await saveState(r.id, { nextDate: next });
               touch();
               render();
               openDetail(r.id);
-              toast('已更新這則紀錄');
+              toast(auto ? `已更新，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : '已更新這則紀錄');
               scheduleSync();
             };
           };
