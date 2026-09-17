@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-52';
+  const APP_VERSION = '20260916-53';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -124,7 +124,7 @@
       // 洽談狀態每次都從訪談內容重新判讀，不用匯入時存下來的那份：
       // 判讀規則會改（例如「最上面沒日期＝未撥打」），改了要對已經在名單上的
       // 客戶也生效，不能只對之後匯入的有效。使用者自己記的結果照樣優先。
-      outcome: (mine && mine.outcome) || (lastLog && lastLog.outcome) || window.Normalize.guessOutcome(base.notesRaw || ''),
+      outcome: window.Normalize.normalizeOutcome((mine && mine.outcome) || (lastLog && lastLog.outcome) || window.Normalize.guessOutcome(base.notesRaw || '')),
       starred: !!(mine && mine.starred),
       edited: !!edits,
       group: (mine && mine.group) || '',
@@ -888,7 +888,7 @@
     const mine = state.logs.filter((l) => l.recordId === r.id).sort((a, b) => b.createdAt - a.createdAt)[0];
     let latest = fromFile;
     if (mine && (!fromFile || !fromFile.date || (mine.date || '') >= fromFile.date)) {
-      latest = { text: mine.text || `（${OUTCOME_LABEL[mine.outcome] || ''}）` };
+      latest = { text: mine.text || `（${window.Normalize.outcomeLabel(mine.outcome)}）` };
     }
     if (latest) node.append(el('p', { className: 'card-notes', textContent: latest.text }));
     if (r.phones.length) {
@@ -969,7 +969,6 @@
       ['今日到期', buckets.today || 0],
       ['一週內', buckets.week || 0],
       ['本機通話紀錄', state.logs.length],
-      ['已約訪／有意願', all.filter((r) => ['meeting', 'interested'].includes(r.outcome)).length],
     ];
     const row = el('div', { className: 'stat-row' });
     cards.forEach(([label, value]) => row.append(
@@ -1104,7 +1103,7 @@
         members.forEach((m) => {
           const a = el('a', { href: '#', textContent: m.company });
           a.onclick = (e) => { e.preventDefault(); openDetail(m.id); };
-          const bits = [m.nextDate && `下次 ${dateLabel(m.nextDate)}`, OUTCOME_LABEL[m.outcome]].filter(Boolean).join('　');
+          const bits = [m.nextDate && `下次 ${dateLabel(m.nextDate)}`, window.Normalize.outcomeLabel(m.outcome)].filter(Boolean).join('　');
           ul.append(el('li', {}, [a, el('small', { className: 'muted', textContent: bits ? `　${bits}` : '' })]));
         });
         sec.append(ul);
@@ -1152,7 +1151,7 @@
     const form = el('div', { className: 'logform' });
     const memo = el('textarea', { placeholder: '這通電話聊了什麼？（例如：總機轉接財務長，約下週三拜訪）' });
     const outcomeSel = el('select');
-    ['noanswer', 'contacted', 'interested', 'meeting', 'declined', 'blocked'].forEach((k) => {
+    ['noanswer', 'contacted', 'blocked'].forEach((k) => {
       outcomeSel.append(el('option', { value: k, textContent: OUTCOME_LABEL[k] }));
     });
     outcomeSel.value = r.outcome === 'new' ? 'noanswer' : r.outcome;
@@ -1262,7 +1261,7 @@
     const mineLogs = state.logs
       .filter((l) => l.recordId === r.id)
       .sort((a, b) => b.createdAt - a.createdAt)
-      .map((l) => ({ date: l.date, text: l.text || `（${OUTCOME_LABEL[l.outcome] || ''}）`, mine: true, logId: l.logId }));
+      .map((l) => ({ date: l.date, text: l.text || `（${window.Normalize.outcomeLabel(l.outcome)}）`, mine: true, logId: l.logId }));
     const entries = mineLogs.concat(r.timeline || []);
     if (entries.length) {
       const sec = el('div', { className: 'detail-section' }, [el('h3', { textContent: `訪談紀錄（${entries.length}）` })]);
@@ -2567,7 +2566,7 @@ export default {
     allViews().forEach((r) => {
       const mine = state.logs.filter((l) => l.recordId === r.id)
         .sort((a, b) => b.createdAt - a.createdAt)
-        .map((l) => `${l.date ? rocSlash(l.date) : ''} [${OUTCOME_LABEL[l.outcome] || ''}] ${l.text}`.trim());
+        .map((l) => `${l.date ? rocSlash(l.date) : ''} [${window.Normalize.outcomeLabel(l.outcome)}] ${l.text}`.trim());
       const notes = [...mine, r.notesRaw || ''].filter(Boolean).join('\n');
       rows.push([r.company, r.taxId, r.grade, r.founded, r.capital, r.phoneRaw, r.owner, r.keyman, r.industry,
         r.nextDate ? ymdShort(r.nextDate) : '', r.lastDate ? ymdShort(r.lastDate) : '', notes,

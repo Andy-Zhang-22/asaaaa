@@ -435,15 +435,23 @@
   }
 
   /** 從訪談內容推出一個粗略的洽談狀態，讓業務可以快速篩。 */
+  /*
+   * 洽談狀態只有四種：未撥打、未接通、已聯絡、禁止推廣。
+   * 曾經有「有意願」「已約訪」「婉拒」三種，使用者說談過就是談過，全部併進已聯絡；
+   * 舊資料、舊紀錄、母檔裡的「[婉拒]」標記都照這張表換算。
+   */
   const OUTCOME_LABEL = {
     new: '未撥打',
     noanswer: '未接通',
     contacted: '已聯絡',
-    interested: '有意願',
-    meeting: '已約訪',
-    declined: '婉拒',
     blocked: '禁止推廣',
   };
+  const LEGACY_OUTCOME = {
+    interested: 'contacted', meeting: 'contacted', declined: 'contacted',
+    有意願: 'contacted', 已約訪: 'contacted', 婉拒: 'contacted',
+  };
+  const normalizeOutcome = (k) => LEGACY_OUTCOME[k] || k;
+  const outcomeLabel = (k) => OUTCOME_LABEL[normalizeOutcome(k)] || k || '';
 
   function guessOutcome(notes) {
     const t = squash(notes);
@@ -455,13 +463,13 @@
     // 網站匯出（或使用者母檔）的寫法是「日期 [結果] 內容」，方括號裡就是結果，直接採用
     const tagged = entries.length && String(entries[0].text || '').match(/^\s*[\[［]([^\]］]{2,5})[\]］]/);
     if (tagged) {
-      const key = Object.keys(OUTCOME_LABEL).find((k) => OUTCOME_LABEL[k] === tagged[1].trim());
+      const label = tagged[1].trim();
+      const key = Object.keys(OUTCOME_LABEL).find((k) => OUTCOME_LABEL[k] === label) || LEGACY_OUTCOME[label];
       if (key) return key;
     }
     if (/禁止推廣|禁推|別再撥打|不要再打|打死不想/.test(t)) return 'blocked';
-    if (/約訪|拜訪|約時間|約下|約他|點到公司/.test(t)) return 'meeting';
-    if (/資金需求|有興趣|有些興趣|想了解|報價|額度需求|請他提供資料/.test(t)) return 'interested';
-    if (/拒絕|不需要|用不到|用不上|沒機會|沒有需求|秒拒|不考慮/.test(t)) return 'declined';
+    // 有講到話（約訪、有興趣、拒絕都算）就是已聯絡，即使後面寫了「再撥打」
+    if (/約訪|拜訪|約時間|約下|約他|點到公司|資金需求|有興趣|有些興趣|想了解|報價|額度需求|請他提供資料|拒絕|不需要|用不到|用不上|沒機會|沒有需求|秒拒|不考慮/.test(t)) return 'contacted';
     if (/未接|沒接|沒人接|無人接|語音|忙線|晚點再撥|再撥打/.test(t)) return 'noanswer';
     return 'contacted';
   }
@@ -1297,6 +1305,6 @@
     looksLikeAddress,
     validateAddress: (t) => VALIDATORS.address(t) || '',
     INTERNAL_UNITS, PEER_UNITS, BANKS,
-    parseAddress, guessOutcome, OUTCOME_LABEL, makeId, toHalfWidth,
+    parseAddress, guessOutcome, OUTCOME_LABEL, normalizeOutcome, outcomeLabel, makeId, toHalfWidth,
   };
 })(window);
