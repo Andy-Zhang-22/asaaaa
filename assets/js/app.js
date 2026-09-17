@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-41';
+  const APP_VERSION = '20260916-42';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -102,7 +102,10 @@
       ...base,
       nextDate: (mine && mine.nextDate) || fileNext,
       lastDate: (mine && mine.lastDate) || base.lastDate,
-      outcome: (mine && mine.outcome) || base.outcome,
+      // 洽談狀態每次都從訪談內容重新判讀，不用匯入時存下來的那份：
+      // 判讀規則會改（例如「最上面沒日期＝未撥打」），改了要對已經在名單上的
+      // 客戶也生效，不能只對之後匯入的有效。使用者自己記的結果照樣優先。
+      outcome: (mine && mine.outcome) || window.Normalize.guessOutcome(base.notesRaw || ''),
       starred: !!(mine && mine.starred),
       edited: !!edits,
       group: (mine && mine.group) || '',
