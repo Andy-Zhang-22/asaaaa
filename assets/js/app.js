@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-58';
+  const APP_VERSION = '20260916-59';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
@@ -530,9 +530,10 @@
   function capitalScale(record) {
     const value = Number(String(record.capital || '').replace(/[^\d.]/g, ''));
     if (!value) return '';
-    const micro = window.Rules ? window.Rules.MICRO_CAPITAL_LIMIT : 10000;
+    const micro = window.Rules ? window.Rules.MICRO_CAPITAL_LIMIT : 5000;
     const large = window.Rules ? window.Rules.LARGE_CAPITAL_LIMIT : 500000;
-    if (value <= micro) return '微企範疇';
+    // 微企：未達 5,000 仟元（5,000 本身算一般組）
+    if (value < micro) return '微企範疇';
     // 大企部：資本額達 500,000 仟元（含）
     if (value >= large) return '大企部範疇';
     return '一般組範疇';
