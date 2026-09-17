@@ -414,6 +414,7 @@ button, input, select { font: inherit; color: inherit; }
 .badge-edited { border-color: var(--warn); color: var(--warn); }
 /* 同一老闆的公司 */
 .badge-group { border-color: var(--primary); color: var(--primary); }
+.badge-visited { border-color: var(--ok); color: var(--ok); }
 .group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .group-head h3 { margin: 0; }
 .group-members { margin: 6px 0 0; padding-left: 18px; }

@@ -1231,7 +1231,58 @@
     return out;
   }
 
+  /* ------------------------------------------------------------------
+   * 有沒有實際拜訪過
+   *
+   * 業務要分「打過電話」跟「人真的到過公司」。訪談內容裡拜訪的寫法很固定：
+   * 「跟陳老闆拜訪」「拜訪薛老闆」「現場拜訪」「到現場才知道」「12/10拜訪蔡總」。
+   * 要小心的是兩種假陽性：
+   *   - 還沒發生的：「約下週拜訪」「明日拜訪時間」「讓我去拜訪」「歡迎拜訪」。
+   *   - 別人去的：「大企部的同仁昨天才去拜訪」「之前有同仁過去拜訪過」「沒人去拜訪過」。
+   * 所以命中的那一段本身不能有「約、再、明天」這類字，前面十幾個字也不能是
+   * 同仁、學長、中租這些別人；「拜訪過他」是別人拜訪他，也不算。
+   * ------------------------------------------------------------------ */
+  const VISIT_RES = [
+    // 跟陳老闆拜訪、跟古先生(Jonny)拜訪、帶協理去跟財務長拜訪
+    /跟[^，。,；;\n]{1,14}?(?:去)?拜訪/g,
+    // 句首（或日期、括號之後）的「拜訪薛老闆」「拜訪游青山」「拜訪，主要是賣設備」
+    /(?:^|[\s，。,；;\d)）])拜訪(?=[，,。]|[\u4e00-\u9fa5A-Za-z(（]{1,8}(?:[，,。(（\s]|$))/g,
+    // 「小老闆拜訪，」「財務長(嚴)拜訪，」：人物接著拜訪再接標點
+    /(?:老闆|總|董|經理|小姐|先生|財務長|協理|副總|會計|[)）])\s*拜訪(?=[，,。]|$)/g,
+    /(?:現場|實地|親自|登門)拜訪|到現場|現場留|拜訪過(?!他|她|你)|已拜訪|已經拜訪/g,
+  ];
+  // 命中那一段裡有這些字就是還沒發生（約拜訪、再拜訪、明日拜訪時間）
+  const VISIT_FUTURE_RE = /約|再|明天|明日|下周|下週|下次|時間|要|想|可以|能|先|歡迎|方便|結束/;
+  // 命中前面幾個字是這些就是別人去的、或被拒絕的
+  const VISIT_OTHERS_RE = /同仁|學長|學姊|業務|主管|部的|中租|有人|沒人|其他|別的|他們|親自|哥|讓我|不給|沒空|歡迎|不用|之前有|曾有|拒絕|不讓|城東|城北|大企|微企|融專/;
+  // 命中前面緊接著的幾個字若是這些，也是還沒發生（明天拜訪結束後、約周五拜訪）
+  const VISIT_PLAN_BEFORE_RE = /約|明天|明日|下周|下週|下禮拜|再|先|想|要|會|可以/;
+  function detectVisit(notesRaw) {
+    const entries = parseNotes(notesRaw);
+    for (const entry of entries) {
+      const text = toHalfWidth(entry.text || '');
+      for (const re of VISIT_RES) {
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          const hit = m[0];
+          if (VISIT_FUTURE_RE.test(hit)) continue;
+          const before = text.slice(Math.max(0, m.index - 14), m.index);
+          if (VISIT_OTHERS_RE.test(before)) continue;
+          if (VISIT_PLAN_BEFORE_RE.test(text.slice(Math.max(0, m.index - 6), m.index))) continue;
+          return {
+            visited: true, date: entry.date || null,
+            snippet: text.slice(Math.max(0, m.index - 12), m.index + hit.length + 20).replace(/\s+/g, ' ').trim(),
+          };
+        }
+      }
+    }
+    return { visited: false, date: null, snippet: '' };
+  }
+  const VISIT_LABEL = { yes: '有拜訪', no: '無拜訪' };
+
   global.Normalize = {
+    detectVisit, VISIT_LABEL,
     parseKeyValue,
     toRecords, detectHeader, parseDate, extractPhones, parseNotes, splitCompanyNames,
     parseCsv, parseDelimited, detectDelimiter, parsePasted, STANDARD_HEADER,
