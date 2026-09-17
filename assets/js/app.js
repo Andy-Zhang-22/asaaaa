@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-49';
+  const APP_VERSION = '20260916-50';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -2531,32 +2531,63 @@ export default {
   }
 
   /*
-   * 匯出 Excel。
-   *
-   * 欄位順序照使用者自己的名單母檔（也就是匯入時認得的標準欄位）排，匯出的檔案
-   * 在 Excel 裡改完可以直接再拖回網站更新。網站上記的通話寫進「訪談內容」最前面，
-   * 格式跟母檔一樣是「日期 [結果] 內容」，一行一則、新的在上。
-   * 資本額一律仟元；日期一律 yyyy/mm/dd。
+   * 匯出 Excel，做成使用者名單母檔的樣子：
+   *   - 15 欄、欄名一模一樣（含「地址(至少填到行政區/路名)」「名單新增日期(必填)」），
+   *     改完可以直接再拖回網站。
+   *   - 表頭黃底粗體置中、全部細框線、自動換行、垂直置中；訪談內容與地址靠左。
+   *   - 日期欄 yyyy/m/d；訪談內容裡的日期用民國年（母檔的寫法），網站上記的通話
+   *     寫成「115/09/17 [結果] 內容」放最前面、新的在上。資本額仟元。
+   *   - 列高依訪談內容行數估算：Excel 開檔不會自動調整程式產生的列高，不設的話
+   *     長篇訪談只看得到第一行。
    */
+  const EXPORT_HEAD = ['公司名稱', '統編', '分級', '成立年', '資本額', '電話', '負責人', 'KEYMAN', '產業別',
+    '下次聯絡日', '最近聯絡日', '訪談內容', '地址(至少填到行政區/路名)', '名單新增日期(必填)', '國家'];
+  const EXPORT_WIDTHS = [22, 10, 5, 7, 9, 18, 8, 12, 14, 11, 11, 44, 30, 13, 6];
+  const EXPORT_LEFT = new Set([11, 12]);   // 訪談內容、地址靠左，其餘置中
+
+  const rocSlash = (iso) => { const [y, m, d] = String(iso).split('-'); return `${+y - 1911}/${m}/${d}`; };
+  const ymdShort = (iso) => { const [y, m, d] = String(iso).split('-'); return `${y}/${+m}/${+d}`; };
+
   function exportXlsx() {
     if (!window.XLSX) { toast('Excel 元件沒有載入，請重新整理頁面再試'); return; }
-    const head = ['公司名稱', '統編', '分級', '成立年', '資本額(仟元)', '電話', '負責人', 'KEYMAN', '產業別',
-      '下次聯絡日', '最近聯絡日', '訪談內容', '地址', '名單新增日期', '國家',
-      '洽談狀態', '往來情形', '關係企業', '名單來源'];
-    const rows = [head];
+    const rows = [EXPORT_HEAD];
     allViews().forEach((r) => {
       const mine = state.logs.filter((l) => l.recordId === r.id)
         .sort((a, b) => b.createdAt - a.createdAt)
-        .map((l) => `${dateLabel(l.date)} [${OUTCOME_LABEL[l.outcome] || ''}] ${l.text}`);
+        .map((l) => `${l.date ? rocSlash(l.date) : ''} [${OUTCOME_LABEL[l.outcome] || ''}] ${l.text}`.trim());
       const notes = [...mine, r.notesRaw || ''].filter(Boolean).join('\n');
       rows.push([r.company, r.taxId, r.grade, r.founded, r.capital, r.phoneRaw, r.owner, r.keyman, r.industry,
-        r.nextDate ? dateLabel(r.nextDate) : '', r.lastDate ? dateLabel(r.lastDate) : '', notes,
-        r.address, r.addedDate ? dateLabel(r.addedDate) : '', r.country || '台灣',
-        OUTCOME_LABEL[r.outcome] || r.outcome, window.Normalize.DEALING_LABEL[r.dealingKind] || '',
-        r.aliases.join('、'), r.source]);
+        r.nextDate ? ymdShort(r.nextDate) : '', r.lastDate ? ymdShort(r.lastDate) : '', notes,
+        r.address, r.addedDate ? ymdShort(r.addedDate) : '', r.country || '台灣']);
     });
     const ws = window.XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [26, 10, 5, 8, 12, 18, 10, 10, 18, 11, 11, 60, 36, 12, 6, 9, 12, 20, 22].map((w) => ({ wch: w }));
+    const thin = { style: 'thin', color: { rgb: '000000' } };
+    const border = { top: thin, bottom: thin, left: thin, right: thin };
+    const headStyle = {
+      font: { bold: true, sz: 10 }, fill: { patternType: 'solid', fgColor: { rgb: 'FFC000' } },
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border,
+    };
+    const bodyStyle = (col) => ({
+      font: { sz: 9 },
+      alignment: { horizontal: EXPORT_LEFT.has(col) ? 'left' : 'center', vertical: 'center', wrapText: true },
+      border,
+    });
+    const range = window.XLSX.utils.decode_range(ws['!ref']);
+    for (let R = range.s.r; R <= range.e.r; R++) {
+      for (let C = 0; C < EXPORT_HEAD.length; C++) {
+        const addr = window.XLSX.utils.encode_cell({ r: R, c: C });
+        if (!ws[addr]) ws[addr] = { t: 's', v: '' };
+        ws[addr].s = R === 0 ? headStyle : bodyStyle(C);
+      }
+    }
+    ws['!cols'] = EXPORT_WIDTHS.map((w) => ({ wch: w }));
+    // 列高：看每格會折成幾行（訪談內容 44 字寬、地址 30 字寬），一行約 12pt
+    ws['!rows'] = rows.map((row, i) => {
+      if (i === 0) return { hpt: 30 };
+      const lines = Math.max(1, ...row.map((v, c) => String(v == null ? '' : v).split('\n')
+        .reduce((n, line) => n + Math.max(1, Math.ceil(line.length / (EXPORT_WIDTHS[c] * 0.9))), 0)));
+      return { hpt: Math.min(400, 6 + lines * 12) };
+    });
     const wb = window.XLSX.utils.book_new();
     window.XLSX.utils.book_append_sheet(wb, ws, '名單');
     const out = window.XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
