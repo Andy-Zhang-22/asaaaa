@@ -657,13 +657,14 @@
     const diff = -dayDiff(iso);          // dayDiff 是「未來還有幾天」，這裡要反過來
     if (diff < 0) return '未填';         // 日期在未來，多半是解析錯的
     if (diff === 0) return '今天新增';
+    if (diff === 1) return '昨天新增';
     if (diff <= 7) return '7 天內';
     if (diff <= 30) return '30 天內';
     if (diff <= 365) return '一年內';
     return '更早';
   }
 
-  const ADDED_ORDER = ['今天新增', '7 天內', '30 天內', '一年內', '更早', '未填'];
+  const ADDED_ORDER = ['今天新增', '昨天新增', '7 天內', '30 天內', '一年內', '更早', '未填'];
 
   /*
    * 聯絡時程改成「自選日期區間」。
@@ -849,7 +850,9 @@
     chips($('#fltSource'), 'source', tally((r) => r.source), state.filters.source, (v) => v.replace(/\.pdf$/i, ''));
     chips($('#fltGrade'), 'grade', tally((r) => r.grade || '未分級'), state.filters.grade);
     // 禁打以 blocked 為準：outcome 可能已經被後來的通話紀錄蓋掉了
-    chips($('#fltOutcome'), 'outcome', tally((r) => (r.blocked ? 'blocked' : r.outcome)),
+    // 順序固定、每一種都顯示（含 0 筆），「未撥打」才不會因為暫時沒有而消失
+    const outcomeTally = new Map(tally((r) => (r.blocked ? 'blocked' : r.outcome)));
+    chips($('#fltOutcome'), 'outcome', Object.keys(OUTCOME_LABEL).map((k) => [k, outcomeTally.get(k) || 0]),
       state.filters.outcome, (v) => OUTCOME_LABEL[v] || v);
     chips($('#fltCity'), 'city', tally((r) => r.city || '其他').slice(0, 12), state.filters.city);
     chips($('#fltScale'), 'scale', tally((r) => r.scale || '未填資本額'), state.filters.scale);
@@ -864,9 +867,8 @@
     // 順序固定成由新到舊，不依筆數排——「今天新增」永遠在第一個位置才好按
     const addedCounts = new Map(ADDED_ORDER.map((k) => [k, 0]));
     all.forEach((r) => { addedCounts.set(r.addedBucket, (addedCounts.get(r.addedBucket) || 0) + 1); });
-    chips($('#fltAdded'), 'added',
-      ADDED_ORDER.filter((k) => addedCounts.get(k)).map((k) => [k, addedCounts.get(k)]),
-      state.filters.added);
+    // 每一段固定都顯示（含 0 筆）：今天、昨天沒新名單時按鈕消失，看起來像功能壞了
+    chips($('#fltAdded'), 'added', ADDED_ORDER.map((k) => [k, addedCounts.get(k)]), state.filters.added);
 
     const industries = [...new Set(all.map((r) => r.industry).filter(Boolean))].sort();
     $('#industryList').textContent = '';
