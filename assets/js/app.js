@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-42';
+  const APP_VERSION = '20260916-43';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -90,8 +90,27 @@
   }
 
   /** 使用者自己記的狀態會覆蓋 PDF 裡的原始值。 */
+  // 每筆客戶最新的一則通話紀錄（依建立時間），跟著資料版本快取
+  let lastLogKey = '';
+  let lastLogMap = new Map();
+  function latestLog(recordId) {
+    const key = String(dataVersion);
+    if (lastLogKey !== key) {
+      lastLogKey = key;
+      lastLogMap = new Map();
+      state.logs.forEach((l) => {
+        const seen = lastLogMap.get(l.recordId);
+        if (!seen || (l.createdAt || 0) > (seen.createdAt || 0)) lastLogMap.set(l.recordId, l);
+      });
+    }
+    return lastLogMap.get(recordId) || null;
+  }
+
   function view(record) {
     const mine = state.userStates.get(record.id);
+    // 狀態（結果、最近聯絡日）跟通話紀錄是分開存的；狀態若在同步時弄丟了，
+    // 紀錄本身通常還在，就從最新一則紀錄把結果與最近聯絡日補回來。
+    const lastLog = latestLog(record.id);
     const edits = (mine && mine.edits) || null;
     const base = edits ? { ...record, ...edits } : record;
     // 檔案裡「下次聯絡日」跟「最近聯絡日」填同一天，是使用者的習慣寫法，
@@ -101,11 +120,11 @@
     const out = {
       ...base,
       nextDate: (mine && mine.nextDate) || fileNext,
-      lastDate: (mine && mine.lastDate) || base.lastDate,
+      lastDate: (mine && mine.lastDate) || (lastLog && lastLog.date) || base.lastDate,
       // 洽談狀態每次都從訪談內容重新判讀，不用匯入時存下來的那份：
       // 判讀規則會改（例如「最上面沒日期＝未撥打」），改了要對已經在名單上的
       // 客戶也生效，不能只對之後匯入的有效。使用者自己記的結果照樣優先。
-      outcome: (mine && mine.outcome) || window.Normalize.guessOutcome(base.notesRaw || ''),
+      outcome: (mine && mine.outcome) || (lastLog && lastLog.outcome) || window.Normalize.guessOutcome(base.notesRaw || ''),
       starred: !!(mine && mine.starred),
       edited: !!edits,
       group: (mine && mine.group) || '',
