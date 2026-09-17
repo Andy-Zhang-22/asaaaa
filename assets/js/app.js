@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-35';
+  const APP_VERSION = '20260916-36';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -2358,11 +2358,24 @@ export default {
         }
       }
       if (act === 'wipe') {
-        if (confirm('確定要清除這台裝置上的所有名單與通話紀錄嗎？此動作無法復原。')) {
-          await window.Store.wipe();
-          await reload(); render();
-          toast('已清除');
-        }
+        const synced = window.DriveSync.isConfigured();
+        const total = state.records.length;
+        const logs = state.logs.length;
+        if (!total && !logs) { toast('名單已經是空的'); return; }
+        const ok1 = confirm(`確定要清空所有名單嗎？\n\n共 ${total} 筆客戶、${logs} 則通話紀錄。`
+          + (synced ? '\n\n你有開雲端同步：清除會傳到所有裝置，雲端那份也會一起清掉。' : '')
+          + '\n\n此動作無法復原。按確定後會先自動下載一份備份。');
+        if (!ok1) return;
+        // 不可逆又會傳到所有裝置的動作，先留一份備份再動手
+        download(`電話推廣名單備份_清空前_${todayISO()}.json`,
+          JSON.stringify(await window.Store.exportAll()), 'application/json');
+        const ok2 = confirm('備份已開始下載。\n\n再確認一次：真的要清空全部名單嗎？');
+        if (!ok2) return;
+        const gone = await window.Store.wipe();
+        await reload(); render();
+        toast(`已清除 ${gone.records} 筆客戶、${gone.logs} 則通話紀錄`);
+        // 立刻同步，讓墓碑上雲端；不然要等下一次自動同步，中間別台裝置會先把舊資料推上去
+        if (synced) runSync({ quiet: true });
       }
     };
     $('#jsonPick').onchange = async (e) => {
