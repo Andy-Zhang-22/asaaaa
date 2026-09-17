@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-43';
+  const APP_VERSION = '20260916-44';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -954,7 +954,7 @@
       r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
       r.blocked ? el('span', { className: 'badge badge-blocked', textContent: '禁止推廣' }) : '',
-      r.dealingKind === 'active' ? el('span', { className: 'badge badge-dealing', textContent: '有往來' }) : '',
+      r.dealingKind === 'active' ? el('span', { className: 'badge badge-dealing', textContent: '中租往來' }) : '',
       r.groupSize > 1 ? el('span', { className: 'badge badge-group', textContent: `同老闆 ${r.groupSize} 家` }) : '',
     ].filter(Boolean));
     node.append(top);
@@ -1321,8 +1321,8 @@
       sec.append(el('p', { className: `dealing-verdict dealing-${r.dealingKind}` }, [
         el('strong', { textContent: window.Normalize.DEALING_LABEL[r.dealingKind] }),
         el('span', { className: 'muted', textContent: r.dealingKind === 'active'
-          ? `（最新一期${r.dealing.date ? ` ${r.dealing.date} ` : ''}有提到本餘或還在往來）`
-          : `（最新一期${r.dealing.ended ? '寫到合作已結束' : '沒提到本餘或往來'}）` }),
+          ? `（最新一期${r.dealing.date ? ` ${r.dealing.date} ` : ''}有提到本餘或還在跟中租往來）`
+          : `（最新一期${r.dealing.ended ? '寫到合作已結束' : '沒提到本餘或跟中租往來'}）` }),
       ]));
       if (r.dealing.snippet) {
         sec.append(el('p', { className: 'relation-snippet', textContent: `「…${r.dealing.snippet}…」` }));
