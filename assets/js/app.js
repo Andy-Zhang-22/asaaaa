@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-55';
+  const APP_VERSION = '20260916-56';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -133,7 +133,18 @@
     // 順序不能反過來：服務區域是從地址拆出來的縣市與行政區算的，先算就會拿到
     // 編輯前的舊縣市，改了地址之後篩選與卡片標記都不會跟著動。
     if (edits && edits.phoneRaw !== undefined) out.phones = window.Normalize.extractPhones(edits.phoneRaw);
-    if (edits && edits.address !== undefined) Object.assign(out, window.Normalize.parseAddress(edits.address));
+    // 登記地址／實際地址：舊資料一格裡寫「104登記：… / 公司登記：…」的在這裡拆開；
+    // 實際地址空著就用登記地址。縣市、行政區看實際地址。
+    {
+      const split = window.Normalize.splitAddress(base.address);
+      out.addressRegistered = split.registered;
+      out.addressActual = String(base.addressActual || '').trim() || split.actual;
+      if (edits && edits.address !== undefined) out.addressRegistered = String(edits.address || '').trim();
+      if (edits && edits.addressActual !== undefined) out.addressActual = String(edits.addressActual || '').trim();
+      if (!out.addressActual) out.addressActual = out.addressRegistered;
+      out.address = out.addressRegistered;
+      Object.assign(out, window.Normalize.parseAddress(out.addressActual || out.addressRegistered));
+    }
 
     out.scale = capitalScale(out);
     out.territory = territory(out);
@@ -542,7 +553,7 @@
       v.bucket = dueBucket(v.nextDate);
       v.addedBucket = addedBucket(v.addedDate);
       v.blob = [v.company, v.aliases.join(' '), v.taxId, v.owner, v.keyman, v.industry,
-        v.phoneRaw, v.address, v.notesRaw, v.source].join(' ').toLowerCase();
+        v.phoneRaw, v.address, v.addressActual, v.notesRaw, v.source].join(' ').toLowerCase();
       return v;
     });
     viewsKey = key;
@@ -1132,16 +1143,19 @@
           ? '範圍外——依【一般組】行銷規範第(三)項應採協銷辦理'
           : r.territory }));
     }
-    if (r.address) {
-      dl.append(el('dt', { textContent: '地址' }));
+    const addrRow = (label, value, note) => {
+      if (!value) return;
+      dl.append(el('dt', { textContent: label }));
       const dd = el('dd');
-      const link = el('a', {
-        href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.address)}`,
-        target: '_blank', rel: 'noopener', textContent: r.address,
-      });
-      dd.append(link);
+      dd.append(el('a', {
+        href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(value)}`,
+        target: '_blank', rel: 'noopener', textContent: value,
+      }));
+      if (note) dd.append(el('span', { className: 'muted', textContent: `　${note}` }));
       dl.append(dd);
-    }
+    };
+    addrRow('登記地址', r.addressRegistered);
+    addrRow('實際地址', r.addressActual, r.addressActual === r.addressRegistered ? '（同登記地址）' : '');
     // 名單來源放最後，看的頻率最低
     if (r.source) dl.append(el('dt', { textContent: '名單來源' }), el('dd', { textContent: r.source }));
     body.append(dl);
@@ -1362,7 +1376,8 @@
     ['owner', '負責人', 'text'],
     ['keyman', 'KEYMAN', 'text'],
     ['industry', '產業別', 'text'],
-    ['address', '地址', 'textarea'],
+    ['address', '登記地址', 'textarea'],
+    ['addressActual', '實際地址（空著就同登記地址）', 'textarea'],
   ];
 
   /** 產生編輯表單，回傳 { node, read }。 */
@@ -1411,7 +1426,7 @@
       textContent: '修改內容會蓋在原始名單之上。重新匯入同一份 PDF 不會覆蓋你改過的欄位，'
         + '也會透過雲端同步帶到其他裝置。' }));
 
-    const form = editForm(r);
+    const form = editForm({ ...r, addressActual: r.addressActual === r.addressRegistered ? '' : r.addressActual });
     host.append(form.node);
 
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存' });
@@ -1494,10 +1509,10 @@
         phoneRaw: v.phoneRaw, phones: window.Normalize.extractPhones(v.phoneRaw),
         owner: v.owner, keyman: v.keyman, industry: v.industry,
         nextDate: v.nextDate, lastDate: null, addedDate: todayISO(), country: '台灣',
-        address: v.address, notesRaw: '', timeline: [], outcome: 'new',
+        address: v.address, addressActual: v.addressActual || v.address, notesRaw: '', timeline: [], outcome: 'new',
         importedAt: Date.now(),
       };
-      Object.assign(record, window.Normalize.parseAddress(v.address));
+      Object.assign(record, window.Normalize.parseAddress(v.addressActual || v.address));
       await window.Store.saveRecords([record]);
       await reload();
       closeOverlays();
@@ -2397,13 +2412,14 @@ export default {
 
     const FIELDS = [
       ['company', '公司名稱'], ['taxId', '統一編號'], ['owner', '負責人'], ['capital', '資本額（仟元）'],
-      ['founded', '成立年'], ['phone', '電話'], ['contact', '聯絡人'], ['industry', '產業別'], ['address', '地址'],
+      ['founded', '成立年'], ['phone', '電話'], ['contact', '聯絡人'], ['industry', '產業別'],
+      ['addressActual', '實際地址（104）'], ['address', '登記地址（商工登記）'],
     ];
     const rows = companies.map((p) => ({
       p,
       values: {
         company: p.company, taxId: '', owner: '', capital: p.capital, founded: p.founded,
-        phone: p.phone, contact: p.contact, industry: p.desc || p.industry, address: p.address,
+        phone: p.phone, contact: p.contact, industry: p.desc || p.industry, addressActual: p.address, address: p.address,
       },
       registry: null, inputs: {}, status: null,
     }));
@@ -2413,7 +2429,7 @@ export default {
       const card = el('div', { className: 'import-preview shot-row' });
       const grid = el('div', { className: 'shot-grid' });
       FIELDS.forEach(([key, label]) => {
-        const input = key === 'address' ? el('textarea', { rows: 2, value: row.values[key] || '' })
+        const input = /address/.test(key) ? el('textarea', { rows: 2, value: row.values[key] || '' })
           : el('input', { type: 'text', value: row.values[key] || '' });
         input.dataset.field = key;
         row.inputs[key] = input;
@@ -2496,9 +2512,9 @@ export default {
           phoneRaw: v.phone, phones: window.Normalize.extractPhones(v.phone),
           owner: v.owner, keyman: v.contact, industry: v.industry,
           nextDate: null, lastDate: null, addedDate: today, country: '台灣',
-          address: v.address, notesRaw: notes, importedAt: Date.now(),
+          address: v.address, addressActual: v.addressActual || v.address, notesRaw: notes, importedAt: Date.now(),
         };
-        Object.assign(record, window.Normalize.parseAddress(v.address));
+        Object.assign(record, window.Normalize.parseAddress(v.addressActual || v.address));
         record.timeline = window.Normalize.parseNotes(notes);
         record.outcome = window.Normalize.guessOutcome(notes);
         return record;
@@ -2677,9 +2693,9 @@ export default {
    *     長篇訪談只看得到第一行。
    */
   const EXPORT_HEAD = ['公司名稱', '統編', '分級', '成立年', '資本額', '電話', '負責人', 'KEYMAN', '產業別',
-    '下次聯絡日', '最近聯絡日', '訪談內容', '地址(至少填到行政區/路名)', '名單新增日期(必填)', '國家'];
-  const EXPORT_WIDTHS = [22, 10, 5, 7, 9, 18, 8, 12, 14, 11, 11, 44, 30, 13, 6];
-  const EXPORT_LEFT = new Set([11, 12]);   // 訪談內容、地址靠左，其餘置中
+    '下次聯絡日', '最近聯絡日', '訪談內容', '地址(至少填到行政區/路名)', '名單新增日期(必填)', '國家', '實際地址'];
+  const EXPORT_WIDTHS = [22, 10, 5, 7, 9, 18, 8, 12, 14, 11, 11, 44, 30, 13, 6, 30];
+  const EXPORT_LEFT = new Set([11, 12, 15]);   // 訪談內容、地址靠左，其餘置中
 
   const rocSlash = (iso) => { const [y, m, d] = String(iso).split('-'); return `${+y - 1911}/${m}/${d}`; };
   const ymdShort = (iso) => { const [y, m, d] = String(iso).split('-'); return `${y}/${+m}/${+d}`; };
@@ -2694,7 +2710,8 @@ export default {
       const notes = [...mine, r.notesRaw || ''].filter(Boolean).join('\n');
       rows.push([r.company, r.taxId, r.grade, r.founded, r.capital, r.phoneRaw, r.owner, r.keyman, r.industry,
         r.nextDate ? ymdShort(r.nextDate) : '', r.lastDate ? ymdShort(r.lastDate) : '', notes,
-        r.address, r.addedDate ? ymdShort(r.addedDate) : '', r.country || '台灣']);
+        r.addressRegistered, r.addedDate ? ymdShort(r.addedDate) : '', r.country || '台灣',
+        r.addressActual === r.addressRegistered ? '' : r.addressActual]);
     });
     const ws = window.XLSX.utils.aoa_to_sheet(rows);
     const thin = { style: 'thin', color: { rgb: '000000' } };
