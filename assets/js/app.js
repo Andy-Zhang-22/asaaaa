@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-44';
+  const APP_VERSION = '20260916-45';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1473,11 +1473,16 @@
     ]));
     return {
       node,
+      inputs,
       read: () => {
         const out = {};
         EDIT_FIELDS.forEach(([key]) => { out[key] = inputs[key].value.trim(); });
         out.nextDate = nextDate.value || null;
         return out;
+      },
+      /** 把解析出來的欄位填進表單；只填有值的，不清掉使用者已經打的。 */
+      fill: (values) => {
+        Object.entries(values).forEach(([key, v]) => { if (inputs[key] && v) inputs[key].value = v; });
       },
     };
   }
@@ -1539,6 +1544,28 @@
     host.append(el('h2', { textContent: '手動新增客戶' }));
     host.append(el('p', { className: 'muted', textContent: '來源會標記為「手動新增」，和匯入的名單分開管理。' }));
     const form = editForm({ nextDate: todayISO() });
+
+    /*
+     * 貼上區：把商工登記查詢頁（或 g0v 公司資料）整段複製過來，欄位自動填進下面的表單。
+     * 使用者查完登記資料要新增客戶，一格一格抄既慢又容易抄錯統編。
+     */
+    const kvBox = el('textarea', {
+      className: 'paste-box', rows: 4, id: 'kvPaste',
+      placeholder: '可直接貼上商工登記的公司資料，例如：\n統一編號\t28443147\n公司名稱\t三貝德數位文創股份有限公司\n資本總額(元)\t1,100,000,000\n代表人姓名\t余明珊\n公司所在地\t新北市三重區重新路5段609巷2號5樓',
+    });
+    const kvNote = el('p', { className: 'rule-note' });
+    const kvRun = () => {
+      const got = window.Normalize.parseKeyValue(kvBox.value);
+      if (!got) { kvNote.textContent = kvBox.value.trim() ? '看不出欄位／值的格式，請確認每行是「欄位名稱、Tab 或冒號、內容」。' : ''; return; }
+      form.fill(got);
+      const filled = Object.keys(got).map((k) => (EDIT_FIELDS.find(([key]) => key === k) || [])[1]).filter(Boolean);
+      kvNote.textContent = `已填入：${filled.join('、')}${got.capital ? '（資本額已從元換算成仟元）' : ''}。請檢查後按「新增」。`;
+    };
+    kvBox.oninput = kvRun;
+    kvBox.onpaste = () => setTimeout(kvRun, 0);
+    host.append(el('label', { className: 'rule-field' }, [
+      el('span', { textContent: '貼上公司資料（選填）' }), kvBox,
+    ]), kvNote);
     host.append(form.node);
 
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '新增' });

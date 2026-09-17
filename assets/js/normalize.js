@@ -1159,7 +1159,73 @@
     return { ...out, synthesized, delimiter, rows };
   }
 
+  /* ------------------------------------------------------------------
+   * 「欄位／值」格式的公司資料（商工登記查詢頁、g0v 公司資料複製下來就是這樣）：
+   *
+   *   統一編號        28443147
+   *   公司名稱        三貝德數位文創股份有限公司
+   *   資本總額(元)    1,100,000,000
+   *   代表人姓名      余明珊
+   *   公司所在地      新北市三重區重新路5段609巷2號5樓
+   *   核准設立日期    2006年10月30日
+   *
+   * 每行一個欄位，欄位名跟值之間是 Tab、全形／半形冒號或兩個以上空白。
+   * 認得的欄位對到名單的標準欄位；資本額從「元」換成網站慣用的「仟元」。
+   * 回傳 null 代表看起來不是這種格式（認得的欄位不到兩個）。
+   * ------------------------------------------------------------------ */
+  const KV_FIELDS = [
+    ['taxId', /^(統一編號|統編)$/],
+    ['company', /^(公司名稱|商業名稱|名稱|公司名)$/],
+    ['capitalTotal', /^資本總額/],
+    ['capitalPaid', /^實收資本額/],
+    ['capitalPlain', /^資本額/],
+    ['owner', /^(代表人姓名|代表人|負責人姓名|負責人)$/],
+    ['address', /^(公司所在地|商業所在地|地址|登記地址|營業地址)$/],
+    ['founded', /^(核准設立日期|設立日期|成立日期|核准設立)$/],
+    ['phone', /^(電話|聯絡電話|公司電話)$/],
+    ['industry', /^(產業別|營業項目|行業)$/],
+  ];
+  function parseKeyValue(text) {
+    const lines = toHalfWidth(String(text || '')).split(/\r?\n/);
+    const got = {};
+    lines.forEach((line) => {
+      const m = line.match(/^\s*([^\t:：]{2,12}?)\s*(?:\t+|[:：]|\s{2,})\s*(.+?)\s*$/);
+      if (!m) return;
+      const key = m[1].trim();
+      const value = m[2].trim();
+      if (!value || value === '值') return;
+      for (const [field, re] of KV_FIELDS) {
+        if (re.test(key) && got[field] === undefined) { got[field] = value; break; }
+      }
+    });
+    const known = Object.keys(got).length;
+    if (known < 2) return null;
+
+    const out = {};
+    if (got.company) out.company = got.company;
+    if (got.taxId && /^\d{8}$/.test(got.taxId.replace(/\D/g, ''))) out.taxId = got.taxId.replace(/\D/g, '');
+    if (got.owner) out.owner = got.owner;
+    if (got.address) out.address = got.address;
+    if (got.phone) out.phoneRaw = got.phone;
+    if (got.industry) out.industry = got.industry;
+    // 資本額：優先資本總額，其次實收資本額；登記資料是「元」，網站用「仟元」
+    const capRaw = got.capitalTotal || got.capitalPaid || got.capitalPlain || '';
+    const capNum = Number(capRaw.replace(/[^\d.]/g, ''));
+    if (capRaw && capNum > 0) {
+      const isYuan = got.capitalTotal || got.capitalPaid || /元/.test(capRaw) || capNum >= 1000000;
+      out.capital = Math.round(isYuan ? capNum / 1000 : capNum).toLocaleString('en-US');
+    }
+    if (got.founded) {
+      const y = got.founded.match(/(\d{4})\s*年?/);
+      const roc = got.founded.match(/^(\d{2,3})[\/年]/);
+      if (y) out.founded = y[1];
+      else if (roc) out.founded = String(+roc[1] + 1911);
+    }
+    return out;
+  }
+
   global.Normalize = {
+    parseKeyValue,
     toRecords, detectHeader, parseDate, extractPhones, parseNotes, splitCompanyNames,
     parseCsv, parseDelimited, detectDelimiter, parsePasted, STANDARD_HEADER,
     validate, resolveRow, detectShift, VALIDATORS,
