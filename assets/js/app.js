@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-59';
+  const APP_VERSION = '20260916-60';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
@@ -1175,7 +1175,7 @@
       dl.append(dd);
     };
     addrRow('登記地址', r.addressRegistered);
-    addrRow('實際地址', r.addressActual, r.addressActual === r.addressRegistered ? '（同登記地址）' : '');
+    addrRow('實際地址', r.addressActual);
     // 名單來源放最後，看的頻率最低
     if (r.source) dl.append(el('dt', { textContent: '名單來源' }), el('dd', { textContent: r.source }));
     body.append(dl);
