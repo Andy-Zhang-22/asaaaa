@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-61';
+  const APP_VERSION = '20260916-62';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -1696,9 +1696,8 @@ export default {
       const { rec, r } = targets[i];
       if (onProgress) onProgress(i + 1, targets.length, r);
       const opts = { useMirror };
-      const res = /^\d{8}$/.test(String(r.taxId || '').replace(/\D/g, ''))
-        ? await window.Registry.lookupByTaxId(r.taxId, opts)
-        : await window.Registry.lookupByName(r.company, opts);
+      // 統編查不齊（資料集只回一半）會自動再用名稱補，所以統編、名稱一起給
+      const res = await window.Registry.lookupCompany({ taxId: r.taxId, name: r.company }, opts);
       if (!res.ok) { failures.push({ company: r.company, reason: res.reason }); }
       else {
         const changes = {};
@@ -1867,7 +1866,7 @@ export default {
       value: window.Registry.getTaxIdBase() === window.Registry.DEFAULT_TAXID_BASE ? '' : window.Registry.getTaxIdBase(),
     });
     host.append(el('label', { className: 'rule-field' }, [
-      el('span', { textContent: '用統編查的資料集網址（公司登記基本資料；留空用內建）' }), datasetTax,
+      el('span', { textContent: '用統編查的資料集網址（留空用內建的「公司登記基本資料-應用一」，欄位最齊；236EE382 那個只回統編、狀態、設立日期）' }), datasetTax,
     ]));
     const datasetTaxNote = el('p', { className: 'rule-note' });
     datasetTax.onchange = () => {
@@ -2015,9 +2014,7 @@ export default {
       if (!target) { note('名單是空的，沒有東西可以查。', 'rule-verdict is-fail'); return; }
       note(`正在查：${target.company}（${target.taxId || '無統編，改用名稱'}）…`);
       const opts = { useMirror: mirror.checked };
-      const res = target.taxId
-        ? await window.Registry.lookupByTaxId(target.taxId, opts)
-        : await window.Registry.lookupByName(target.company, opts);
+      const res = await window.Registry.lookupCompany({ taxId: target.taxId, name: target.company }, opts);
       result.textContent = '';
       /*
        * 原始回應一律附上，成功失敗都是。
@@ -2095,7 +2092,15 @@ export default {
         return;
       }
       note(`查詢成功，走的是「${res.label}」。`, 'rule-verdict is-ok');
-      (res.attempts || []).forEach((a) => note(`（${a.label} 不通：${a.reason.split('\n')[0]}）`));
+      // 最後採用的那條（只回一半、後來用名稱補齊）不算「不通」，不列
+      (res.attempts || []).filter((a) => !(res.supplemented && /只回了部分欄位/.test(a.reason))).forEach((a) => note(`（${a.label} 不通：${a.reason.split('\n')[0]}）`));
+      if (res.supplemented) {
+        note(`統編查到的資料集只給了一部分欄位，資本額／負責人／地址是再用公司名稱查（${res.supplemented}）補上的。`);
+      }
+      if (res.partial) {
+        note('查到了，但資本額、負責人、地址還是有缺：統編那個資料集只回統編、名稱、狀態、設立日期，'
+          + '用名稱查也沒對到同統編的公司。若「用統編查的資料集網址」有自己填過，清空改用內建的（應用一）再試。', 'rule-verdict is-fail');
+      }
 
       // 每一格都空的，代表欄位名稱猜錯了，這時候要講得比「成功」更清楚
       const mapped = REGISTRY_FIELDS.filter(([key]) => res.data[key]).length;

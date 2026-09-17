@@ -25,14 +25,20 @@
    * $filter 就回空白，那個判斷本身是錯的。實測（使用者代理）回的是 Content-Type
    * 為 JSON 的空白，正是「有收到、查無資料」的樣子，所以問題在查詢條件，不在編號。
    *
-   * 兩個資料集，各有各的用途：
-   *   - 用統編查：236EE382-…（公司登記基本資料，Business_Accounting_NO eq 統編）
+   * 資料集各有各的用途：
+   *   - 用統編查：7E6AFA72-…（公司登記基本資料-應用一，Business_Accounting_NO eq 統編），
+   *     欄位齊全：資本額、實收資本額、負責人、公司所在地、核准設立日期、狀態。
+   *   - 236EE382-…（公司登記基本資料）也能用統編查，但實測（使用者代理）只回統編、名稱、
+   *     狀態、設立日期、營業項目（Cmp_Business），沒有資本額、負責人、地址——所以「查詢
+   *     成功但資料查不到」。留著當備援，查到的欄位不齊就再往下試、最後用名稱補。
    *   - 用名稱查：5F64D864-…（公司登記關鍵字查詢，Company_Name like 名稱 and
-   *     Company_Status eq 01——沒帶 Company_Status 就查不到，這是它的規矩）
-   * 兩個都可以在介面上改，萬一政府改了編號不用等改版。
+   *     Company_Status eq 01——沒帶 Company_Status 就查不到，這是它的規矩），欄位齊全。
+   * 都可以在介面上改，萬一政府改了編號不用等改版。
    */
   const DEFAULT_BASE = 'https://data.gcis.nat.gov.tw/od/data/api/5F64D864-61CB-4D0D-8AD9-492047CC1EA6';
-  const DEFAULT_TAXID_BASE = 'https://data.gcis.nat.gov.tw/od/data/api/236EE382-4942-41A9-BD03-CA0709025E7C';
+  const FULL_TAXID_BASE = 'https://data.gcis.nat.gov.tw/od/data/api/7E6AFA72-AD6A-46D3-8681-ED77951D912D';
+  const LEGACY_TAXID_BASE = 'https://data.gcis.nat.gov.tw/od/data/api/236EE382-4942-41A9-BD03-CA0709025E7C';
+  const DEFAULT_TAXID_BASE = FULL_TAXID_BASE;
   const BASE_KEY = 'registry-dataset-url';
   const TAXID_BASE_KEY = 'registry-dataset-taxid-url';
 
@@ -95,8 +101,10 @@
   /** 用統編查：先用統編專用的資料集，再拿關鍵字資料集當備援。 */
   const officialByTaxId = (taxId) => {
     const id = String(taxId).replace(/\D/g, '');
+    // 使用者自訂的資料集擺第一，再來是欄位齊全的應用一、舊的基本資料，最後拿關鍵字資料集碰運氣
+    const bases = [...new Set([getTaxIdBase(), FULL_TAXID_BASE, LEGACY_TAXID_BASE])];
     return [
-      odata(getTaxIdBase(), `Business_Accounting_NO eq ${id}`, 1),
+      ...bases.map((b) => odata(b, `Business_Accounting_NO eq ${id}`, 1)),
       odata(getBase(), `Business_Accounting_NO eq ${id} and Company_Status eq 01`, 1),
       odata(getBase(), `Business_Accounting_NO eq ${id}`, 1),
     ];
@@ -401,8 +409,21 @@
     return keys;
   }
 
+  /** 查到了但沒有資本額、負責人、地址其中任何一個，就是那個資料集本身不給這些欄位。 */
+  const isComplete = (d) => !!(d && (d.capital || d.owner || d.address));
+  /** 把後查到的欄位補進先前只有一半的結果；已經有的不動。 */
+  const fillMissing = (into, from) => {
+    const out = { ...(into || {}) };
+    Object.entries(from || {}).forEach(([k, v]) => {
+      if (k === 'unmappedKeys') { out.unmappedKeys = [...new Set([...(out.unmappedKeys || []), ...(v || [])])]; return; }
+      if ((out[k] === undefined || out[k] === '' || out[k] === null) && v) out[k] = v;
+    });
+    return out;
+  };
+
   async function tryEach(kind, value, opts) {
     const attempts = [];
+    let partial = null;   // 查到但欄位不齊的結果：先留著，後面的寫法能補就補
     for (const key of activeSources(opts)) {
       const src = SOURCES[key];
       const urls = kind === 'taxId' ? src.byTaxId(value) : src.byName(value);
@@ -414,10 +435,19 @@
             attempts.push({ source: key, label: tag, reason: '查無資料', url: urls[i], upstream: upstreamOf(urls[i]) });
             continue;   // 同一個來源的其他寫法還有機會
           }
-          return {
+          const data = mapRow(rows[0]);
+          const hit = {
             ok: true, source: key, label: tag, url: urls[i],
-            data: mapRow(rows[0]), candidates: rows.map(mapRow), raw: rows[0], attempts,
+            data, candidates: rows.map(mapRow), raw: rows[0], attempts,
           };
+          if (isComplete(data)) {
+            if (partial) { hit.data = fillMissing(data, partial.data); hit.label = `${tag}＋${partial.label}`; }
+            return hit;
+          }
+          // 這個資料集只回了一半（例如 236EE382 沒有資本額、負責人、地址）：記下來，繼續往下試
+          attempts.push({ source: key, label: tag, reason: '只回了部分欄位（沒有資本額、負責人、地址），換下一個資料集補', url: urls[i], upstream: upstreamOf(urls[i]) });
+          partial = partial ? { ...partial, data: fillMissing(partial.data, data) } : hit;
+          continue;
         } catch (err) {
           attempts.push({ source: key, label: tag, reason: explain(err, key), body: err.body, url: urls[i], upstream: upstreamOf(urls[i]) });
           // 跨網域被擋是整個來源的問題，換寫法沒有意義
@@ -425,6 +455,7 @@
         }
       }
     }
+    if (partial) return { ...partial, partial: true, attempts };
     return {
       ok: false, attempts,
       reason: attempts.length ? attempts.map((a) => `${a.label}：${a.reason}`).join('\n') : '沒有可用的查詢來源',
@@ -445,8 +476,41 @@
     return tryEach('name', clean, opts);
   };
 
+  /**
+   * 一家公司的完整查法：有統編先用統編查；查不到、或查到的欄位不齊（資本額、負責人、
+   * 地址缺任何一個），再用名稱查，把缺的補上。名稱查回來的要對得上統編（或名稱一字不差）
+   * 才採用，免得 like 撈到同名的別家。
+   */
+  async function lookupCompany({ taxId, name }, opts) {
+    const id = String(taxId || '').replace(/\D/g, '');
+    const clean = String(name || '').replace(/\s/g, '');
+    const lacking = (d) => !d || !(d.capital && d.owner && d.address);
+    let res = id.length === 8 ? await lookupByTaxId(id, opts) : null;
+    if ((!res || !res.ok || lacking(res.data)) && clean) {
+      const byName = await lookupByName(name, opts);
+      if (byName.ok) {
+        const cands = byName.candidates || [byName.data];
+        const hit = id.length === 8
+          ? cands.find((c) => c && c.taxId === id)
+          : (cands.find((c) => c && String(c.name || '').replace(/\s/g, '') === clean) || (cands.length === 1 ? cands[0] : null));
+        if (hit) {
+          if (!res || !res.ok) res = { ...byName, data: hit };
+          else {
+            res = { ...res, data: fillMissing(res.data, hit), supplemented: byName.label, raw: res.raw };
+            res.partial = lacking(res.data);
+          }
+        } else if (!res || !res.ok) {
+          res = { ...byName, ok: false, reason: `用名稱查到 ${cands.length} 筆，但沒有一筆的統編是 ${id || '（無）'}` };
+        }
+      } else if (!res || !res.ok) {
+        res = byName;
+      }
+    }
+    return res || { ok: false, reason: '沒有統編也沒有公司名稱，無法查詢', attempts: [] };
+  }
+
   global.Registry = {
-    lookupByTaxId, lookupByName, mapRow, toThousands, tidyDate,
+    lookupByTaxId, lookupByName, lookupCompany, mapRow, toThousands, tidyDate, FULL_TAXID_BASE, LEGACY_TAXID_BASE,
     SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, nameVariants,
     getBase, setBase, DEFAULT_BASE, getTaxIdBase, setTaxIdBase, DEFAULT_TAXID_BASE, FIELD_CANDIDATES,
     officialByTaxId, officialByName, upstreamOf, PROBE_TAXID, tidyDatasetUrl,
