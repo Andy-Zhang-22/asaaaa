@@ -1321,8 +1321,8 @@
       sec.append(el('p', { className: `dealing-verdict dealing-${r.dealingKind}` }, [
         el('strong', { textContent: window.Normalize.DEALING_LABEL[r.dealingKind] }),
         el('span', { className: 'muted', textContent: r.dealingKind === 'active'
-          ? `（最新一期${r.dealing.date ? ` ${r.dealing.date} ` : ''}有提到本餘）`
-          : '（最新一期沒提到本餘）' }),
+          ? `（最新一期${r.dealing.date ? ` ${r.dealing.date} ` : ''}有提到本餘或還在往來）`
+          : `（最新一期${r.dealing.ended ? '寫到合作已結束' : '沒提到本餘或往來'}）` }),
       ]));
       if (r.dealing.snippet) {
         sec.append(el('p', { className: 'relation-snippet', textContent: `「…${r.dealing.snippet}…」` }));
