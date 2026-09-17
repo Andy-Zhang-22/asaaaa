@@ -223,6 +223,7 @@
   /* ---------------- 客戶歸屬與承作單位判定 ---------------- */
 
   const MICRO_CAPITAL_LIMIT = 10000;    // 微企客戶資本額上限（仟元）
+  const LARGE_CAPITAL_LIMIT = 500000;   // 大企部客戶資本額下限（仟元，含）
   const MICRO_CREDIT_LIMIT = 7000;      // 微企單戶授信往來總額上限（仟元）
   const MICRO_MIN_SPREAD = 9;           // 一般組承作 7,000 仟元以下案件的 Spread 下限（%）
   const HANDOVER_MIN_LEASE = 10000;     // 微企移交一般組後的單筆最低起租金額（仟元）
@@ -518,7 +519,7 @@
     RULES, ANALYSIS, evaluate, assessControl, buildCheckpoints, parseSchedule, fmt,
     shareSplit, routeCustomer, SHARE_SCENARIOS,
     EXCLUDING, CONTROLLED_COLLATERAL, IRREGULAR_METHODS,
-    MICRO_CAPITAL_LIMIT, MICRO_CREDIT_LIMIT, MICRO_SHARE_CAP, MICRO_MIN_SPREAD,
+    MICRO_CAPITAL_LIMIT, LARGE_CAPITAL_LIMIT, MICRO_CREDIT_LIMIT, MICRO_SHARE_CAP, MICRO_MIN_SPREAD,
   };
 
   /* ---------------- 畫面 ---------------- */
