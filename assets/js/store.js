@@ -232,10 +232,32 @@
       });
     },
 
+    /*
+     * 清空所有名單，而且要能傳到其他裝置。
+     *
+     * 舊版是把四個 store 全部 clear()，包括 meta。這在有開雲端同步時是錯的：
+     * 同步是「聯集」合併，本機清空之後下一次同步會把雲端那份整個合併回來，
+     * 看起來就像清除失效；而 meta 裡的墓碑和 driveFileId 也一起被清掉，
+     * 等於把唯一能把「刪除」傳出去的機制也砍了。
+     *
+     * 正確做法是走既有的墓碑機制：每個來源、每則通話紀錄各留一個墓碑，
+     * 再清掉資料。meta 不動——墓碑要留著才傳得出去，同步設定也要留著。
+     * 之後匯入的新名單 importedAt 會比墓碑新，照常存活，跟重新匯入同一份 PDF 的
+     * 行為一致。
+     */
     async wipe() {
-      await tx(['records', 'logs', 'state', 'meta'], 'readwrite', (a, b, c, d) => {
-        a.clear(); b.clear(); c.clear(); d.clear();
+      const [records, logs] = await Promise.all([api.allRecords(), api.allLogs()]);
+      const all = (await api.getMeta('tombstones')) || { logs: {}, sources: {}, records: {} };
+      const now = Date.now();
+      all.sources = all.sources || {};
+      all.logs = all.logs || {};
+      new Set(records.map((r) => r.source)).forEach((src) => { if (src) all.sources[src] = now; });
+      logs.forEach((l) => { if (l.uid) all.logs[l.uid] = now; });
+      await api.setMeta('tombstones', all);
+      await tx(['records', 'logs', 'state'], 'readwrite', (a, b, c) => {
+        a.clear(); b.clear(); c.clear();
       });
+      return { records: records.length, logs: logs.length };
     },
   };
 
