@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-39';
+  const APP_VERSION = '20260916-40';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -116,7 +116,13 @@
     out.territory = territory(out);
     out.relations = window.Normalize.detectRelations(out.notesRaw);
     out.relationKinds = window.Normalize.relationKinds(out.relations);
-    out.dealing = window.Normalize.detectDealing(out.notesRaw);
+    // 往來情形看的是「最新一次談話」，在網站上記的通話也算：打完電話聽到
+    // 對方說已經解約，這筆就該立刻歸到沒有往來，不用等下次匯入檔案。
+    const mineNotes = state.logs
+      .filter((l) => l.recordId === record.id && l.text)
+      .map((l) => `${(l.date || '').replace(/-/g, '/')} ${l.text}`)
+      .join('\n');
+    out.dealing = window.Normalize.detectDealing(mineNotes ? `${mineNotes}\n${out.notesRaw || ''}` : out.notesRaw);
     out.dealingKind = out.dealing.kind;
     /*
      * 禁止推廣獨立於 outcome。
@@ -822,7 +828,18 @@
     bits.forEach((b) => meta.append(el('span', { textContent: b })));
     node.append(meta);
 
-    const latest = (r.timeline || [])[0];
+    /*
+     * 卡片上那一句要是「最新的談話內容」，不管它是檔案帶進來的還是在網站上記的。
+     * 之前只看檔案的訪談內容，在網站上打完電話記的那則永遠上不了卡片，
+     * 使用者看到的一直是匯入時的舊話。兩邊各取最新的一則比日期，同一天算
+     * 網站上記的比較新（它是匯入之後才寫的）。
+     */
+    const fromFile = (r.timeline || [])[0];
+    const mine = state.logs.filter((l) => l.recordId === r.id).sort((a, b) => b.createdAt - a.createdAt)[0];
+    let latest = fromFile;
+    if (mine && (!fromFile || !fromFile.date || (mine.date || '') >= fromFile.date)) {
+      latest = { text: mine.text || `（${OUTCOME_LABEL[mine.outcome] || ''}）` };
+    }
     if (latest) node.append(el('p', { className: 'card-notes', textContent: latest.text }));
     if (r.phones.length) {
       const actions = el('div', { className: 'card-actions' });

@@ -806,6 +806,11 @@
   // 使用者實際在名單裡看到這種寫法，所以一併收。
   const BALANCE_RE = /本餘|本金餘|本於|本金於/;
 
+  // 合作已經結束的寫法。最新一期若寫到這些，就算同一則裡還提到本餘（例如
+  // 「本餘還完、5 月解約了」），也視為沒有往來——使用者要的是「現在」的狀態。
+  // 字眼只收明確講「結束」的，「到期」「續約」這種可能還在談的不收。
+  const ENDED_RE = /解約|結清|還清|繳清|繳完|還完|已結束|結束了|合作結束|往來結束|沒繼續|沒有繼續|不再往來|沒再往來|沒往來了|已經沒有往來|終止合作|終止往來|停止往來/;
+
   const DEALING_LABEL = {
     active: '有跟其他單位往來',
     none: '沒有跟中租往來',
@@ -828,14 +833,12 @@
     const latest = latestNote(notesRaw);
     if (!latest) return { kind: 'none', date: null, snippet: '' };
     const text = toHalfWidth(latest.text || '');
+    const around = (m) => text.slice(Math.max(0, m.index - 20), m.index + 50).replace(/\s+/g, ' ').trim();
+    const ended = text.match(ENDED_RE);
+    if (ended) return { kind: 'none', date: latest.date || null, snippet: around(ended), ended: true };
     const m = text.match(BALANCE_RE);
     if (!m) return { kind: 'none', date: latest.date || null, snippet: '' };
-    const from = Math.max(0, m.index - 20);
-    return {
-      kind: 'active',
-      date: latest.date || null,
-      snippet: text.slice(from, m.index + 50).replace(/\s+/g, ' ').trim(),
-    };
+    return { kind: 'active', date: latest.date || null, snippet: around(m) };
   }
 
   /* ------------------------------------------------------------------
