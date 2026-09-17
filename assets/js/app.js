@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-36';
+  const APP_VERSION = '20260916-37';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1988,36 +1988,75 @@ export default {
     });
   }
 
+  /*
+   * 讀 Excel，回傳跟 CSV 一樣的「列陣列」，後面共用同一條解析流程。
+   *
+   * 只讀第一個工作表——公司匯出的名單只有一張。日期格用 cellDates 讓 SheetJS
+   * 直接給 Date 物件再自己轉成 YYYY/MM/DD：不這樣做的話拿到的是 Excel 內部的
+   * 序號（45914 之類）或跟著電腦語系走的字串，兩種都會讓日期解析失敗。
+   */
+  async function readXlsx(file) {
+    if (!window.XLSX) throw new Error('Excel 解析元件沒有載入');
+    const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const raw = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
+    const pad = (n) => String(n).padStart(2, '0');
+    return raw.map((row) => row.map((v) => {
+      if (v instanceof Date) return `${v.getFullYear()}/${pad(v.getMonth() + 1)}/${pad(v.getDate())}`;
+      return v == null ? '' : String(v);
+    }));
+  }
+
   async function importFiles(files) {
-    const wanted = [...files].filter((f) => /\.(pdf|csv)$/i.test(f.name)
+    const wanted = [...files].filter((f) => /\.(pdf|csv|xlsx|xls)$/i.test(f.name)
       || f.type === 'application/pdf' || f.type === 'text/csv');
-    if (!wanted.length) { logLine('沒有偵測到 PDF 或 CSV 檔案', 'err'); return; }
+    if (!wanted.length) { logLine('沒有偵測到 PDF、CSV 或 Excel 檔案', 'err'); return; }
 
     for (const file of wanted) {
       const isCsv = /\.csv$/i.test(file.name) || file.type === 'text/csv';
+      const isXlsx = /\.xlsx?$/i.test(file.name);
       logLine(`⏳ 解析 ${file.name} …`);
       try {
         let rows;
         let pages = 1;
         let pageStarts = [0];
         let mode = 'csv';
-        if (isCsv) {
+        if (isXlsx) {
+          rows = await readXlsx(file);
+        } else if (isCsv) {
           rows = window.Normalize.parseCsv(await file.text());
           /*
            * 經濟部的登記清冊一次四千多筆，但真正要打的只有一小撮。
            * 整份匯進來只會把名單淹掉，所以先問條件再匯。
            */
-          if (window.Normalize.isGovRegistry(rows)) {
-            const picked = await askGovFilter(file.name, rows);
-            if (!picked) { logLine(`已取消 ${file.name}`); continue; }
-            rows = picked;
-          }
-        } else {
+        }
+        if ((isCsv || isXlsx) && window.Normalize.isGovRegistry(rows)) {
+          const picked = await askGovFilter(file.name, rows);
+          if (!picked) { logLine(`已取消 ${file.name}`); continue; }
+          rows = picked;
+        }
+        if (!isCsv && !isXlsx) {
           const buffer = await file.arrayBuffer();
           const parsed = await window.PdfTable.parsePdf(buffer, (done, total) => {
             $('#importLog').firstChild.textContent = `⏳ 解析 ${file.name} … 第 ${done}/${total} 頁`;
           });
           ({ rows, pages, pageStarts, mode } = parsed);
+        }
+        /*
+         * 資本額單位。公司匯出的 xlsx 是「元」，名單慣例是「仟元」，差一千倍。
+         * 只在看起來像元的時候問，看起來已經是仟元就不打擾。
+         */
+        {
+          const found = window.Normalize.detectHeader(rows);
+          if (found && window.Normalize.capitalLooksLikeYuan(rows, found.map)) {
+            const sample = String((rows[found.index + 1] || [])[found.map.capital] || '');
+            const yes = confirm(`${file.name} 的資本額看起來是「元」（例如 ${sample}），`
+              + '但名單用的是「仟元」。\n\n要換算成仟元再匯入嗎？\n（選取消 = 照原值匯入）');
+            if (yes) {
+              const n = window.Normalize.convertCapitalToThousands(rows, found.map);
+              logLine(`資本額已由元換算成仟元（${n} 筆）`);
+            }
+          }
         }
         const { records, header, skipped, shift, repaired } =
           window.Normalize.toRecords(rows, file.name, { pageStarts });
@@ -2065,7 +2104,7 @@ export default {
         await window.Store.deleteSource(file.name, { keepTombstone: false });   // 同名重匯 = 更新
         await window.Store.saveRecords(toSave);
         logLine(
-          `✅ ${file.name}：${isCsv ? 'CSV' : `${pages} 頁`} → ${records.length} 筆客戶`
+          `✅ ${file.name}：${isXlsx ? 'Excel' : isCsv ? 'CSV' : `${pages} 頁`} → ${records.length} 筆客戶`
           + `${dupNote}`
           + `${skipped ? `（略過 ${skipped} 個空列）` : ''}`
           + `${mode === 'heuristic' ? '（此檔沒有表格框線，欄位為推測結果）' : ''}`,

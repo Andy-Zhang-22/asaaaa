@@ -247,6 +247,42 @@
     return out;
   }
 
+  /*
+   * 資本額的單位是「元」還是「仟元」。
+   *
+   * 名單的慣例是仟元（PDF 上寫 38,000 就是三千八百萬），但公司匯出的 xlsx 是元
+   * （寫 30000000）。直接匯進來會差一千倍，把五十萬變成五億。
+   *
+   * 看整欄的中位數判斷：中小企業的資本額用仟元表示多半在幾千到幾萬之間，
+   * 用元表示則是幾百萬起跳，中間隔了兩個數量級，20 萬這條線離兩邊都很遠。
+   * 值太少（不到 5 筆）就不猜，寧可不換算也不要換錯。
+   */
+  function capitalLooksLikeYuan(rows, map) {
+    if (!rows || map.capital === undefined) return false;
+    const nums = [];
+    for (let i = 1; i < rows.length; i++) {
+      const raw = String((rows[i] || [])[map.capital] || '').replace(/[,\s]/g, '');
+      if (/^\d+(\.\d+)?$/.test(raw)) nums.push(Number(raw));
+    }
+    if (nums.length < 5) return false;
+    nums.sort((a, b) => a - b);
+    return nums[Math.floor(nums.length / 2)] >= 200000;
+  }
+
+  /** 把整欄資本額由元換成仟元，回傳換了幾筆。非數字的原樣留著。 */
+  function convertCapitalToThousands(rows, map) {
+    let n = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      const raw = String(row[map.capital] || '').replace(/[,\s]/g, '');
+      if (!/^\d+(\.\d+)?$/.test(raw)) continue;
+      row[map.capital] = Math.round(Number(raw) / 1000).toLocaleString('en-US');
+      n++;
+    }
+    return n;
+  }
+
   /** 找出表頭那一列，回傳 { index, map }；找不到回傳 null。 */
   function detectHeader(rows) {
     for (let i = 0; i < Math.min(rows.length, 8); i++) {
@@ -256,12 +292,18 @@
       cells.forEach((cell, col) => {
         if (!cell) return;
         for (const [field, keys] of FIELD_RULES) {
-          if (map[field] !== undefined) continue;
-          if (keys.some((k) => cell.toUpperCase().includes(k.toUpperCase()))) {
-            map[field] = col;
-            hits++;
+          const matches = keys.some((k) => cell.toUpperCase().includes(k.toUpperCase()));
+          if (!matches) continue;
+          if (map[field] !== undefined) {
+            // 同一個欄位出現兩次時（例如「名單新增日期(必填)」跟「名單新增日期(更新版)」），
+            // 使用者確認過「更新版」才是正確的，所以標著「更新」的那欄優先。
+            const prev = cells[map[field]] || '';
+            if (cell.includes('更新') && !prev.includes('更新')) map[field] = col;
             return;
           }
+          map[field] = col;
+          hits++;
+          return;
         }
       });
       if (hits >= 4 && map.company !== undefined) return { index: i, map };
@@ -1083,6 +1125,7 @@
     detectBlocked,
     suspiciousName, splitGluedName,
     isGovRegistry, fromGovRegistry, govToStandardRows, guessIndustry,
+    capitalLooksLikeYuan, convertCapitalToThousands,
     findFollowUp,
     looksLikeAddress,
     validateAddress: (t) => VALIDATORS.address(t) || '',
