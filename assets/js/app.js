@@ -9,7 +9,8 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-56';
+  const APP_VERSION = '20260916-57';
+  const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -27,7 +28,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), added: new Set(), industry: '' },
+    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), taxKind: new Set(), added: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -162,6 +163,8 @@
     // 有沒有實際拜訪過：跟往來情形一樣，網站上記的通話也算
     out.visit = window.Normalize.detectVisit(allNotes);
     out.visitKind = out.visit.visited ? 'yes' : 'no';
+    // 有沒有統編：欄位裡有數字就算有（編輯過的以編輯後為準）
+    out.taxKind = /\d/.test(String(out.taxId || '')) ? 'yes' : 'no';
     /*
      * 禁止推廣獨立於 outcome。
      *
@@ -670,6 +673,7 @@
       if (f.territory.size && !f.territory.has(r.territory || '未填地址')) return false;
       if (f.relation.size && !f.relation.has(r.dealingKind)) return false;
       if (f.visit.size && !f.visit.has(r.visitKind)) return false;
+      if (f.taxKind.size && !f.taxKind.has(r.taxKind)) return false;
       if (f.added.size && !f.added.has(r.addedBucket)) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (!matchDue(f, r.nextDate)) return false;
@@ -783,6 +787,11 @@
     const visitCounts = [['yes', 0], ['no', 0]];
     all.forEach((r) => { visitCounts[r.visitKind === 'yes' ? 0 : 1][1] += 1; });
     chips($('#fltVisit'), 'visit', visitCounts, state.filters.visit, (v) => window.Normalize.VISIT_LABEL[v]);
+
+    // 統編：固定「有統編 → 無統編」兩顆，含 0 筆
+    const taxCounts = [['yes', 0], ['no', 0]];
+    all.forEach((r) => { taxCounts[r.taxKind === 'yes' ? 0 : 1][1] += 1; });
+    chips($('#fltTax'), 'taxKind', taxCounts, state.filters.taxKind, (v) => TAX_LABEL[v]);
 
     // 順序固定成由新到舊，不依筆數排——「今天新增」永遠在第一個位置才好按
     const addedCounts = new Map(ADDED_ORDER.map((k) => [k, 0]));
