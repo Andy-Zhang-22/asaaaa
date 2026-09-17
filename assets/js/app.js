@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-50';
+  const APP_VERSION = '20260916-51';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -27,7 +27,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), added: new Set(), industry: '' },
+    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), grade: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), added: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -145,8 +145,12 @@
       .filter((l) => l.recordId === record.id && l.text)
       .map((l) => `${(l.date || '').replace(/-/g, '/')} ${l.text}`)
       .join('\n');
-    out.dealing = window.Normalize.detectDealing(mineNotes ? `${mineNotes}\n${out.notesRaw || ''}` : out.notesRaw);
+    const allNotes = mineNotes ? `${mineNotes}\n${out.notesRaw || ''}` : out.notesRaw;
+    out.dealing = window.Normalize.detectDealing(allNotes);
     out.dealingKind = out.dealing.kind;
+    // 有沒有實際拜訪過：跟往來情形一樣，網站上記的通話也算
+    out.visit = window.Normalize.detectVisit(allNotes);
+    out.visitKind = out.visit.visited ? 'yes' : 'no';
     /*
      * 禁止推廣獨立於 outcome。
      *
@@ -655,6 +659,7 @@
       if (f.scale.size && !f.scale.has(r.scale || '未填資本額')) return false;
       if (f.territory.size && !f.territory.has(r.territory || '未填地址')) return false;
       if (f.relation.size && !f.relation.has(r.dealingKind)) return false;
+      if (f.visit.size && !f.visit.has(r.visitKind)) return false;
       if (f.added.size && !f.added.has(r.addedBucket)) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (!matchDue(f, r.nextDate)) return false;
@@ -767,6 +772,11 @@
     chips($('#fltRelation'), 'relation', dealCounts.filter(([, n]) => n > 0),
       state.filters.relation, (v) => window.Normalize.DEALING_LABEL[v]);
 
+    // 拜訪：固定「有拜訪 → 無拜訪」兩顆，含 0 筆
+    const visitCounts = [['yes', 0], ['no', 0]];
+    all.forEach((r) => { visitCounts[r.visitKind === 'yes' ? 0 : 1][1] += 1; });
+    chips($('#fltVisit'), 'visit', visitCounts, state.filters.visit, (v) => window.Normalize.VISIT_LABEL[v]);
+
     // 順序固定成由新到舊，不依筆數排——「今天新增」永遠在第一個位置才好按
     const addedCounts = new Map(ADDED_ORDER.map((k) => [k, 0]));
     all.forEach((r) => { addedCounts.set(r.addedBucket, (addedCounts.get(r.addedBucket) || 0) + 1); });
@@ -855,6 +865,7 @@
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
       r.blocked ? el('span', { className: 'badge badge-blocked', textContent: '禁止推廣' }) : '',
       r.dealingKind === 'active' ? el('span', { className: 'badge badge-dealing', textContent: '中租往來' }) : '',
+      r.visitKind === 'yes' ? el('span', { className: 'badge badge-visited', textContent: '已拜訪' }) : '',
       r.groupSize > 1 ? el('span', { className: 'badge badge-group', textContent: `同老闆 ${r.groupSize} 家` }) : '',
     ].filter(Boolean));
     node.append(top);
@@ -1226,6 +1237,15 @@
       ]));
       if (r.dealing.snippet) {
         sec.append(el('p', { className: 'relation-snippet', textContent: `「…${r.dealing.snippet}…」` }));
+      }
+      sec.append(el('p', { className: `dealing-verdict visit-${r.visitKind}` }, [
+        el('strong', { textContent: r.visitKind === 'yes' ? '有拜訪' : '無拜訪' }),
+        el('span', { className: 'muted', textContent: r.visitKind === 'yes'
+          ? `（${r.visit.date ? `${dateLabel(r.visit.date)} ` : ''}依訪談內容判讀）`
+          : '（訪談內容裡沒有實際拜訪的紀錄）' }),
+      ]));
+      if (r.visit.snippet) {
+        sec.append(el('p', { className: 'relation-snippet', textContent: `「…${r.visit.snippet}…」` }));
       }
       ['internal', 'peer', 'bank'].forEach((kind) => {
         if (!r.relations[kind].length) return;
