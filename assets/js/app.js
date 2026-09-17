@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-57';
+  const APP_VERSION = '20260916-58';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
@@ -530,8 +530,15 @@
   function capitalScale(record) {
     const value = Number(String(record.capital || '').replace(/[^\d.]/g, ''));
     if (!value) return '';
-    return value <= (window.Rules ? window.Rules.MICRO_CAPITAL_LIMIT : 10000) ? '微企範疇' : '一般組範疇';
+    const micro = window.Rules ? window.Rules.MICRO_CAPITAL_LIMIT : 10000;
+    const large = window.Rules ? window.Rules.LARGE_CAPITAL_LIMIT : 500000;
+    if (value <= micro) return '微企範疇';
+    // 大企部：資本額達 500,000 仟元（含）
+    if (value >= large) return '大企部範疇';
+    return '一般組範疇';
   }
+  // 篩選晶片固定由小到大排，最後是沒填的；不跟著筆數浮動，位置才記得住
+  const SCALE_ORDER = ['微企範疇', '一般組範疇', '大企部範疇', '未填資本額'];
 
   /*
    * 每次重繪都把幾百筆資料重新攤平一次，切換分頁與打字才會卡。
@@ -774,7 +781,9 @@
     chips($('#fltOutcome'), 'outcome', Object.keys(OUTCOME_LABEL).map((k) => [k, outcomeTally.get(k) || 0]),
       state.filters.outcome, (v) => OUTCOME_LABEL[v] || v);
     chips($('#fltCity'), 'city', tally((r) => r.city || '其他').slice(0, 12), state.filters.city);
-    chips($('#fltScale'), 'scale', tally((r) => r.scale || '未填資本額'), state.filters.scale);
+    const scaleCounts = new Map(SCALE_ORDER.map((k) => [k, 0]));
+    all.forEach((r) => { const k = r.scale || '未填資本額'; scaleCounts.set(k, (scaleCounts.get(k) || 0) + 1); });
+    chips($('#fltScale'), 'scale', SCALE_ORDER.map((k) => [k, scaleCounts.get(k)]), state.filters.scale);
     chips($('#fltTerritory'), 'territory', tally((r) => r.territory || '未填地址'), state.filters.territory);
 
     // 二分法，順序固定成「有往來 → 沒往來」，不跟著筆數浮動
@@ -876,6 +885,7 @@
       el('span', { className: 'card-name', textContent: r.company }),
       outcomeBadge(r),
       (r.scale || capitalScale(r)) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
+      (r.scale || capitalScale(r)) === '大企部範疇' ? el('span', { className: 'badge badge-large', textContent: '大企部範疇' }) : '',
       r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
       r.blocked ? el('span', { className: 'badge badge-blocked', textContent: '禁止推廣' }) : '',

@@ -393,6 +393,7 @@ button, input, select { font: inherit; color: inherit; }
 .rule-table-thresholds th[scope="row"] { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rule-table td { white-space: normal; }
 .badge-micro { border-color: var(--primary); color: var(--primary); }
+.badge-large { border-color: #7c3aed; color: #7c3aed; }
 
 /* ---------- 長列表的繪製成本 ---------- */
 /*
