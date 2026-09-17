@@ -435,21 +435,6 @@
   }
 
   /** 從訪談內容推出一個粗略的洽談狀態，讓業務可以快速篩。 */
-  function guessOutcome(notes) {
-    const t = squash(notes);
-    if (!t) return 'new';
-    // 最上面那則沒有標日期，代表那是背景資料（徵才資訊、產品線），不是一通電話。
-    // 使用者的規則：最新一次紀錄沒日期＝還沒撥打。
-    const entries = parseNotes(notes);
-    if (entries.length && !entries[0].date) return 'new';
-    if (/禁止推廣|禁推|別再撥打|不要再打|打死不想/.test(t)) return 'blocked';
-    if (/約訪|拜訪|約時間|約下|約他|點到公司/.test(t)) return 'meeting';
-    if (/資金需求|有興趣|有些興趣|想了解|報價|額度需求|請他提供資料/.test(t)) return 'interested';
-    if (/拒絕|不需要|用不到|用不上|沒機會|沒有需求|秒拒|不考慮/.test(t)) return 'declined';
-    if (/未接|沒接|沒人接|無人接|語音|忙線|晚點再撥|再撥打/.test(t)) return 'noanswer';
-    return 'contacted';
-  }
-
   const OUTCOME_LABEL = {
     new: '未撥打',
     noanswer: '未接通',
@@ -459,6 +444,28 @@
     declined: '婉拒',
     blocked: '禁止推廣',
   };
+
+  function guessOutcome(notes) {
+    const t = squash(notes);
+    if (!t) return 'new';
+    // 最上面那則沒有標日期，代表那是背景資料（徵才資訊、產品線），不是一通電話。
+    // 使用者的規則：最新一次紀錄沒日期＝還沒撥打。
+    const entries = parseNotes(notes);
+    if (entries.length && !entries[0].date) return 'new';
+    // 網站匯出（或使用者母檔）的寫法是「日期 [結果] 內容」，方括號裡就是結果，直接採用
+    const tagged = entries.length && String(entries[0].text || '').match(/^\s*[\[［]([^\]］]{2,5})[\]］]/);
+    if (tagged) {
+      const key = Object.keys(OUTCOME_LABEL).find((k) => OUTCOME_LABEL[k] === tagged[1].trim());
+      if (key) return key;
+    }
+    if (/禁止推廣|禁推|別再撥打|不要再打|打死不想/.test(t)) return 'blocked';
+    if (/約訪|拜訪|約時間|約下|約他|點到公司/.test(t)) return 'meeting';
+    if (/資金需求|有興趣|有些興趣|想了解|報價|額度需求|請他提供資料/.test(t)) return 'interested';
+    if (/拒絕|不需要|用不到|用不上|沒機會|沒有需求|秒拒|不考慮/.test(t)) return 'declined';
+    if (/未接|沒接|沒人接|無人接|語音|忙線|晚點再撥|再撥打/.test(t)) return 'noanswer';
+    return 'contacted';
+  }
+
 
   /**
    * 表格跨頁時，同一筆資料會被切成上下兩段。沒有公司名稱的片段一定是續行，
