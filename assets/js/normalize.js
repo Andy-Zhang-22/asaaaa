@@ -18,7 +18,8 @@
     ['nextDate', ['下次聯絡日', '下次']],
     ['lastDate', ['最近聯絡日', '最近']],
     ['notes', ['訪談內容', '拜訪內容', '備註']],
-    ['address', ['地址']],
+    ['addressActual', ['實際地址']],   // 要排在「地址」前面：「實際地址」也含「地址」兩個字
+    ['address', ['地址', '登記地址']],
     ['addedDate', ['名單新增日期', '名單新增', '新增日期']],
     ['country', ['國家']],
   ];
@@ -423,6 +424,27 @@
     return entries.filter((e) => e.text || e.date);
   }
 
+  /*
+   * 一格地址拆成「登記地址」與「實際地址」。
+   *
+   * 名單上有些地址寫成「104登記：臺北市內湖區… / 公司登記：新北市新莊區…」：
+   * 104 上的是公司實際上班的地方，商工登記的是登記地。使用者要兩欄分開看，
+   * 沒有這種寫法的就兩欄都是同一個地址。
+   */
+  function splitAddress(raw) {
+    const text = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!text) return { registered: '', actual: '' };
+    const m1 = text.match(/104登記[：:]\s*(.+?)\s*[\/／]\s*公司登記[：:]\s*(.+)$/);
+    if (m1) return { actual: m1[1].trim(), registered: m1[2].trim() };
+    const m2 = text.match(/公司登記[：:]\s*(.+?)\s*[\/／]\s*104登記[：:]\s*(.+)$/);
+    if (m2) return { registered: m2[1].trim(), actual: m2[2].trim() };
+    const only104 = text.match(/^104登記[：:]\s*(.+)$/);
+    if (only104) return { registered: only104[1].trim(), actual: only104[1].trim() };
+    const onlyReg = text.match(/^公司登記[：:]\s*(.+)$/);
+    if (onlyReg) return { registered: onlyReg[1].trim(), actual: onlyReg[1].trim() };
+    return { registered: text, actual: text };
+  }
+
   function parseAddress(raw) {
     const text = String(raw || '').replace(/\s+/g, '');
     const city = CITIES.find((c) => text.includes(c)) || '';
@@ -643,6 +665,7 @@
     lastDate: dateOnly,
     addedDate: dateOnly,
   };
+  VALIDATORS.addressActual = (t) => VALIDATORS.address(t);
   VALIDATORS.owner = VALIDATORS.person;
   VALIDATORS.keyman = VALIDATORS.person;
 
@@ -1072,7 +1095,9 @@
       }
 
       const names = splitCompanyNames(company);
-      const address = (field.address || '').replace(/\n/g, ' ').trim();
+      const split = splitAddress((field.address || '').replace(/\n/g, ' ').trim());
+      const address = split.registered;
+      const addressActual = (field.addressActual || '').replace(/\n/g, ' ').trim() || split.actual;
       const notesRaw = field.notes || '';
       const record = {
         id: makeId(source, company, field.taxId || ''),
@@ -1093,9 +1118,11 @@
         addedDate: field.addedDate || null,
         country: field.country || '',
         address,
+        addressActual,
         notesRaw,
       };
-      Object.assign(record, parseAddress(address));
+      // 縣市、行政區看實際地址：業務要去的是公司實際在的地方
+      Object.assign(record, parseAddress(addressActual || address));
       record.timeline = parseNotes(notesRaw);
       record.outcome = guessOutcome(notesRaw);
       records.push(record);
@@ -1305,6 +1332,6 @@
     looksLikeAddress,
     validateAddress: (t) => VALIDATORS.address(t) || '',
     INTERNAL_UNITS, PEER_UNITS, BANKS,
-    parseAddress, guessOutcome, OUTCOME_LABEL, normalizeOutcome, outcomeLabel, makeId, toHalfWidth,
+    parseAddress, splitAddress, guessOutcome, OUTCOME_LABEL, normalizeOutcome, outcomeLabel, makeId, toHalfWidth,
   };
 })(window);
