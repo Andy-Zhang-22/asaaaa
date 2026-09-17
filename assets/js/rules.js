@@ -222,7 +222,9 @@
 
   /* ---------------- 客戶歸屬與承作單位判定 ---------------- */
 
-  const MICRO_CAPITAL_LIMIT = 10000;    // 微企客戶資本額上限（仟元）
+  // 微企範疇：資本額未達 5,000 仟元（不含 5,000）。規範原文寫 10,000 仟元（含），
+  // 但使用者 2026/09 重新定義為 5,000 仟元以下不含，網站的判定以這個為準；下方規範摘錄照原文保留。
+  const MICRO_CAPITAL_LIMIT = 5000;     // 微企客戶資本額門檻（仟元，未達才算）
   const LARGE_CAPITAL_LIMIT = 500000;   // 大企部客戶資本額下限（仟元，含）
   const MICRO_CREDIT_LIMIT = 7000;      // 微企單戶授信往來總額上限（仟元）
   const MICRO_MIN_SPREAD = 9;           // 一般組承作 7,000 仟元以下案件的 Spread 下限（%）
@@ -251,11 +253,11 @@
     }
 
     // 二、微企 vs 一般組
-    const isMicroScale = capital > 0 && capital <= MICRO_CAPITAL_LIMIT;
+    const isMicroScale = capital > 0 && capital < MICRO_CAPITAL_LIMIT;
     if (capital > 0) {
       push(isMicroScale ? 'ok' : 'warn', isMicroScale
-        ? `資本額 ${fmt(capital)} 仟元 ≤ ${fmt(MICRO_CAPITAL_LIMIT)} 仟元，屬【微型企業營業處】客戶範疇（不受行業別限制）。`
-        : `資本額 ${fmt(capital)} 仟元 超過 ${fmt(MICRO_CAPITAL_LIMIT)} 仟元，不屬微企處客戶範疇。`);
+        ? `資本額 ${fmt(capital)} 仟元 未達 ${fmt(MICRO_CAPITAL_LIMIT)} 仟元，屬【微型企業營業處】客戶範疇（不受行業別限制）。`
+        : `資本額 ${fmt(capital)} 仟元 達 ${fmt(MICRO_CAPITAL_LIMIT)} 仟元（含）以上，不屬微企處客戶範疇。`);
     }
 
     // 三、授信額度上限與移交門檻
