@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-54';
+  const APP_VERSION = '20260916-55';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1536,7 +1536,7 @@
    *      把真正的錯誤訊息（例如網址不在白名單）整個吃掉，等於瞎子摸象。
    *   2. 白名單不能拿掉。沒有它，這個 Worker 就是誰都能拿去轉打任意網站的跳板。
    */
-  const WORKER_SCRIPT = `const ALLOWED = 'https://data.gcis.nat.gov.tw/';
+  const WORKER_SCRIPT = `const ALLOWED = ['https://data.gcis.nat.gov.tw/', 'https://company.g0v.ronny.tw/'];
 const ORIGIN = '${location.origin}';
 
 const cors = {
@@ -1551,8 +1551,8 @@ export default {
 
     const target = new URL(request.url).searchParams.get('url');
     // 白名單不要拿掉：沒有它，這個 Worker 就是任何人都能拿去轉打任意網站的跳板
-    if (!target || !target.startsWith(ALLOWED)) {
-      return new Response('只接受 data.gcis.nat.gov.tw 的網址', { status: 400, headers: cors });
+    if (!target || !ALLOWED.some((a) => target.startsWith(a))) {
+      return new Response('只接受 data.gcis.nat.gov.tw 與 company.g0v.ronny.tw 的網址', { status: 400, headers: cors });
     }
 
     try {
@@ -1597,12 +1597,22 @@ export default {
     return v;
   };
 
+  // 這幾個設定要跟著雲端同步：在電腦上設定好，手機打開也要能用
+  const SYNCED_PREFS = new Set(['registry-proxy-url', 'registry-dataset-url', 'registry-dataset-taxid-url',
+    'registry-mirror', 'registry-auto', 'registry-auto-last', 'registry-auto-summary']);
   const registryPref = (key, value) => {
     try {
       if (value === undefined) return localStorage.getItem(key) || '';
       if (value) localStorage.setItem(key, value); else localStorage.removeItem(key);
     } catch (e) { /* 無痕模式 */ }
+    if (SYNCED_PREFS.has(key)) {
+      window.Store.setSetting(key, value || '').then(() => scheduleSync()).catch(() => {});
+    }
     return value;
+  };
+  /** Registry 的 set* 寫完 localStorage 後，再把值登記到會同步的設定裡。 */
+  const syncRegistrySetting = (key, value) => {
+    window.Store.setSetting(key, value || '').then(() => scheduleSync()).catch(() => {});
   };
 
   /** 一批客戶逐一查商工登記，回傳差異與失敗清單；不寫入。 */
@@ -1730,7 +1740,15 @@ export default {
     host.append(el('label', { className: 'rule-field' }, [
       el('span', { textContent: '用名稱查的資料集網址（公司登記關鍵字查詢；留空用內建）' }), dataset,
     ]));
-    dataset.onchange = () => { window.Registry.setBase(dataset.value); };
+    const datasetNote = el('p', { className: 'rule-note' });
+    dataset.onchange = () => {
+      const t = window.Registry.setBase(dataset.value);
+      if (t.ok) syncRegistrySetting('registry-dataset-url', t.url);
+      datasetNote.textContent = t.ok ? (t.url && t.url !== dataset.value.trim() ? `已整理成：${t.url}` : '') : t.message;
+      datasetNote.className = t.ok ? 'rule-note' : 'rule-verdict is-fail';
+      if (t.ok && t.url) dataset.value = t.url;
+    };
+    host.append(datasetNote);
     const datasetTax = el('input', {
       id: 'datasetTaxUrl', type: 'url', className: 'paste-box',
       placeholder: window.Registry.DEFAULT_TAXID_BASE,
@@ -1739,16 +1757,24 @@ export default {
     host.append(el('label', { className: 'rule-field' }, [
       el('span', { textContent: '用統編查的資料集網址（公司登記基本資料；留空用內建）' }), datasetTax,
     ]));
-    datasetTax.onchange = () => { window.Registry.setTaxIdBase(datasetTax.value); };
+    const datasetTaxNote = el('p', { className: 'rule-note' });
+    datasetTax.onchange = () => {
+      const t = window.Registry.setTaxIdBase(datasetTax.value);
+      if (t.ok) syncRegistrySetting('registry-dataset-taxid-url', t.url);
+      datasetTaxNote.textContent = t.ok ? (t.url && t.url !== datasetTax.value.trim() ? `已整理成：${t.url}` : '') : t.message;
+      datasetTaxNote.className = t.ok ? 'rule-note' : 'rule-verdict is-fail';
+      if (t.ok && t.url) datasetTax.value = t.url;
+    };
+    host.append(datasetTaxNote);
 
     const proxy = el('input', {
       id: 'proxyUrl', type: 'url', className: 'paste-box', placeholder: 'https://你的-worker.workers.dev/（選填）',
       value: window.Registry.getProxy(),
     });
     host.append(el('label', { className: 'rule-field' }, [
-      el('span', { textContent: '自架代理網址（不想經過第三方就用這個）' }), proxy,
+      el('span', { textContent: '自架代理網址（不想經過第三方就用這個；開了雲端同步會跟著同步到其他裝置）' }), proxy,
     ]));
-    proxy.onchange = () => { window.Registry.setProxy(proxy.value.trim()); };
+    proxy.onchange = () => { window.Registry.setProxy(proxy.value.trim()); syncRegistrySetting('registry-proxy-url', window.Registry.getProxy()); };
 
     /*
      * 代理的健康檢查跟查詢分開。
@@ -1761,6 +1787,7 @@ export default {
     const checkBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '檢查代理設定' });
     checkBtn.onclick = async () => {
       window.Registry.setProxy(proxy.value.trim());
+      syncRegistrySetting('registry-proxy-url', window.Registry.getProxy());
       diag.textContent = '';
       diag.append(el('p', { className: 'rule-note', textContent: '檢查中…' }));
       const res = await window.Registry.checkProxy();
@@ -1916,8 +1943,8 @@ export default {
          * 「這台沒設定」——原本的提示又只在「兩個都沒開」時才出現，勾了鏡像就看不到了。
          */
         if (!window.Registry.getProxy()) {
-          note('這台裝置還沒有填自架代理網址。代理設定只存在各台裝置自己的瀏覽器裡，'
-            + '不會跟著同步——在電腦上設定過，換到手機還是要再填一次。', 'rule-verdict is-fail');
+          note('這台裝置還沒有自架代理網址。開了雲端同步的話，另一台設定好的網址下次同步就會過來；'
+            + '沒開同步就要在這台再填一次。', 'rule-verdict is-fail');
         }
         if (!mirror.checked && !window.Registry.getProxy()) {
           note('也還沒勾 g0v 鏡像。兩個來源都沒有的話，只剩下必定被擋的官方那條。');

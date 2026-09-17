@@ -36,25 +36,52 @@
   const BASE_KEY = 'registry-dataset-url';
   const TAXID_BASE_KEY = 'registry-dataset-taxid-url';
 
+  /*
+   * 整理使用者貼進來的資料集網址。
+   * 實測貼進來的網址少了第一個字（ttps://…），代理就照白名單把它擋掉，整條路壞了
+   * 卻看不出為什麼。所以：協定少字或沒寫就補成 https://，後面的查詢參數去掉，
+   * 不是 data.gcis.nat.gov.tw 的直接拒收並講明。
+   */
+  const tidyDatasetUrl = (url) => {
+    let clean = String(url || '').trim().split('?')[0];
+    if (!clean) return { ok: true, url: '' };
+    clean = clean.replace(/^(h?t?t?p?s?:\/\/)/i, (m) => (/^https:\/\//i.test(m) ? 'https://' : 'https://'));
+    if (!/^https?:\/\//i.test(clean)) clean = `https://${clean}`;
+    clean = clean.replace(/^http:\/\//i, 'https://');
+    if (!/^https:\/\/data\.gcis\.nat\.gov\.tw\/od\/data\/api\/[A-Za-z0-9-]+$/.test(clean)) {
+      return { ok: false, url: clean, message: '這不像商工行政資料開放平臺的資料集網址，應該長得像 https://data.gcis.nat.gov.tw/od/data/api/XXXX' };
+    }
+    return { ok: true, url: clean };
+  };
   const getBase = () => {
-    try { return localStorage.getItem(BASE_KEY) || DEFAULT_BASE; } catch (e) { return DEFAULT_BASE; }
+    try {
+      const t = tidyDatasetUrl(localStorage.getItem(BASE_KEY) || '');
+      return (t.ok && t.url) ? t.url : DEFAULT_BASE;
+    } catch (e) { return DEFAULT_BASE; }
   };
   const setBase = (url) => {
+    const t = tidyDatasetUrl(url);
+    if (!t.ok) return t;
     try {
-      const clean = String(url || '').trim().split('?')[0];   // 貼進來的常常帶著查詢參數
-      if (clean) localStorage.setItem(BASE_KEY, clean);
+      if (t.url) localStorage.setItem(BASE_KEY, t.url);
       else localStorage.removeItem(BASE_KEY);
     } catch (e) { /* 無痕模式寫不進去，不影響當次使用 */ }
+    return t;
   };
   const getTaxIdBase = () => {
-    try { return localStorage.getItem(TAXID_BASE_KEY) || DEFAULT_TAXID_BASE; } catch (e) { return DEFAULT_TAXID_BASE; }
+    try {
+      const t = tidyDatasetUrl(localStorage.getItem(TAXID_BASE_KEY) || '');
+      return (t.ok && t.url) ? t.url : DEFAULT_TAXID_BASE;
+    } catch (e) { return DEFAULT_TAXID_BASE; }
   };
   const setTaxIdBase = (url) => {
+    const t = tidyDatasetUrl(url);
+    if (!t.ok) return t;
     try {
-      const clean = String(url || '').trim().split('?')[0];
-      if (clean) localStorage.setItem(TAXID_BASE_KEY, clean);
+      if (t.url) localStorage.setItem(TAXID_BASE_KEY, t.url);
       else localStorage.removeItem(TAXID_BASE_KEY);
     } catch (e) { /* 同上 */ }
+    return t;
   };
 
   /*
@@ -143,8 +170,9 @@
     },
     g0v: {
       label: 'g0v 公司登記資料（社群鏡像）',
-      byTaxId: (taxId) => [`https://company.g0v.tw/api/show/${encodeURIComponent(taxId)}`],
-      byName: (name) => [`https://company.g0v.tw/api/search?q=${encodeURIComponent(name)}`],
+      // 網域是 company.g0v.ronny.tw（實測 company.g0v.tw 根本不存在，DNS 查不到）
+      byTaxId: (taxId) => [`https://company.g0v.ronny.tw/api/show/${encodeURIComponent(taxId)}`],
+      byName: (name) => [`https://company.g0v.ronny.tw/api/search/${encodeURIComponent(name)}`],
     },
     proxy: {
       label: '自架代理',
@@ -185,11 +213,21 @@
     setupDate: ['Company_Setup_Date', 'Business_Setup_Date', 'Setup_Date', '核准設立日期', '設立日期'],
   };
 
+  // g0v 鏡像的「核准設立日期」是 {year, month, day} 物件、「公司名稱」偶爾是陣列，
+  // 直接 String() 會變成 [object Object]，這裡先攤平
+  const flat = (v) => {
+    if (v === undefined || v === null) return '';
+    if (Array.isArray(v)) return flat(v.find((x) => x !== undefined && x !== null && String(x).trim()));
+    if (typeof v === 'object') {
+      if (v.year) return `${v.year}${String(v.month || 1).padStart(2, '0')}${String(v.day || 1).padStart(2, '0')}`;
+      return '';
+    }
+    return String(v).trim();
+  };
   const pick = (obj, keys) => {
     for (const k of keys) {
-      if (obj && obj[k] !== undefined && obj[k] !== null && String(obj[k]).trim() !== '') {
-        return String(obj[k]).trim();
-      }
+      const v = obj ? flat(obj[k]) : '';
+      if (v) return v;
     }
     return '';
   };
@@ -411,6 +449,6 @@
     lookupByTaxId, lookupByName, mapRow, toThousands, tidyDate,
     SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, nameVariants,
     getBase, setBase, DEFAULT_BASE, getTaxIdBase, setTaxIdBase, DEFAULT_TAXID_BASE, FIELD_CANDIDATES,
-    officialByTaxId, officialByName, upstreamOf, PROBE_TAXID,
+    officialByTaxId, officialByName, upstreamOf, PROBE_TAXID, tidyDatasetUrl,
   };
 })(window);
