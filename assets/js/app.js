@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-46';
+  const APP_VERSION = '20260916-47';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -2040,7 +2040,9 @@ export default {
   /* ---------------- 匯入 ---------------- */
 
   function logLine(text, cls) {
-    $('#importLog').prepend(el('div', { className: cls || '', textContent: text }));
+    const node = el('div', { className: cls || '', textContent: text });
+    $('#importLog').prepend(node);
+    return node;
   }
 
   /** 匯入後秀前幾筆的欄位對照，讓使用者當場看得出有沒有跑錯格。 */
@@ -2080,29 +2082,32 @@ export default {
    * 比對優先用統一編號：那是唯一且不會有寫法差異的。沒有統編才退回公司名稱，
    * 並且把「台／臺」正規化——登記一律用「臺」，但名單上兩種都有。
    */
-  const dedupeKey = (r) => {
+  const taxKey = (r) => {
     const taxId = String(r.taxId || '').replace(/\D/g, '');
-    if (taxId.length === 8) return `tax:${taxId}`;
+    return taxId.length === 8 ? `tax:${taxId}` : '';
+  };
+  const nameKey = (r) => {
     const name = String(r.company || '').replace(/\s+/g, '').replace(/台/g, '臺');
     return name ? `name:${name}` : '';
   };
+  const dedupeKey = (r) => taxKey(r) || nameKey(r);
 
   /**
    * 找出這批要匯入的資料裡，有哪些公司已經在名單上。
    * 同一份來源檔的舊資料不算——那些本來就會被整份換掉。
    */
   function findImportDuplicates(incoming, sourceName) {
+    // 每筆同時用統編與名稱建索引：新資料沒統編、名單上那筆有，也要靠名稱對得起來
     const index = new Map();
     state.records.forEach((rec) => {
       if (rec.source === sourceName) return;
-      const key = dedupeKey(rec);
-      if (key && !index.has(key)) index.set(key, rec);
+      [taxKey(rec), nameKey(rec)].forEach((key) => { if (key && !index.has(key)) index.set(key, rec); });
     });
     const hits = [];
     incoming.forEach((r) => {
-      const key = dedupeKey(r);
-      const old = key ? index.get(key) : null;
-      if (old) hits.push({ incoming: r, old, byTaxId: key.startsWith('tax:') });
+      const byTax = taxKey(r) ? index.get(taxKey(r)) : null;
+      const old = byTax || (nameKey(r) ? index.get(nameKey(r)) : null);
+      if (old) hits.push({ incoming: r, old, byTaxId: !!byTax });
     });
     return hits;
   }
@@ -2191,10 +2196,216 @@ export default {
     }));
   }
 
+  /* ------------------------------------------------------------------
+   * 104 截圖 → 名單
+   *
+   * 使用者在 104 看到正在徵才的公司會截圖存起來。把截圖丟進匯入區：
+   *   1. Ocr.recognize 在本機辨識（tesseract.js，截圖不上傳）。
+   *   2. Ocr.parse104 挑出公司名稱、資本額、員工數、地址、聯絡人、電話。
+   *   3. 預覽視窗讓使用者改辨識錯的字，按「查商工登記」補統編、負責人、
+   *      登記資本額、成立年、登記地址（走 registry.js，同時試官方、代理與 g0v 鏡像）。
+   *   4. 加入名單。電話只用公司頁上的，「暫不提供」就留白，不拿職缺頁的湊。
+   * ------------------------------------------------------------------ */
+  async function importScreenshots(files) {
+    if (!window.Ocr || !window.Tesseract) { logLine('❌ 截圖辨識元件沒有載入，請重新整理頁面再試', 'err'); return; }
+    const items = [];
+    const line = logLine(`⏳ 辨識截圖 0 / ${files.length} …`);
+    const setLine = (text) => { if (line) line.textContent = text; };
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setLine(`⏳ 辨識截圖 ${i + 1} / ${files.length}：${file.name} …`);
+      try {
+        const text = await window.Ocr.recognize(file, (m) => {
+          if (m && m.status === 'loading language traineddata' && m.progress < 1) setLine(`⏳ 第一次使用要先載入辨識模型（約 6 MB）… ${Math.round(m.progress * 100)}%`);
+          else if (m && m.status === 'recognizing text') setLine(`⏳ 辨識截圖 ${i + 1} / ${files.length}：${file.name} … ${Math.round(m.progress * 100)}%`);
+        });
+        const parsed = window.Ocr.parse104(text);
+        parsed.file = file.name;
+        parsed.text = text;
+        items.push(parsed);
+      } catch (err) {
+        console.error(err);
+        items.push({ kind: 'error', file: file.name, error: err && err.message ? err.message : '辨識失敗' });
+      }
+    }
+    const companies = [];
+    const skipped = [];
+    items.forEach((p) => {
+      if (p.kind !== 'company') { skipped.push(p); return; }
+      // 同一家公司截了好幾張（公司頁＋職缺頁）就併成一筆，資料多的那張優先
+      const key = p.company.replace(/\s/g, '');
+      const seen = companies.find((c) => c.company.replace(/\s/g, '') === key);
+      if (!seen) companies.push(p);
+      else if (!seen.capital && p.capital) Object.assign(seen, p);
+    });
+    setLine(`✅ 截圖辨識完成：${companies.length} 家公司`
+      + `${skipped.length ? `，${skipped.length} 張不是公司頁或讀不出來（${skipped.map((x) => x.file).join('、')}）` : ''}`);
+    if (!companies.length) { logLine('沒有辨識出任何公司頁。請確認截的是 104 的「公司簡介」頁，而不是職缺頁。', 'err'); return; }
+    open104Preview(companies);
+  }
+
+  /** 商工登記查回來的候選裡挑名稱最像的：台／臺互通，去空白。 */
+  function pickRegistryMatch(res, company) {
+    const norm = (v) => String(v || '').replace(/\s/g, '').replace(/台/g, '臺');
+    const want = norm(company);
+    const list = (res && res.candidates) || [];
+    return list.find((c) => c && norm(c.name) === want) || list.find((c) => c && norm(c.name).includes(want)) || (res && res.data) || null;
+  }
+
+  function open104Preview(companies) {
+    const host = $('#editorBody');
+    host.textContent = '';
+    host.append(el('h2', { textContent: `104 截圖：${companies.length} 家公司` }));
+    host.append(el('p', { className: 'muted',
+      textContent: '下面是截圖辨識出來的內容，可以直接修改。按「查商工登記」會用公司名稱查統編、負責人、登記資本額、成立年與登記地址，查到的會蓋過截圖的值；沒查到就照截圖的加入，之後再補。' }));
+
+    const FIELDS = [
+      ['company', '公司名稱'], ['taxId', '統一編號'], ['owner', '負責人'], ['capital', '資本額（仟元）'],
+      ['founded', '成立年'], ['phone', '電話'], ['contact', '聯絡人'], ['industry', '產業別'], ['address', '地址'],
+    ];
+    const rows = companies.map((p) => ({
+      p,
+      values: {
+        company: p.company, taxId: '', owner: '', capital: p.capital, founded: p.founded,
+        phone: p.phone, contact: p.contact, industry: p.desc || p.industry, address: p.address,
+      },
+      registry: null, inputs: {}, status: null,
+    }));
+
+    const list = el('div');
+    rows.forEach((row) => {
+      const card = el('div', { className: 'import-preview shot-row' });
+      const grid = el('div', { className: 'shot-grid' });
+      FIELDS.forEach(([key, label]) => {
+        const input = key === 'address' ? el('textarea', { rows: 2, value: row.values[key] || '' })
+          : el('input', { type: 'text', value: row.values[key] || '' });
+        input.dataset.field = key;
+        row.inputs[key] = input;
+        grid.append(el('label', { className: 'rule-field' }, [el('span', { textContent: label }), input]));
+      });
+      row.status = el('p', { className: 'rule-note', textContent: p104Status(row) });
+      const look = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '查商工登記' });
+      look.onclick = () => lookupRow(row, look);
+      card.append(el('div', { className: 'group-head' }, [el('strong', { textContent: row.p.file }), look]), grid, row.status);
+      list.append(card);
+    });
+
+    function p104Status(row) {
+      const bits = [];
+      if (row.p.employees) bits.push(`104：員工 ${row.p.employees} 人`);
+      if (row.p.jobs) bits.push(`招募中 ${row.p.jobs} 個職缺`);
+      bits.push(row.p.phone ? `公司頁電話 ${row.p.phone}` : '公司頁電話「暫不提供」，電話留白');
+      return bits.join('　');
+    }
+
+    async function lookupRow(row, btn) {
+      const name = row.inputs.company.value.trim();
+      if (!name) { row.status.textContent = '沒有公司名稱，無法查商工登記。'; return; }
+      btn.disabled = true;
+      row.status.textContent = `查詢中：${name} …`;
+      try {
+        const res = await window.Registry.lookupByName(name, { useMirror: true });
+        if (!res.ok) {
+          row.registry = null;
+          row.status.textContent = `商工登記查不到：${res.reason || '沒有回應'}。將照截圖的內容加入，統編等欄位可以之後再補。`;
+          row.status.className = 'rule-verdict is-fail';
+          return;
+        }
+        const hit = pickRegistryMatch(res, name);
+        row.registry = hit;
+        const set = (key, v) => { if (v) row.inputs[key].value = v; };
+        set('taxId', hit.taxId);
+        set('owner', hit.owner);
+        set('capital', hit.capital);
+        set('founded', hit.founded ? String(hit.founded).slice(0, 4) : '');
+        set('address', hit.address);
+        if (hit.name && hit.name.replace(/\s/g, '') !== name.replace(/\s/g, '')) set('company', hit.name);
+        row.status.textContent = `已依商工登記（${res.label}）填入：統編 ${hit.taxId || '—'}、負責人 ${hit.owner || '—'}、資本額 ${hit.capital || '—'} 仟元、成立 ${hit.founded || '—'}。`;
+        row.status.className = 'rule-verdict is-ok';
+      } catch (err) {
+        row.status.textContent = `查詢失敗：${err && err.message ? err.message : err}`;
+        row.status.className = 'rule-verdict is-fail';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    const lookupAll = el('button', { className: 'btn', type: 'button', textContent: '全部查商工登記' });
+    const add = el('button', { className: 'btn btn-primary', type: 'button', textContent: '加入名單' });
+    const cancel = el('button', { className: 'btn', type: 'button', textContent: '取消' });
+    const progress = el('p', { className: 'muted' });
+    lookupAll.onclick = async () => {
+      lookupAll.disabled = true;
+      const buttons = [...list.querySelectorAll('button')];
+      for (let i = 0; i < rows.length; i++) {
+        progress.textContent = `查詢中 ${i + 1} / ${rows.length}`;
+        await lookupRow(rows[i], buttons[i]);
+      }
+      progress.textContent = '';
+      lookupAll.disabled = false;
+    };
+    cancel.onclick = () => { $('#editor').hidden = true; };
+    add.onclick = async () => {
+      const source = `104截圖-${todayISO().replace(/-/g, '')}`;
+      const today = todayISO();
+      const records = rows.map((row) => {
+        const v = {};
+        FIELDS.forEach(([key]) => { v[key] = row.inputs[key].value.trim(); });
+        const notes = window.Ocr.describe({ ...row.p, phone: v.phone })
+          + (row.registry ? '' : '※統編、負責人待查商工登記。');
+        const record = {
+          id: window.Normalize.makeId(source, v.company, v.taxId), source,
+          company: v.company, aliases: [], taxId: v.taxId.replace(/\D/g, ''),
+          grade: '', founded: v.founded, capital: v.capital,
+          phoneRaw: v.phone, phones: window.Normalize.extractPhones(v.phone),
+          owner: v.owner, keyman: v.contact, industry: v.industry,
+          nextDate: null, lastDate: null, addedDate: today, country: '台灣',
+          address: v.address, notesRaw: notes, importedAt: Date.now(),
+        };
+        Object.assign(record, window.Normalize.parseAddress(v.address));
+        record.timeline = window.Normalize.parseNotes(notes);
+        record.outcome = window.Normalize.guessOutcome(notes);
+        return record;
+      }).filter((r) => r.company);
+      if (!records.length) { toast('沒有可加入的公司（公司名稱是空的）'); return; }
+
+      let toSave = records;
+      // 來源名稱傳空字串：跟名單上「所有」公司比對，包括之前同一天截圖加進來的
+      const hits = findImportDuplicates(records, '');
+      if (hits.length) {
+        const policy = await askDuplicatePolicy('104 截圖', hits);
+        if (!policy) { open104Preview(companies); return; }
+        if (policy === 'skip') toSave = records.filter((r) => !hits.some((h) => h.incoming === r));
+        else if (policy === 'overwrite') {
+          hits.forEach(({ incoming, old }) => { incoming.id = old.id; incoming.source = old.source; });
+          await window.Store.deleteRecordsById(hits.map(({ old }) => old.id));
+          for (const { old } of hits) {
+            const st = state.userStates.get(old.id);
+            if (st && st.edits) await saveState(old.id, { edits: undefined, editsAt: Date.now() });
+          }
+        }
+      }
+      await window.Store.saveRecords(toSave);
+      await reload();
+      $('#editor').hidden = true;
+      closeOverlays();
+      render();
+      toast(`已加入 ${toSave.length} 家公司`);
+      if (toSave.length === 1) openDetail(toSave[0].id);
+      scheduleSync();
+    };
+
+    host.append(el('div', { className: 'card-actions' }, [lookupAll, add, cancel]), progress, list);
+    $('#editor').hidden = false;
+  }
+
   async function importFiles(files) {
-    const wanted = [...files].filter((f) => /\.(pdf|csv|xlsx|xls)$/i.test(f.name)
-      || f.type === 'application/pdf' || f.type === 'text/csv');
-    if (!wanted.length) { logLine('沒有偵測到 PDF、CSV 或 Excel 檔案', 'err'); return; }
+    const isImage = (f) => /^image\//.test(f.type) || /\.(png|jpe?g|webp|heic)$/i.test(f.name);
+    const shots = [...files].filter(isImage);
+    const wanted = [...files].filter((f) => !isImage(f) && (/\.(pdf|csv|xlsx|xls)$/i.test(f.name)
+      || f.type === 'application/pdf' || f.type === 'text/csv'));
+    if (!wanted.length && !shots.length) { logLine('沒有偵測到 PDF、CSV、Excel 或截圖檔案', 'err'); return; }
+    if (shots.length) await importScreenshots(shots);
 
     for (const file of wanted) {
       const isCsv = /\.csv$/i.test(file.name) || file.type === 'text/csv';

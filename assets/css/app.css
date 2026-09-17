@@ -422,6 +422,10 @@ button, input, select { font: inherit; color: inherit; }
 .group-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
 .group-row span { display: flex; flex-direction: column; }
 .apply-group { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
+/* 104 截圖預覽：每家一張卡，欄位兩欄排 */
+.shot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin: 6px 0; }
+.shot-grid .rule-field:last-child { grid-column: 1 / -1; }
+@media (max-width: 600px) { .shot-grid { grid-template-columns: 1fr; } }
 .edit-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 12px; margin: 16px 0; }
 @media (max-width: 520px) { .edit-form { grid-template-columns: 1fr; } }
 .edit-form textarea { min-height: 52px; resize: vertical; }
