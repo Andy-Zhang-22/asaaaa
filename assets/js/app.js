@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-45';
+  const APP_VERSION = '20260916-46';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -159,38 +159,6 @@
     return out;
   }
 
-  /** 更新某一筆的個人狀態，保留既有欄位（通話結果與編輯內容互不覆蓋）。 */
-  /*
-   * 舊資料修復：把誤放到 KEYMAN／負責人／產業別的地址搬回地址欄。
-   *
-   * 匯入時的欄位判斷曾經讓人名欄位吃下地址（人名的驗證條件太寬鬆，而
-   * 「新北市新莊區幸福東路79號4樓」正好符合），造成大量客戶顯示「未填地址」。
-   * 匯入端已經修好，但已經進到資料庫的那些還在原地，而且使用者未必留著原始 PDF，
-   * 所以提供這個就地修復。
-   *
-   * 搬移是寫成「編輯」而不是直接改原始資料：這樣看得出哪些是後來動過的，
-   * 也會透過既有機制同步到其他裝置，不滿意還能用詳細頁的「還原成名單原始內容」退回。
-   * 只處理地址欄本來就空的客戶，不會覆蓋任何已經有地址的資料。
-   */
-  const STRAY_FIELDS = [['keyman', 'KEYMAN'], ['owner', '負責人'], ['industry', '產業別']];
-
-  function findStrayAddress(r) {
-    for (const [field, label] of STRAY_FIELDS) {
-      const value = window.Normalize.validateAddress(r[field] || '');
-      if (value) return { field, label, value };
-    }
-    return null;
-  }
-
-  /*
-   * 批次：把訪談內容裡寫到的下次聯絡日補進日期欄。
-   *
-   * 跟上面那個即時補的差別在於對象：這個處理的是已經在名單裡、
-   * 當初匯入時就只讀日期欄的舊資料。判讀規則共用 findFollowUp()。
-   *
-   * 只碰「日期欄空白，或日期已經過去」的客戶——已經排好且還沒到的約訪不動，
-   * 那是使用者自己排的，比訪談內容的舊字句可信。
-   */
   /*
    * 刪掉單一筆客戶。
    *
@@ -400,74 +368,6 @@
     }
 
     $('#editor').hidden = false;
-  }
-
-  async function repairFollowUps() {
-    const today = todayISO();
-    const targets = [];
-    state.records.forEach((rec) => {
-      const r = view(rec);
-      if (r.nextDate && r.nextDate >= today) return;
-      const found = window.Normalize.findFollowUp(r.notesRaw, today);
-      if (found && found.iso !== r.nextDate) targets.push({ rec, r, found });
-    });
-
-    if (!targets.length) { toast('訪談內容裡沒有找到可以補的下次聯絡日'); return; }
-
-    const samples = targets.slice(0, 5)
-      .map((t) => `　・${t.r.company}\n　　「${t.found.snippet}」→ ${dateLabel(t.found.iso)}`).join('\n');
-    const ok = confirm(`找到 ${targets.length} 筆客戶的訪談內容寫了再聯絡的日期，但日期欄是空的或已經過期：\n\n`
-      + `${samples}\n\n`
-      + '要把這些日期補進去嗎？\n（已經排好、還沒到的約訪不會被動到；補進去的可以在詳細頁改回來）');
-    if (!ok) return;
-
-    for (const { rec, found } of targets) {
-      await saveState(rec.id, { nextDate: found.iso });
-    }
-    await reload();
-    render();
-    toast(`已補上 ${targets.length} 筆下次聯絡日`);
-    scheduleSync();
-  }
-
-  async function repairStrayAddresses() {
-    const targets = [];
-    state.records.forEach((rec) => {
-      const r = view(rec);
-      if (r.address) return;                      // 已經有地址的完全不碰
-      const stray = findStrayAddress(r);
-      if (stray) targets.push({ rec, r, stray });
-    });
-
-    if (!targets.length) {
-      toast('沒有找到錯置的地址，不需要修復');
-      return;
-    }
-
-    const byField = new Map();
-    targets.forEach((t) => byField.set(t.stray.label, (byField.get(t.stray.label) || 0) + 1));
-    const breakdown = [...byField.entries()].map(([label, n]) => `　・${label}：${n} 筆`).join('\n');
-    const samples = targets.slice(0, 3)
-      .map((t) => `　・${t.r.company}\n　　${t.stray.label} → 地址：${t.stray.value}`).join('\n');
-
-    const ok = confirm(`找到 ${targets.length} 筆地址被放到別的欄位：\n${breakdown}\n\n`
-      + `例如：\n${samples}\n\n`
-      + '要把它們搬回地址欄嗎？\n（會記錄成「已修改」，可以在各客戶的詳細頁還原）');
-    if (!ok) return;
-
-    for (const { rec, r, stray } of targets) {
-      const existing = state.userStates.get(rec.id) || {};
-      const edits = { ...(existing.edits || {}) };
-      edits.address = stray.value;
-      // 原本那格放的是地址不是人名／產業別，一併清掉才不會兩邊都顯示同一串
-      if ((r[stray.field] || '').trim() === stray.value.trim()) edits[stray.field] = '';
-      await saveState(rec.id, { edits, editsAt: Date.now() });
-    }
-
-    await reload();
-    render();
-    toast(`已修復 ${targets.length} 筆地址`);
-    scheduleSync();
   }
 
   async function saveState(recordId, patch) {
@@ -2682,9 +2582,7 @@ export default {
       }
       if (act === 'new-customer') openNewCustomer();
       if (act === 'paste-customer') openPasteImport();
-      if (act === 'fix-address') { await repairStrayAddresses(); return; }
       if (act === 'registry') { openRegistryUpdate(); return; }
-      if (act === 'followup') { await repairFollowUps(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'check-names') { await reviewCompanyNames(); return; }
       if (act === 'manage') {
