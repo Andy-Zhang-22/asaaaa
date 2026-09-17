@@ -53,6 +53,12 @@
       out.groupAt = older.groupAt;
     }
     if (!out.group) delete out.group;
+    // 商工登記查核結果（regAt / regChange）也一樣：取查核時間比較新的那份
+    if ((older.regAt || 0) > (newer.regAt || 0)) {
+      out.regAt = older.regAt;
+      out.regChange = older.regChange;
+    }
+    if (!out.regChange) delete out.regChange;
     return out;
   }
 
@@ -128,7 +134,7 @@
     const stateDead = (st) => {
       const r = records.get(st.recordId);
       if (!r) return true;
-      const stamp = Math.max(st.updatedAt || 0, st.editsAt || 0, st.groupAt || 0, lastLogAt.get(st.recordId) || 0);
+      const stamp = Math.max(st.updatedAt || 0, st.editsAt || 0, st.groupAt || 0, st.regAt || 0, lastLogAt.get(st.recordId) || 0);
       const sourceKilled = tombstones.sources[r.source];
       if (sourceKilled && sourceKilled > stamp) return true;
       const selfKilled = tombstones.records[st.recordId];
