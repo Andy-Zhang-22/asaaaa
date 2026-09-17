@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-54';
+  const APP_VERSION = '20260916-55';
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -1536,7 +1536,7 @@
    *      把真正的錯誤訊息（例如網址不在白名單）整個吃掉，等於瞎子摸象。
    *   2. 白名單不能拿掉。沒有它，這個 Worker 就是誰都能拿去轉打任意網站的跳板。
    */
-  const WORKER_SCRIPT = `const ALLOWED = 'https://data.gcis.nat.gov.tw/';
+  const WORKER_SCRIPT = `const ALLOWED = ['https://data.gcis.nat.gov.tw/', 'https://company.g0v.ronny.tw/'];
 const ORIGIN = '${location.origin}';
 
 const cors = {
@@ -1551,8 +1551,8 @@ export default {
 
     const target = new URL(request.url).searchParams.get('url');
     // 白名單不要拿掉：沒有它，這個 Worker 就是任何人都能拿去轉打任意網站的跳板
-    if (!target || !target.startsWith(ALLOWED)) {
-      return new Response('只接受 data.gcis.nat.gov.tw 的網址', { status: 400, headers: cors });
+    if (!target || !ALLOWED.some((a) => target.startsWith(a))) {
+      return new Response('只接受 data.gcis.nat.gov.tw 與 company.g0v.ronny.tw 的網址', { status: 400, headers: cors });
     }
 
     try {
@@ -1730,7 +1730,14 @@ export default {
     host.append(el('label', { className: 'rule-field' }, [
       el('span', { textContent: '用名稱查的資料集網址（公司登記關鍵字查詢；留空用內建）' }), dataset,
     ]));
-    dataset.onchange = () => { window.Registry.setBase(dataset.value); };
+    const datasetNote = el('p', { className: 'rule-note' });
+    dataset.onchange = () => {
+      const t = window.Registry.setBase(dataset.value);
+      datasetNote.textContent = t.ok ? (t.url && t.url !== dataset.value.trim() ? `已整理成：${t.url}` : '') : t.message;
+      datasetNote.className = t.ok ? 'rule-note' : 'rule-verdict is-fail';
+      if (t.ok && t.url) dataset.value = t.url;
+    };
+    host.append(datasetNote);
     const datasetTax = el('input', {
       id: 'datasetTaxUrl', type: 'url', className: 'paste-box',
       placeholder: window.Registry.DEFAULT_TAXID_BASE,
@@ -1739,7 +1746,14 @@ export default {
     host.append(el('label', { className: 'rule-field' }, [
       el('span', { textContent: '用統編查的資料集網址（公司登記基本資料；留空用內建）' }), datasetTax,
     ]));
-    datasetTax.onchange = () => { window.Registry.setTaxIdBase(datasetTax.value); };
+    const datasetTaxNote = el('p', { className: 'rule-note' });
+    datasetTax.onchange = () => {
+      const t = window.Registry.setTaxIdBase(datasetTax.value);
+      datasetTaxNote.textContent = t.ok ? (t.url && t.url !== datasetTax.value.trim() ? `已整理成：${t.url}` : '') : t.message;
+      datasetTaxNote.className = t.ok ? 'rule-note' : 'rule-verdict is-fail';
+      if (t.ok && t.url) datasetTax.value = t.url;
+    };
+    host.append(datasetTaxNote);
 
     const proxy = el('input', {
       id: 'proxyUrl', type: 'url', className: 'paste-box', placeholder: 'https://你的-worker.workers.dev/（選填）',
