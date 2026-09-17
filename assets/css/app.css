@@ -423,6 +423,8 @@ button, input, select { font: inherit; color: inherit; }
 .group-row span { display: flex; flex-direction: column; }
 .apply-group { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
 /* 104 截圖預覽：每家一張卡，欄位兩欄排 */
+.shot-pick { margin-top: 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.shot-pick p { margin: 0; font-size: 12px; }
 .shot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin: 6px 0; }
 .shot-grid .rule-field:last-child { grid-column: 1 / -1; }
 @media (max-width: 600px) { .shot-grid { grid-template-columns: 1fr; } }

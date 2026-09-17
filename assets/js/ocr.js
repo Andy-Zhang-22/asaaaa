@@ -24,7 +24,8 @@
         corePath: `${VENDOR}/`,
         langPath: `${VENDOR}/lang`,
         gzip: false,
-        cacheMethod: 'none',
+        // 模型存進 IndexedDB：手機每次開網站都重抓 2.3 MB 太浪費
+        cacheMethod: 'write',
         logger: (m) => { if (onProgress) onProgress(m); },
       }).then(async (w) => {
         await w.setParameters({ preserve_interword_spaces: '1' });

@@ -2749,6 +2749,13 @@ export default {
       e.target.value = '';
       importFiles(files);
     };
+    // 手機相簿：使用者的 104 截圖都在手機上，這條路要一按就開相簿
+    $('#btnShotPick').onclick = () => $('#shotPick').click();
+    $('#shotPick').onchange = (e) => {
+      const files = [...e.target.files];
+      e.target.value = '';
+      importFiles(files);
+    };
 
     const dz = $('#dropzone');
     ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => {
@@ -2793,6 +2800,7 @@ export default {
       }
       if (act === 'new-customer') openNewCustomer();
       if (act === 'paste-customer') openPasteImport();
+      if (act === 'shots') { $('#importer').hidden = false; $('#shotPick').click(); }
       if (act === 'registry') { openRegistryUpdate(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'check-names') { await reviewCompanyNames(); return; }

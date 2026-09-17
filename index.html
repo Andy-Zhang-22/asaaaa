@@ -30,6 +30,7 @@
     <button id="btnImport" class="btn btn-primary">匯入名單</button>
     <button id="btnMenu" class="btn btn-ghost" aria-haspopup="true" title="更多">⋯</button>
     <div id="menu" class="menu" hidden>
+      <button data-act="shots">匯入 104 截圖</button>
       <button data-act="paste-customer">貼上新增客戶</button>
       <button data-act="new-customer">手動新增客戶</button>
       <hr>
@@ -157,6 +158,12 @@
       <span>或</span>
       <button id="btnPick" class="btn btn-primary">選擇檔案</button>
       <input id="filePick" type="file" accept="application/pdf,.pdf,text/csv,.csv,.xlsx,.xls,image/*,.png,.jpg,.jpeg" multiple hidden>
+    </div>
+    <!-- 手機專用：accept 只給 image/*，iPhone 會直接開相簿，不用再從「選擇檔案」裡找 -->
+    <div class="shot-pick">
+      <button id="btnShotPick" class="btn" type="button">📷 從手機相簿選 104 截圖</button>
+      <input id="shotPick" type="file" accept="image/*" multiple hidden>
+      <p class="muted">可一次選多張。截圖在你的手機上辨識，不會上傳。</p>
     </div>
     <div id="importLog" class="import-log"></div>
   </div>
