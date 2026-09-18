@@ -409,6 +409,16 @@ button, input, select { font: inherit; color: inherit; }
 .badge-regchange { border-color: #d97706; color: #b45309; }
 .branch-common { color: #b45309; }
 .badge-branch { border-color: #0f766e; color: #0f766e; }
+/* 承作檢核 */
+.deal-result h3 { font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+.deal-facts { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 13px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.deal-facts dt { color: var(--muted); }
+.deal-facts dd { margin: 0; overflow-wrap: anywhere; }
+.deal-suggestions { padding-left: 20px; font-size: 13.5px; line-height: 1.6; }
+.deal-suggestions li { margin-bottom: 6px; }
+.deal-rule { font-size: 12px; }
+.deal-summary { font-weight: 600; }
 .badge-branch-common { border-color: #b45309; color: #b45309; }
 
 /* ---------- 長列表的繪製成本 ---------- */

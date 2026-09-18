@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-69';
+  const APP_VERSION = '20260916-70';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -614,6 +614,8 @@
       const lastDate = lead.lastDate || null;
       const nextDate = lead.nextDate || members.map((m) => m.nextDate).filter(Boolean).sort().pop() || null;
       members.forEach((m) => {
+        // 撥打狀態也跟著最近聯絡的那家：打給老闆談完，整組都算已聯絡（禁止推廣的那家不動）
+        if (lastDate && !m.blocked && m.outcome !== lead.outcome) { m.outcome = lead.outcome; m.groupDatesFrom = lead.company; }
         if ((m.lastDate || null) === lastDate && (m.nextDate || null) === nextDate) return;
         m.groupDatesFrom = lead.company;
         m.lastDate = lastDate;
@@ -1207,6 +1209,8 @@
 
     const editBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '編輯資料' });
     editBtn.onclick = () => openEditor(r.id);
+    const dealBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '承作檢核' });
+    dealBtn.onclick = () => openDealCheck(r.id);
     body.append(el('div', { className: 'detail-head' }, [
       el('h2', { textContent: r.company }),
       r.aliases.length ? el('p', { className: 'detail-alias', textContent: `關係企業：${r.aliases.join('、')}` }) : '',
@@ -1214,6 +1218,7 @@
         outcomeBadge(r),
         r.edited ? el('span', { className: 'badge badge-edited', textContent: '已修改' }) : '',
         editBtn,
+        dealBtn,
         deleteBtn(r),
       ].filter(Boolean)),
     ].filter(Boolean)));
@@ -1272,8 +1277,8 @@
       ['統一編號', r.taxId], ['負責人', r.owner], ['KEYMAN', r.keyman],
       ['產業別', r.industry], ['成立年', r.founded],
       ['資本額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
-      ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) + (r.groupDatesFrom ? `　（關係企業連動，以 ${r.groupDatesFrom} 為準）` : '') : ''],
-      ['最近聯絡', r.lastDate ? dateLabel(r.lastDate) + (r.groupDatesFrom ? `　（關係企業連動，以 ${r.groupDatesFrom} 為準）` : '') : ''],
+      ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) : ''],
+      ['最近聯絡', r.lastDate ? dateLabel(r.lastDate) : ''],
       ['名單新增', r.addedDate ? dateLabel(r.addedDate) : ''],
     ];
     rows.forEach(([k, v]) => {
@@ -1327,8 +1332,7 @@
       if (r.regAt) dd.append(el('div', { className: 'muted', textContent: `最近查核 ${dateLabel(new Date(r.regAt).toISOString().slice(0, 10))}` }));
       dl.append(dd);
     }
-    // 名單來源放最後，看的頻率最低
-    if (r.source) dl.append(el('dt', { textContent: '名單來源' }), el('dd', { textContent: r.source }));
+    // 名單來源不在詳細頁列出（使用者說看起來亂），卡片上仍有、篩選也有
     body.append(dl);
 
     // 通話紀錄表單
@@ -1585,6 +1589,148 @@
     };
   }
 
+
+  /*
+   * 承作檢核：輸入案件架構，跟這家客戶的名單資料、訪談內容（含網站上記的通話）
+   * 一起丟給規則判斷，列出衝突與調整建議。判斷邏輯在 rules.js 的 checkDeal，
+   * 這裡只負責收輸入、把訪談判讀出來的事實攤開給人覆核。
+   */
+  function openDealCheck(recordId) {
+    const raw = state.records.find((x) => x.id === recordId);
+    if (!raw) return;
+    const r = allViews().find((x) => x.id === recordId) || view(raw);
+    const R = window.Rules;
+    const N = window.Normalize;
+    const host = $('#editorBody');
+    host.textContent = '';
+    host.append(el('h2', { textContent: `承作檢核：${r.company}` }));
+    host.append(el('p', { className: 'muted', textContent: '輸入這個案子的架構，網站會拿名單資料（登記地址、資本額）跟訪談內容（往來單位、本餘）對照規則，指出衝突並給調整建議。金額一律仟元。' }));
+
+    // 訪談：網站上記的通話 + 名單原本的內容，跟往來情形判讀用同一份
+    const mineNotes = state.logs.filter((l) => l.recordId === r.id && l.text)
+      .map((l) => `${(l.date || '').replace(/-/g, '/')} ${l.text}`).join('\n');
+    const allNotes = mineNotes ? `${mineNotes}\n${r.notesRaw || ''}` : (r.notesRaw || '');
+    const relations = N.detectRelations(allNotes);
+    const latest = N.latestNote(allNotes);
+    const balanceGuess = R.parseBalance((latest && latest.text) || '') || R.parseBalance(allNotes);
+    const reg = N.parseAddress(r.addressRegistered);
+    const act = N.parseAddress(r.addressActual);
+    const branch = R.branchOf(reg.city, reg.district);
+    const actualBranch = R.branchOf(act.city, act.district);
+
+    const branches = [...new Set(R.BRANCH_AREAS.map((b) => b.branch))];
+    const mk = (tag, props) => el(tag, props);
+    const sel = (options, value) => {
+      const s = mk('select');
+      options.forEach((o) => { const [v, l] = Array.isArray(o) ? o : [o, o]; s.append(el('option', { value: String(v), textContent: l })); });
+      if (value !== undefined) s.value = String(value);
+      return s;
+    };
+    const fieldOf = (label, control, hint) => el('label', { className: 'rule-field' }, [el('span', { textContent: label }), control, hint ? el('small', { textContent: hint }) : null].filter(Boolean));
+    const num = (input) => Number(String(input.value).replace(/[^\d.-]/g, '')) || 0;
+
+    const myBranch = sel(branches, registryPref('my-branch') || '新莊');
+    const myUnit = sel(['一般組', '微企處', '大企部'], registryPref('my-unit') || '一般組');
+    const caseType = sel(['一般案件', '存貨擔保融資', 'OSF'], '一般案件');
+    const amount = mk('input', { type: 'text', inputMode: 'numeric', placeholder: '例如 5,000' });
+    const months = mk('input', { type: 'number', min: '1', placeholder: '例如 36' });
+    const freq = sel([[1, '月繳'], [3, '季繳'], [6, '半年繳'], [12, '年繳']], 1);
+    const method = sel(['本息平均攤還', '本金平均攤還', '頭小尾大', '不規則還款'], '本息平均攤還');
+    const spread = mk('input', { type: 'text', inputMode: 'decimal', placeholder: '例如 9.5' });
+    const yieldRate = mk('input', { type: 'text', inputMode: 'decimal', placeholder: '例如 11' });
+    const balance = mk('input', { type: 'text', inputMode: 'numeric', value: balanceGuess ? String(balanceGuess) : '', placeholder: '訪談沒寫就留空' });
+    const handover = sel(['不適用', '主動移交', '被動移交'], '不適用');
+    const schedule = mk('textarea', { rows: 3, placeholder: '頭小尾大／不規則時填：每期償還本金，用逗號或換行分開（單位仟元）' });
+    const collateralBox = el('div', { className: 'chips' });
+    const chosen = new Set(['純信用（無擔保品）']);
+    ['純信用（無擔保品）', ...R.EXCLUDING, ...R.CONTROLLED_COLLATERAL].forEach((name) => {
+      const chip = el('button', { className: 'chip', type: 'button', textContent: name });
+      chip.setAttribute('aria-pressed', chosen.has(name) ? 'true' : 'false');
+      chip.onclick = () => {
+        if (name === '純信用（無擔保品）') { chosen.clear(); chosen.add(name); }
+        else { chosen.delete('純信用（無擔保品）'); chosen.has(name) ? chosen.delete(name) : chosen.add(name); if (!chosen.size) chosen.add('純信用（無擔保品）'); }
+        [...collateralBox.children].forEach((c) => c.setAttribute('aria-pressed', chosen.has(c.textContent) ? 'true' : 'false'));
+        run();
+      };
+      collateralBox.append(chip);
+    });
+
+    host.append(el('div', { className: 'rule-form deal-form' }, [
+      fieldOf('我的分公司', myBranch, '會記住，也跟著雲端同步'),
+      fieldOf('我的單位', myUnit),
+      fieldOf('案件類型', caseType),
+      fieldOf('本案金額（仟元）', amount),
+      fieldOf('期數（月）', months),
+      fieldOf('繳款頻率', freq),
+      fieldOf('還款方式', method),
+      fieldOf('本案 Spread（%）', spread),
+      fieldOf('實質收益率（%）', yieldRate),
+      fieldOf('客戶既有本餘（仟元）', balance, balanceGuess ? `從訪談內容抓到「本餘」約 ${balanceGuess.toLocaleString('zh-TW')} 仟元，可修改` : '訪談內容沒寫到本餘'),
+      fieldOf('移交方式', handover),
+    ]));
+    host.append(fieldOf('擔保品（可複選）', collateralBox));
+    const schedField = fieldOf('還款計畫（每期償還本金）', schedule);
+    host.append(schedField);
+
+    const result = el('div', { className: 'rule-result deal-result' });
+    host.append(result);
+
+    function run() {
+      registryPref('my-branch', myBranch.value);
+      registryPref('my-unit', myUnit.value);
+      schedField.hidden = !['頭小尾大', '不規則還款'].includes(method.value);
+      const out = R.checkDeal({
+        company: r.company, capital: num({ value: r.capital }),
+        branch, actualBranch, myBranch: myBranch.value, myUnit: myUnit.value,
+        dealing: r.dealing, relations,
+        balance: num(balance), balanceSource: balanceGuess && num(balance) === balanceGuess ? `訪談：「${(latest && latest.text || '').slice(0, 60)}」` : '手動填入',
+        amount: num(amount), months: Number(months.value) || 0, periodMonths: Number(freq.value) || 1,
+        method: method.value, collaterals: [...chosen], schedule: R.parseSchedule(schedule.value),
+        spread: spread.value.trim() === '' ? '' : num(spread),
+        yieldRate: yieldRate.value.trim() === '' ? '' : num(yieldRate),
+        caseType: caseType.value, handoverType: handover.value === '不適用' ? '' : handover.value,
+      });
+      result.textContent = '';
+      const CLS = { ok: 'is-ok', warn: 'is-warn', block: 'is-fail' };
+      result.append(el('p', { className: `rule-verdict ${CLS[out.verdict]} deal-summary`, textContent: out.summary }));
+
+      const facts = el('dl', { className: 'deal-facts' });
+      out.facts.forEach((f) => {
+        facts.append(el('dt', { textContent: f.label }));
+        const dd = el('dd', { textContent: f.value });
+        if (f.source) dd.append(el('div', { className: 'muted', textContent: f.source }));
+        facts.append(dd);
+      });
+      result.append(el('h3', { textContent: '從名單與訪談內容判讀到的' }), facts);
+
+      const order = { block: 0, warn: 1, ok: 2 };
+      const sorted = [...out.findings].sort((a, b) => order[a.level] - order[b.level]);
+      result.append(el('h3', { textContent: '跟規則對照' }));
+      sorted.forEach((f) => {
+        const p = el('p', { className: `rule-verdict ${CLS[f.level]}`, textContent: `${f.level === 'block' ? '衝突：' : f.level === 'warn' ? '注意：' : '符合：'}${f.text}` });
+        if (f.rule) p.append(el('span', { className: 'muted deal-rule', textContent: `　〔${f.rule}〕` }));
+        result.append(p);
+      });
+      if (out.suggestions.length) {
+        result.append(el('h3', { textContent: '調整建議' }));
+        result.append(el('ol', { className: 'deal-suggestions' }, out.suggestions.map((t) => el('li', { textContent: t }))));
+      }
+      if (out.principal && out.principal.checkpoints.length) {
+        const t = el('table', { className: 'rule-table' });
+        t.append(el('thead', {}, [el('tr', {}, ['檢核點', '月', '應累計償還', '計畫償還', '結果'].map((h) => el('th', { textContent: h })))]));
+        t.append(el('tbody', {}, out.principal.checkpoints.map((c) => el('tr', {}, [
+          String(c.index), String(c.month), R.fmt(c.required), R.fmt(c.actual),
+          c.status === 'pass' ? '達標' : c.status === 'waived' ? '餘額≤10% 免檢' : `差 ${R.fmt(c.shortfall)}`,
+        ].map((v) => el('td', { textContent: v }))))));
+        result.append(t);
+      }
+    }
+    [amount, months, spread, yieldRate, balance, schedule].forEach((i) => { i.oninput = run; });
+    [myBranch, myUnit, caseType, freq, method, handover].forEach((i) => { i.onchange = run; });
+    run();
+    $('#editor').hidden = false;
+  }
+
   /** 編輯既有客戶：存成覆蓋層，重新匯入 PDF 不會被蓋掉，也會跟著雲端同步。 */
   function openEditor(recordId) {
     const raw = state.records.find((r) => r.id === recordId);
@@ -1785,7 +1931,7 @@ export default {
 
   // 這幾個設定要跟著雲端同步：在電腦上設定好，手機打開也要能用
   const SYNCED_PREFS = new Set(['registry-proxy-url', 'registry-dataset-url', 'registry-dataset-taxid-url',
-    'registry-mirror', 'registry-auto', 'registry-auto-last', 'registry-auto-summary']);
+    'registry-mirror', 'registry-auto', 'registry-auto-last', 'registry-auto-summary', 'my-branch', 'my-unit']);
   const registryPref = (key, value) => {
     try {
       if (value === undefined) return localStorage.getItem(key) || '';
