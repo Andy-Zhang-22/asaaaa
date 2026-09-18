@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-65';
+  const APP_VERSION = '20260916-66';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -34,7 +34,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), taxKind: new Set(), regChange: new Set(), added: new Set(), industry: '' },
+    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), taxKind: new Set(), regChange: new Set(), branch: new Set(), added: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -174,6 +174,16 @@
     // 變更登記：最近一次查到異動的種類；查過但從沒異動＝無變更；沒查過＝未查核
     out.regChange = (mine && mine.regChange) || null;
     out.regAt = (mine && mine.regAt) || 0;
+    // 歸屬分公司：依規範用「公司登記地址」對劃分表；卡片標示與篩選都用這個
+    {
+      const reg = window.Normalize.parseAddress(out.addressRegistered);
+      const b = window.Rules && window.Rules.branchOf ? window.Rules.branchOf(reg.city, reg.district) : { kind: '', label: '' };
+      out.branch = b;
+      out.branchKey = b.kind === 'branch' ? `${b.branches[0]}分公司`
+        : b.kind === 'common' ? `${b.branches.join('／')}共同區`
+        : b.kind === 'shared' ? '全公司共同區域'
+        : (reg.city ? '不在劃分表上' : '無登記地址');
+    }
     out.regKinds = out.regChange && out.regChange.kinds && out.regChange.kinds.length
       ? out.regChange.kinds
       : (out.regAt ? ['none'] : ['unchecked']);
@@ -695,6 +705,7 @@
       if (f.visit.size && !f.visit.has(r.visitKind)) return false;
       if (f.taxKind.size && !f.taxKind.has(r.taxKind)) return false;
       if (f.regChange.size && !r.regKinds.some((k) => f.regChange.has(k))) return false;
+      if (f.branch.size && !f.branch.has(r.branchKey)) return false;
       if (f.added.size && !f.added.has(r.addedBucket)) return false;
       if (f.industry && !(r.industry || '').includes(f.industry)) return false;
       if (!matchDue(f, r.nextDate)) return false;
@@ -821,6 +832,9 @@
     all.forEach((r) => { r.regKinds.forEach((k) => regCounts.set(k, (regCounts.get(k) || 0) + 1)); });
     chips($('#fltRegChange'), 'regChange', REG_KIND_ORDER.map((k) => [k, regCounts.get(k)]), state.filters.regChange, (v) => REG_KIND_LABEL[v]);
 
+    // 歸屬分公司：依筆數排，自己分公司的通常最多、排最前面
+    chips($('#fltBranch'), 'branch', tally((r) => r.branchKey), state.filters.branch);
+
     // 順序固定成由新到舊，不依筆數排——「今天新增」永遠在第一個位置才好按
     const addedCounts = new Map(ADDED_ORDER.map((k) => [k, 0]));
     all.forEach((r) => { addedCounts.set(r.addedBucket, (addedCounts.get(r.addedBucket) || 0) + 1); });
@@ -907,6 +921,9 @@
       (r.scale || capitalScale(r)) === '大企部範疇' ? el('span', { className: 'badge badge-large', textContent: '大企部範疇' }) : '',
       r.regChange && r.regKinds[0] !== 'none' && r.regKinds[0] !== 'unchecked'
         ? el('span', { className: 'badge badge-regchange', textContent: r.regKinds.map((k) => REG_KIND_LABEL[k]).join('、') }) : '',
+      r.branch && r.branch.kind === 'branch' ? el('span', { className: 'badge badge-branch', textContent: r.branchKey, title: r.branch.label }) : '',
+      r.branch && r.branch.kind === 'common' ? el('span', { className: 'badge badge-branch badge-branch-common', textContent: r.branchKey, title: r.branch.label }) : '',
+      r.branch && r.branch.kind === 'shared' ? el('span', { className: 'badge badge-branch badge-branch-common', textContent: '全公司共同區域' }) : '',
       r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
       r.blocked ? el('span', { className: 'badge badge-blocked', textContent: '禁止推廣' }) : '',
