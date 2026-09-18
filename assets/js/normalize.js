@@ -1342,8 +1342,111 @@
   }
   const VISIT_LABEL = { yes: '有拜訪', no: '無拜訪' };
 
+  /* ------------------------------------------------------------------
+   * 從訪談內容判讀 KEYMAN
+   *
+   * 業務打電話會記「總機轉楊小姐」「黃副總說要看資料」「KEYMAN 是陳經理」。
+   * 規則：
+   *   - 明講的最準：「KEYMAN 是 X」「X 是 KEYMAN」「窗口 X」。
+   *   - 沒明講就看稱謂：姓＋職稱（老闆、總經理、財務、會計、經理、小姐…），
+   *     職稱越接近決策者權重越高，同權重取最新一則。
+   *   - 否定句要吃掉：「楊小姐接電話，他應該不是 KEYMAN」→ 楊小姐不算。
+   *   - 總機、櫃台不是人名，永遠不算。
+   * 姓氏用常見姓氏表過濾，才不會把「給我楊小姐」抓成「給我楊」。
+   * ------------------------------------------------------------------ */
+  const SURNAMES = '陳林黃張李王吳劉蔡楊許鄭謝郭洪邱曾廖賴徐周葉蘇莊呂江何蕭羅高潘簡朱鍾游彭詹胡施沈余盧梁趙顏柯翁魏孫戴范方宋鄧杜傅侯曹薛丁卓阮馬董溫唐藍蔣石古紀姚連馮歐程湯田康姜白汪鄒尤巫鐘黎塗龔嚴韓袁金童陸夏柳凃邵錢伍倪包萬段辛梅樊史顧孟龍俞秦谷符寧鄔葛穆龐甘岳霍申裴牛喬曲祝吉井房殷莫費岑竇滕尹辜官蒲成易毛于文陶章鄧桂焦樂卜芮利刁佘駱練喻管褚汲宗閻羊巴甯鄺左關璩藍游';
+  const COMPOUND_SURNAMES = ['歐陽', '司徒', '上官', '諸葛', '張簡', '范姜', '司馬', '公孫', '端木', '夏侯', '皇甫', '尉遲', '長孫'];
+  const KEY_TITLES = [
+    ['董事長', 5], ['老闆娘', 5], ['老闆', 5], ['總經理', 5], ['執行長', 5], ['負責人', 5], ['總裁', 5],
+    ['財務長', 4], ['財務', 4], ['會計', 4], ['特助', 4], ['副總', 4], ['協理', 4], ['財會', 4],
+    ['經理', 3], ['處長', 3], ['廠長', 3], ['主任', 3], ['課長', 3], ['襄理', 3], ['組長', 3], ['店長', 3], ['總監', 3], ['採購', 3],
+    ['秘書', 2], ['助理', 2], ['小姐', 1], ['先生', 1],
+  ];
+  const TITLE_RE = new RegExp(`([\\u4e00-\\u9fff]{1,3})(${KEY_TITLES.map(([t]) => t).join('|')})`, 'g');
+  const TITLE_WEIGHT = Object.fromEntries(KEY_TITLES);
+  const NOT_PERSON_RE = /總機|櫃台|櫃檯|客服|警衛|門市|公司|本公司|中租|老闆娘說|沒有/;
+  const NEG_RE = /不是\s*(KEYMAN|keyman|窗口|決策|負責的)|非\s*KEYMAN|沒有決定權|不能決定|作不了主|做不了主|只是(總機|助理|櫃台)|不負責|已離職|離職/i;
+
+  const TITLE_ALT = KEY_TITLES.map(([t]) => t).join('|');
+  // 名字寫法：「姓＋職稱」或 2～3 字全名。職稱那段用懶惰量詞，姓先短後長，職稱才接得上
+  const NAME_TOKEN = `([\\u4e00-\\u9fff]{1,3}?(?:${TITLE_ALT})|[\\u4e00-\\u9fff]{2,3})`;
+  const LINK = '(?:是|為|就是|改成|換成|改為|變成|叫|[:：])?\\s*';
+  const EXPLICIT_RES = [
+    new RegExp(`KEYMAN\\s*${LINK}${NAME_TOKEN}`, 'i'),
+    new RegExp(`${NAME_TOKEN}\\s*(?:是|為|就是)\\s*KEYMAN`, 'i'),
+    new RegExp(`窗口\\s*${LINK}${NAME_TOKEN}`),
+  ];
+  /** 明講抓到的字串整理成人名：「給我楊小姐」→「楊小姐」；「改成」這種不是名字的丟掉。 */
+  function validName(token) {
+    const t = String(token || '');
+    const m = t.match(new RegExp(`^([\\u4e00-\\u9fff]{1,3}?)(${TITLE_ALT})$`));
+    if (m) { const s = trimToName(m[1]); return s && !NOT_PERSON_RE.test(s + m[2]) ? s + m[2] : ''; }
+    if (t.length >= 2 && t.length <= 3 && trimToName(t) === t && !NOT_PERSON_RE.test(t)) return t;
+    return '';
+  }
+
+  /** 「給我楊」→「楊」；「陳美玲」→「陳美玲」：取最長、且開頭是姓氏的尾段。 */
+  function trimToName(prefix) {
+    for (let len = prefix.length; len >= 1; len--) {
+      const cand = prefix.slice(prefix.length - len);
+      if (COMPOUND_SURNAMES.some((c) => cand.startsWith(c))) return cand;
+      if (len <= 3 && SURNAMES.includes(cand[0]) && !/[給跟找說請由是和與的了他她我向對轉接到把讓叫問幫聯絡為在]/.test(cand[0])) {
+        // 兩字以上時第二個字不能是動詞／助詞，否則「找林」會變成「找林」
+        if (len === 1 || !/[給跟找說請由是和與的了他她我向對轉接到把讓叫問幫為在]/.test(cand[1])) return cand;
+      }
+    }
+    return '';
+  }
+
+  /**
+   * @returns {{name:string, reason:string, snippet:string}} name 為空代表判讀不出
+   */
+  function detectKeyman(notesRaw) {
+    const entries = parseNotes(notesRaw);
+    // 新的在前：有日期的照日期由新到舊，沒日期的（背景資料）排最後
+    const ordered = entries.map((e, i) => ({ ...e, i }))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || '') || a.i - b.i);
+    const negated = new Set();
+    const candidates = [];
+    ordered.forEach((entry, order) => {
+      const text = toHalfWidth(entry.text || '');
+      const clauses = text.split(/[，。；;\n]/);
+      // 明講的：先試「姓＋職稱」（懶惰量詞，才不會把「李總經」當名字），再試 2～3 字全名
+      let explicit = null;
+      for (const re of EXPLICIT_RES) {
+        re.lastIndex = 0;
+        const m = re.exec(text);
+        if (m) { explicit = m; break; }
+      }
+      if (explicit) {
+        const name = validName(explicit[1]);
+        const around = text.slice(Math.max(0, explicit.index - 10), explicit.index + explicit[0].length + 10);
+        if (name && !NEG_RE.test(around)) candidates.push({ name, weight: 9, order, snippet: around.trim() });
+      }
+      // 稱謂
+      clauses.forEach((clause, ci) => {
+        TITLE_RE.lastIndex = 0;
+        let m;
+        while ((m = TITLE_RE.exec(clause)) !== null) {
+          const surname = trimToName(m[1]);
+          if (!surname) continue;
+          const name = surname + m[2];
+          if (NOT_PERSON_RE.test(name)) continue;
+          const here = clause + '，' + (clauses[ci + 1] || '');
+          if (NEG_RE.test(here)) { negated.add(name); continue; }
+          candidates.push({ name, weight: TITLE_WEIGHT[m[2]] || 1, order, snippet: clause.trim().slice(0, 60) });
+        }
+      });
+    });
+    const live = candidates.filter((c) => !negated.has(c.name));
+    if (!live.length) return { name: '', reason: negated.size ? `訪談提到 ${[...negated].join('、')}，但寫明不是 KEYMAN` : '訪談內容看不出 KEYMAN', snippet: '' };
+    live.sort((a, b) => b.weight - a.weight || a.order - b.order);
+    const best = live[0];
+    return { name: best.name, reason: best.weight >= 9 ? '訪談明講' : '依訪談稱謂判讀', snippet: best.snippet };
+  }
+
   global.Normalize = {
-    detectVisit, VISIT_LABEL,
+    detectVisit, VISIT_LABEL, detectKeyman,
     parseKeyValue,
     toRecords, detectHeader, parseDate, extractPhones, parseNotes, splitCompanyNames,
     parseCsv, parseDelimited, detectDelimiter, parsePasted, STANDARD_HEADER,

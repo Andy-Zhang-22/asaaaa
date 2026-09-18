@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-75';
+  const APP_VERSION = '20260916-76';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -304,6 +304,22 @@
     // 有沒有實際拜訪過：跟往來情形一樣，網站上記的通話也算
     out.visit = window.Normalize.detectVisit(allNotes);
     out.visitKind = out.visit.visited ? 'yes' : 'no';
+    /*
+     * KEYMAN：使用者自己改過的最優先；訪談裡明講「KEYMAN 是 X」次之（比名單檔新）；
+     * 再來是名單檔原本的值；都沒有就用訪談稱謂判讀；還是沒有就填負責人。
+     */
+    {
+      const edited = edits && edits.keyman !== undefined ? String(edits.keyman || '').trim() : null;
+      const found = window.Normalize.detectKeyman(allNotes);
+      const fileValue = String(record.keyman || '').trim();
+      if (edited !== null && edited) { out.keyman = edited; out.keymanFrom = 'edit'; }
+      else if (found.name && found.reason === '訪談明講') { out.keyman = found.name; out.keymanFrom = 'notes'; }
+      else if (fileValue) { out.keyman = fileValue; out.keymanFrom = 'file'; }
+      else if (found.name) { out.keyman = found.name; out.keymanFrom = 'notes'; }
+      else if (out.owner) { out.keyman = out.owner; out.keymanFrom = 'owner'; }
+      else { out.keyman = ''; out.keymanFrom = ''; }
+      out.keymanInfo = found;
+    }
     // 有沒有統編：欄位裡有數字就算有（編輯過的以編輯後為準）
     out.taxKind = /\d/.test(String(out.taxId || '')) ? 'yes' : 'no';
     // 變更登記：最近一次查到異動的種類；查過但從沒異動＝無變更；沒查過＝未查核
@@ -1455,7 +1471,8 @@
 
     const dl = el('dl', { className: 'detail-grid' });
     const rows = [
-      ['統一編號', r.taxId], ['負責人', r.owner], ['KEYMAN', r.keyman],
+      ['統一編號', r.taxId], ['負責人', r.owner],
+      ['KEYMAN', r.keyman ? `${r.keyman}${r.keymanFrom === 'notes' ? `　（${r.keymanInfo.reason}：「${r.keymanInfo.snippet}」）` : r.keymanFrom === 'owner' ? '　（訪談看不出 KEYMAN，先填負責人）' : ''}` : ''],
       ['產業別', r.industry], ['成立年', r.founded],
       ['資本額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
       ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) : ''],
@@ -1927,7 +1944,9 @@
       textContent: '修改內容會蓋在原始名單之上。重新匯入同一份 PDF 不會覆蓋你改過的欄位，'
         + '也會透過雲端同步帶到其他裝置。' }));
 
-    const form = editForm({ ...r, addressActual: r.addressActual === r.addressRegistered ? '' : r.addressActual });
+    // KEYMAN 若是判讀出來的就不預填，免得存別的欄位時把判讀值當成使用者填的
+    const form = editForm({ ...r, keyman: r.keymanFrom === 'edit' || r.keymanFrom === 'file' ? r.keyman : '',
+      addressActual: r.addressActual === r.addressRegistered ? '' : r.addressActual });
     host.append(form.node);
 
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存' });
