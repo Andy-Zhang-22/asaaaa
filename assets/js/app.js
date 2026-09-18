@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-86';
+  const APP_VERSION = '20260916-87';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -369,11 +369,9 @@
     out.relationKinds = window.Normalize.relationKinds(out.relations);
     // 往來情形看的是「最新一次談話」，在網站上記的通話也算：打完電話聽到
     // 對方說已經解約，這筆就該立刻歸到沒有往來，不用等下次匯入檔案。
-    const mineNotes = state.logs
-      .filter((l) => l.recordId === record.id && l.text)
-      .map((l) => `${(l.date || '').replace(/-/g, '/')} ${l.text}`)
-      .join('\n');
-    const allNotes = mineNotes ? `${mineNotes}\n${out.notesRaw || ''}` : out.notesRaw;
+    // 關係企業的訪談互通：同組其他家的通話與訪談內容一起看
+    const bundle = notesBundle({ ...record, notesRaw: out.notesRaw });
+    const allNotes = bundle.text;
     out.dealing = window.Normalize.detectDealing(allNotes);
     out.dealingKind = out.dealing.kind;
     // 有沒有實際拜訪過：跟往來情形一樣，網站上記的通話也算
@@ -698,6 +696,41 @@
     const out = [];
     groupMap().forEach((group, id) => { if (group === r.group && id !== r.id) out.push(id); });
     return out.map((id) => view(state.records.find((x) => x.id === id)));
+  }
+
+  /*
+   * 整組的訪談紀錄。
+   *
+   * 關係企業是同一個老闆，打一通電話談的是整組，所以訪談紀錄互通：
+   * 網站上記的通話（自己的＋同組其他家的，同內容只算一次）與各家名單檔的訪談內容
+   * 合成一份，詳細頁的時間軸、往來情形、拜訪、KEYMAN 判讀都看這一份。
+   */
+  function groupPeerIds(recordId) {
+    const map = groupMap();
+    const group = map.get(recordId);
+    if (!group) return [];
+    const out = [];
+    map.forEach((g, id) => { if (g === group && id !== recordId) out.push(id); });
+    return out;
+  }
+  function notesBundle(record) {
+    const peers = groupPeerIds(record.id);
+    const nameOf = (id) => { const x = state.records.find((y) => y.id === id); return x ? x.company : ''; };
+    const seen = new Set();
+    const logs = [];
+    const take = (l, company) => {
+      const key = `${l.date}|${l.text || ''}|${l.outcome || ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      logs.push({ ...l, company });
+    };
+    state.logs.filter((l) => l.recordId === record.id).forEach((l) => take(l, ''));
+    peers.forEach((id) => state.logs.filter((l) => l.recordId === id).forEach((l) => take(l, nameOf(id))));
+    logs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    const logText = logs.filter((l) => l.text).map((l) => `${(l.date || '').replace(/-/g, '/')} ${l.text}`).join('\n');
+    const peerNotes = peers.map((id) => { const x = state.records.find((y) => y.id === id); return x && x.notesRaw ? x.notesRaw : ''; }).filter(Boolean);
+    const text = [logText, record.notesRaw || '', ...peerNotes].filter(Boolean).join('\n');
+    return { logs, text, peers, nameOf };
   }
 
   async function setGroup(ids, group) {
@@ -1360,7 +1393,7 @@
      * 網站上記的比較新（它是匯入之後才寫的）。
      */
     const fromFile = (r.timeline || [])[0];
-    const mine = state.logs.filter((l) => l.recordId === r.id).sort((a, b) => b.createdAt - a.createdAt)[0];
+    const mine = notesBundle(r).logs[0];
     let latest = fromFile;
     if (mine && (!fromFile || !fromFile.date || (mine.date || '') >= fromFile.date)) {
       latest = { text: mine.text || `（${window.Normalize.outcomeLabel(mine.outcome)}）` };
@@ -1688,6 +1721,37 @@
     });
     outcomeSel.value = r.outcome === 'new' ? 'noanswer' : r.outcome;
     const nextInput = el('input', { type: 'date', value: r.nextDate || '' });
+    /*
+     * 打到一半的草稿保存在這台裝置（每家各一份）。
+     *
+     * 打字打到一半接到另一通、關掉視窗、按了提醒或連結讓詳細頁重畫，字就不見了。
+     * 每打一個字就存，回到這家自動填回來，存好紀錄才清掉。
+     */
+    const DRAFT_KEY = `log-draft:${r.id}`;
+    const readDraft = () => { try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { return null; } };
+    const writeDraft = () => {
+      const d = { text: memo.value, outcome: outcomeSel.value, nextDate: nextInput.value, at: Date.now() };
+      try {
+        if (d.text.trim() || d.nextDate !== (r.nextDate || '')) localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+        else localStorage.removeItem(DRAFT_KEY);
+      } catch (e) { /* 無痕模式 */ }
+      draftNote.hidden = !memo.value.trim();
+    };
+    const clearDraft = () => { try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* 無痕模式 */ } };
+    const draftNote = el('p', { className: 'muted draft-note', hidden: true });
+    const draft = readDraft();
+    if (draft && (draft.text || draft.nextDate)) {
+      memo.value = draft.text || '';
+      if (draft.outcome) outcomeSel.value = draft.outcome;
+      if (draft.nextDate) nextInput.value = draft.nextDate;
+      draftNote.hidden = !memo.value.trim();
+      const discard = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '丟掉草稿' });
+      discard.onclick = () => { memo.value = ''; nextInput.value = r.nextDate || ''; nextInput.dispatchEvent(new Event('change')); clearDraft(); draftNote.hidden = true; };
+      draftNote.append(document.createTextNode(`還沒送出的草稿已填回來（${whenLabel(draft.at || Date.now())}）　`), discard);
+    }
+    memo.addEventListener('input', writeDraft);
+    outcomeSel.addEventListener('change', writeDraft);
+    nextInput.addEventListener('change', writeDraft);
     const quick = el('div', { className: 'card-actions' });
     [['今天', 0], ['明天', 1], ['3 天後', 3], ['一週後', 7], ['兩週後', 14], ['一個月後', 30], ['三個月後', 90]].forEach(([label, days]) => {
       const b = el('button', { className: 'btn btn-tiny', type: 'button', textContent: label });
@@ -1719,35 +1783,30 @@
         auto = window.Normalize.findFollowUp(text, today);
         if (auto) picked = auto.iso;
       }
-      // 勾了「同時記到整組」就每家各寫一則：任何一家單獨看都要是完整的
-      const targets = [r.id, ...(applyAll.checked ? members.map((m) => m.id) : [])];
-      for (const id of targets) {
-        await window.Store.addLog({
-          recordId: id, date: today, text, outcome: outcomeSel.value, createdAt: Date.now(),
-        });
-        await saveState(id, {
-          outcome: outcomeSel.value,
-          nextDate: picked || null,
-          lastDate: today,
-        });
-      }
+      // 只寫這一家：同組其他家靠訪談互通與日期、狀態連動看得到同一通電話，不用各寫一則
+      await window.Store.addLog({
+        recordId: r.id, date: today, text, outcome: outcomeSel.value, createdAt: Date.now(),
+      });
+      await saveState(r.id, {
+        outcome: outcomeSel.value,
+        nextDate: picked || null,
+        lastDate: today,
+      });
       state.logs = await window.Store.allLogs();
-      const extra = targets.length > 1 ? `（同時記到 ${targets.length} 家）` : '';
+      clearDraft();
+      const extra = members.length ? `（同老闆的 ${members.length} 家一起看得到）` : '';
       toast(blocking && !text ? `已標記禁止推廣${extra}` : auto ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : `已儲存通話紀錄${extra}`);
       render();
       openDetail(r.id);
       scheduleSync();
     };
-    const applyAll = el('input', { type: 'checkbox', id: 'applyGroup' });
-    applyAll.checked = members.length > 0;
-    form.append(memo, el('div', { className: 'row' }, [
+    form.append(memo, draftNote, el('div', { className: 'row' }, [
       el('span', { className: 'muted', textContent: '結果' }), outcomeSel,
       el('span', { className: 'muted', textContent: '下次聯絡' }), withDateHint(nextInput), save,
     ]));
     form.append(quick);
     if (members.length) {
-      form.append(el('label', { className: 'apply-group' }, [applyAll,
-        el('span', { textContent: `同時記到同一老闆的其他 ${members.length} 家（${members.map((m) => m.company).join('、')}）` })]));
+      form.append(el('p', { className: 'muted apply-group', textContent: `這通電話同老闆的 ${members.length} 家（${members.map((m) => m.company).join('、')}）也會一起看到，日期與狀態一起連動。` }));
     }
     section.append(form);
     body.append(section);
@@ -1795,11 +1854,18 @@
     }
 
     // 時間軸：本機紀錄 + PDF 原始訪談內容
-    const mineLogs = state.logs
-      .filter((l) => l.recordId === r.id)
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .map((l) => ({ date: l.date, time: l.createdAt ? timeLabel(l.createdAt) : '', text: l.text || `（${window.Normalize.outcomeLabel(l.outcome)}）`, mine: true, logId: l.logId }));
-    const entries = mineLogs.concat(r.timeline || []);
+    const bundle = notesBundle(r);
+    const mineLogs = bundle.logs
+      .map((l) => ({ date: l.date, time: l.createdAt ? timeLabel(l.createdAt) : '', text: l.text || `（${window.Normalize.outcomeLabel(l.outcome)}）`, mine: true, logId: l.logId, company: l.company, own: !l.company }));
+    // 同組其他家名單檔裡的訪談內容也列進來，標出是哪一家的
+    const peerEntries = bundle.peers.flatMap((id) => {
+      const x = state.records.find((y) => y.id === id);
+      return x ? window.Normalize.parseNotes(x.notesRaw || '').map((e) => ({ ...e, company: x.company })) : [];
+    });
+    // 全部照日期由新到舊；沒日期的（背景資料）排最後
+    const entries = mineLogs.concat(r.timeline || [], peerEntries)
+      .map((e, i) => ({ ...e, i }))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || '') || a.i - b.i);
     if (entries.length) {
       const sec = el('div', { className: 'detail-section' }, [el('h3', { textContent: `訪談紀錄（${entries.length}）` })]);
       const ul = el('ul', { className: 'timeline' });
@@ -1807,10 +1873,10 @@
         const li = el('li');
         li.append(el('time', {
           className: e.mine ? 'is-mine' : '',
-          textContent: `${e.date ? dateLabel(e.date) : (e.dateRaw || '日期未標示')}${e.time ? `  ${e.time}` : ''}${e.mine ? ' · 我的紀錄' : ''}`,
+          textContent: `${e.date ? dateLabel(e.date) : (e.dateRaw || '日期未標示')}${e.time ? `  ${e.time}` : ''}${e.mine ? ' · 我的紀錄' : ''}${e.company ? ` · ${e.company}` : ''}`,
         }));
         li.append(el('p', { textContent: e.text }));
-        if (e.mine) {
+        if (e.mine && e.own) {
           /*
            * 自己記的紀錄要能改，不能只有刪除。
            *
@@ -1998,9 +2064,7 @@
     host.append(el('p', { className: 'muted', textContent: '輸入這個案子的架構，網站會拿名單資料（登記地址、資本額）跟訪談內容（往來單位、本餘）對照規則，指出衝突並給調整建議。金額一律仟元。' }));
 
     // 訪談：網站上記的通話 + 名單原本的內容，跟往來情形判讀用同一份
-    const mineNotes = state.logs.filter((l) => l.recordId === r.id && l.text)
-      .map((l) => `${(l.date || '').replace(/-/g, '/')} ${l.text}`).join('\n');
-    const allNotes = mineNotes ? `${mineNotes}\n${r.notesRaw || ''}` : (r.notesRaw || '');
+    const allNotes = notesBundle(r).text;
     const relations = N.detectRelations(allNotes);
     const latest = N.latestNote(allNotes);
     const balanceGuess = R.parseBalance((latest && latest.text) || '') || R.parseBalance(allNotes);
