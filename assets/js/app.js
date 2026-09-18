@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-78';
+  const APP_VERSION = '20260916-80';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -905,30 +905,43 @@
 
   /* ---------------- 篩選與排序 ---------------- */
 
-  function visibleRecords() {
-    const q = state.search.trim().toLowerCase();
+  /*
+   * 每一組篩選看的是哪個欄位。篩選判斷與晶片上的家數都用這張表，
+   * 家數才會跟目前的條件即時連動：每組的數字＝套用「其他所有條件」之後的家數。
+   */
+  const FACET_VALUE = {
+    source: (r) => r.source,
+    outcome: (r) => (r.blocked ? 'blocked' : r.outcome),
+    city: (r) => r.city || '其他',
+    scale: (r) => r.scale || '未填資本額',
+    territory: (r) => r.territory || '看不出縣市',
+    relation: (r) => r.dealingKind,
+    visit: (r) => r.visitKind,
+    taxKind: (r) => r.taxKind,
+    phoneKind: (r) => r.phoneKind,
+    regChange: (r) => r.regKinds,   // 一家可能屬多類
+    branch: (r) => r.branchKey,
+    added: (r) => r.addedBucket,
+  };
+  const facetHas = (set, value) => (Array.isArray(value) ? value.some((v) => set.has(v)) : set.has(value));
+  /** 這筆有沒有通過目前的條件；skip 指定「不算哪一組」，算該組晶片家數時用。 */
+  function passesFilters(r, skip, terms) {
     const f = state.filters;
-    const terms = q ? q.split(/\s+/) : [];
+    if (state.hideBlocked && r.blocked) return false;
+    for (const key of Object.keys(FACET_VALUE)) {
+      if (key === skip) continue;
+      if (f[key].size && !facetHas(f[key], FACET_VALUE[key](r))) return false;
+    }
+    if (skip !== 'industry' && f.industry && !(r.industry || '').includes(f.industry)) return false;
+    if (skip !== 'due' && !matchDue(f, r.nextDate)) return false;
+    if (terms && terms.length && !terms.every((t) => r.blob.includes(t))) return false;
+    return true;
+  }
+  const searchTerms = () => { const q = state.search.trim().toLowerCase(); return q ? q.split(/\s+/) : []; };
 
-    let list = allViews().filter((r) => {
-      if (state.hideBlocked && r.blocked) return false;
-      if (f.source.size && !f.source.has(r.source)) return false;
-      if (f.outcome.size && !f.outcome.has(r.blocked ? 'blocked' : r.outcome)) return false;
-      if (f.city.size && !f.city.has(r.city || '其他')) return false;
-      if (f.scale.size && !f.scale.has(r.scale || '未填資本額')) return false;
-      if (f.territory.size && !f.territory.has(r.territory || '看不出縣市')) return false;
-      if (f.relation.size && !f.relation.has(r.dealingKind)) return false;
-      if (f.visit.size && !f.visit.has(r.visitKind)) return false;
-      if (f.taxKind.size && !f.taxKind.has(r.taxKind)) return false;
-      if (f.phoneKind.size && !f.phoneKind.has(r.phoneKind)) return false;
-      if (f.regChange.size && !r.regKinds.some((k) => f.regChange.has(k))) return false;
-      if (f.branch.size && !f.branch.has(r.branchKey)) return false;
-      if (f.added.size && !f.added.has(r.addedBucket)) return false;
-      if (f.industry && !(r.industry || '').includes(f.industry)) return false;
-      if (!matchDue(f, r.nextDate)) return false;
-      if (terms.length && !terms.every((t) => r.blob.includes(t))) return false;
-      return true;
-    });
+  function visibleRecords() {
+    const terms = searchTerms();
+    let list = allViews().filter((r) => passesFilters(r, '', terms));
 
 
     const num = (s) => Number(String(s || '').replace(/[^\d]/g, '')) || 0;
@@ -962,7 +975,50 @@
     });
     const sel = $('#fltBranch');
     if (sel) sel.value = [...state.filters.branch][0] || '';
+    refreshFacetCounts();
     updateFilterCounts();
+  }
+
+  /**
+   * 晶片上的家數跟著目前的條件即時算。
+   * 每一組的數字是「套用其他所有條件」後的家數，自己這組不算進去——
+   * 否則點了「無電話」之後「有電話」會變 0，就沒辦法換著看。
+   */
+  function refreshFacetCounts() {
+    const views = allViews();
+    const terms = searchTerms();
+    const baseFor = (key) => views.filter((r) => passesFilters(r, key, terms));
+    Object.keys(FACET_VALUE).forEach((key) => {
+      const hosts = document.querySelectorAll(`#filters .chip[data-filter="${key}"]`);
+      const sel = key === 'branch' ? $('#fltBranch') : null;
+      if (!hosts.length && !sel) return;
+      const base = baseFor(key);
+      const tally = new Map();
+      base.forEach((r) => {
+        const v = FACET_VALUE[key](r);
+        (Array.isArray(v) ? v : [v]).forEach((x) => tally.set(x, (tally.get(x) || 0) + 1));
+      });
+      hosts.forEach((chip) => {
+        const small = chip.querySelector('small');
+        if (small) small.textContent = String(tally.get(chip.dataset.value) || 0);
+      });
+      if (sel) {
+        [...sel.options].forEach((o) => {
+          if (o.value) o.textContent = `${o.value}（${tally.get(o.value) || 0}）`;
+        });
+      }
+    });
+    // 聯絡時程的快速鍵：各自是一段日期範圍，用同樣的方式算
+    const dueBase = baseFor('due');
+    const today = todayISO();
+    document.querySelectorAll('#filters .chip[data-filter="due"]').forEach((chip) => {
+      const quick = DUE_QUICK.find(([k]) => k === chip.dataset.value);
+      const small = chip.querySelector('small');
+      if (!quick || !chip.dataset.value || !small) return;
+      const got = quick[2](today);
+      const probe = { dueNone: !!got.none, dueFrom: got.from || '', dueTo: got.to || '' };
+      small.textContent = String(dueBase.filter((r) => matchDue(probe, r.nextDate)).length);
+    });
   }
 
   /*
