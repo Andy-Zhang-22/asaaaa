@@ -1563,7 +1563,9 @@
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存紀錄' });
     save.onclick = async () => {
       const text = memo.value.trim();
-      if (!text && !nextInput.value) { toast('請至少填寫內容或下次聯絡日'); return; }
+      // 禁止推廣不需要內容或下次聯絡日：判定了就是判定了，之後也不會再打
+      const blocking = outcomeSel.value === 'blocked';
+      if (!text && !nextInput.value && !blocking) { toast('請至少填寫內容或下次聯絡日'); return; }
       const today = todayISO();
 
       /*
@@ -1593,7 +1595,7 @@
       }
       state.logs = await window.Store.allLogs();
       const extra = targets.length > 1 ? `（同時記到 ${targets.length} 家）` : '';
-      toast(auto ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : `已儲存通話紀錄${extra}`);
+      toast(blocking && !text ? `已標記禁止推廣${extra}` : auto ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : `已儲存通話紀錄${extra}`);
       render();
       openDetail(r.id);
       scheduleSync();
