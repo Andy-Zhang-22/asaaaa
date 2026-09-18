@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-70';
+  const APP_VERSION = '20260916-71';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -94,6 +94,141 @@
     t.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { t.hidden = true; }, 2600);
+  }
+  /** 時間戳 → 「11:05」 */
+  const timeLabel = (ts) => {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  /** 時間戳 → 「2026/09/18 11:05」；不是今天的才帶日期 */
+  const whenLabel = (ts) => {
+    const d = new Date(ts);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return iso === todayISO() ? timeLabel(ts) : `${dateLabel(iso)} ${timeLabel(ts)}`;
+  };
+
+  /*
+   * 回撥提醒。
+   *
+   * 客戶說「晚點再打」，業務掛了電話就忘。做法：在詳細頁按一下「1 小時後」「14:00」
+   * 就記在這筆的追蹤狀態（跟著雲端同步）；名單頁最上面有一條提醒列，時間到了變紅、
+   * 跳提示，開了瀏覽器通知的話也會發通知。沒有後端，所以只有網站開著（或裝成
+   * 主畫面 App）時才會提醒——這點在提醒列裡講清楚。
+   */
+  const NOTIFIED_KEY = 'remind-notified';
+  async function setReminder(recordId, remindAt, note) {
+    await saveState(recordId, { remindAt: remindAt || null, remindNote: remindAt ? (note || '') : '', remindSetAt: Date.now() });
+    scheduleSync();
+    render();
+  }
+  function reminders() {
+    return allViews().filter((r) => r.remindAt).sort((a, b) => a.remindAt - b.remindAt);
+  }
+  function notifiedSet() {
+    try { return new Set(JSON.parse(localStorage.getItem(NOTIFIED_KEY) || '[]')); } catch (e) { return new Set(); }
+  }
+  function checkReminders() {
+    const now = Date.now();
+    const due = reminders().filter((r) => r.remindAt <= now);
+    if (!due.length) return;
+    const seen = notifiedSet();
+    const fresh = due.filter((r) => !seen.has(`${r.id}|${r.remindAt}`));
+    if (!fresh.length) return;
+    fresh.forEach((r) => seen.add(`${r.id}|${r.remindAt}`));
+    try { localStorage.setItem(NOTIFIED_KEY, JSON.stringify([...seen].slice(-200))); } catch (e) { /* 無痕模式 */ }
+    const names = fresh.map((r) => r.company).join('、');
+    toast(`⏰ 該回撥了：${names}`);
+    if ('Notification' in window && Notification.permission === 'granted') {
+      fresh.forEach((r) => {
+        try {
+          const n = new Notification(`該回撥：${r.company}`, { body: r.remindNote || `約 ${timeLabel(r.remindAt)} 回撥`, tag: `remind-${r.id}` });
+          n.onclick = () => { window.focus(); openDetail(r.id); };
+        } catch (e) { /* 有些瀏覽器不給在網頁直接 new Notification */ }
+      });
+    }
+    try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) { /* 不支援就算了 */ }
+    renderRemindBar();
+  }
+  function renderRemindBar() {
+    const bar = $('#remindBar');
+    if (!bar) return;
+    const list = reminders();
+    bar.hidden = !list.length;
+    bar.textContent = '';
+    if (!list.length) return;
+    const now = Date.now();
+    const dueCount = list.filter((r) => r.remindAt <= now).length;
+    bar.classList.toggle('is-due', dueCount > 0);
+    const head = el('div', { className: 'remind-head' }, [
+      el('strong', { textContent: dueCount ? `⏰ 該回撥了（${dueCount}）` : `⏰ 回撥提醒（${list.length}）` }),
+    ]);
+    if ('Notification' in window && Notification.permission === 'default') {
+      const btn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '開啟瀏覽器通知' });
+      btn.onclick = async () => { try { await Notification.requestPermission(); } catch (e) { /* 使用者拒絕 */ } renderRemindBar(); };
+      head.append(btn);
+    }
+    head.append(el('span', { className: 'muted', textContent: '網站開著才會提醒；手機請把網站加到主畫面再開通知。' }));
+    bar.append(head);
+    list.forEach((r) => {
+      const row = el('div', { className: `remind-row ${r.remindAt <= now ? 'is-due' : ''}` });
+      const open = el('button', { className: 'remind-open', type: 'button' }, [
+        el('b', { textContent: whenLabel(r.remindAt) }),
+        el('span', { textContent: ` ${r.company}` }),
+        r.remindNote ? el('span', { className: 'muted', textContent: `　${r.remindNote}` }) : null,
+        r.phones && r.phones[0] ? el('span', { className: 'muted', textContent: `　📞 ${r.phones[0].display || r.phones[0].digits}` }) : null,
+      ].filter(Boolean));
+      open.onclick = () => openDetail(r.id);
+      const done = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '完成' });
+      done.onclick = () => setReminder(r.id, null);
+      const later = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '延 15 分' });
+      later.onclick = () => setReminder(r.id, Math.max(now, r.remindAt) + 15 * 60000, r.remindNote);
+      row.append(open, el('div', { className: 'card-actions' }, [done, later]));
+      bar.append(row);
+    });
+  }
+  /** 詳細頁的「回撥提醒」區塊 */
+  function reminderSection(r) {
+    const sec = el('div', { className: 'detail-section remind-section' });
+    sec.append(el('h3', { textContent: '回撥提醒' }));
+    const now = Date.now();
+    if (r.remindAt) {
+      const cur = el('p', { className: `rule-verdict ${r.remindAt <= now ? 'is-fail' : 'is-ok'}` }, [
+        el('strong', { textContent: `${r.remindAt <= now ? '該回撥了：' : '約 '}${whenLabel(r.remindAt)}${r.remindAt > now ? ' 回撥' : ''}` }),
+        r.remindNote ? el('span', { textContent: `　${r.remindNote}` }) : null,
+      ].filter(Boolean));
+      const cancel = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '完成／取消提醒' });
+      cancel.onclick = async () => { await setReminder(r.id, null); openDetail(r.id); toast('已取消提醒'); };
+      cur.append(document.createTextNode('　'), cancel);
+      sec.append(cur);
+    } else {
+      sec.append(el('p', { className: 'muted', textContent: '客戶說晚點再打？按一下時間，名單頁最上面會提醒你。' }));
+    }
+    const note = el('input', { type: 'text', className: 'remind-note', placeholder: '備註（例如：找財務長、老闆 3 點開完會）', value: r.remindNote || '' });
+    const quick = el('div', { className: 'card-actions' });
+    const at = (ts) => async () => { await setReminder(r.id, ts, note.value.trim()); openDetail(r.id); toast(`已設提醒：${whenLabel(ts)} 回撥 ${r.company}`); };
+    [['30 分鐘後', 30], ['1 小時後', 60], ['2 小時後', 120]].forEach(([label, mins]) => {
+      const b = el('button', { className: 'btn btn-tiny', type: 'button', textContent: label });
+      b.onclick = at(Date.now() + mins * 60000);
+      quick.append(b);
+    });
+    // 今天的整點：過了的就不列（列了也沒意義）
+    const today = new Date();
+    [9, 10, 11, 13, 14, 15, 16, 17].forEach((h) => {
+      const ts = new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, 0, 0, 0).getTime();
+      if (ts <= Date.now()) return;
+      const b = el('button', { className: 'btn btn-tiny', type: 'button', textContent: `${h}:00` });
+      b.onclick = at(ts);
+      quick.append(b);
+    });
+    const custom = el('input', { type: 'datetime-local', className: 'remind-custom' });
+    const customBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '自訂時間' });
+    customBtn.onclick = async () => {
+      const ts = custom.value ? new Date(custom.value).getTime() : NaN;
+      if (!ts) { toast('請先選日期時間'); return; }
+      await at(ts)();
+    };
+    sec.append(note, quick, el('div', { className: 'card-actions' }, [custom, customBtn]));
+    return sec;
   }
 
   /** 使用者自己記的狀態會覆蓋 PDF 裡的原始值。 */
@@ -184,6 +319,8 @@
         : b.kind === 'shared' ? '全公司共同區域'
         : (reg.city ? '不在劃分表上' : '無登記地址');
     }
+    out.remindAt = (mine && mine.remindAt) || 0;
+    out.remindNote = (mine && mine.remindNote) || '';
     out.regKinds = out.regChange && out.regChange.kinds && out.regChange.kinds.length
       ? out.regChange.kinds
       : (out.regAt ? ['none'] : ['unchecked']);
@@ -1014,6 +1151,7 @@
       r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
       r.blocked ? el('span', { className: 'badge badge-blocked', textContent: '禁止推廣' }) : '',
+      r.remindAt ? el('span', { className: `badge badge-remind ${r.remindAt <= Date.now() ? 'is-due' : ''}`, textContent: `⏰ ${whenLabel(r.remindAt)} 回撥` }) : '',
       r.dealingKind === 'active' ? el('span', { className: 'badge badge-dealing', textContent: '中租往來' }) : '',
       r.visitKind === 'yes' ? el('span', { className: 'badge badge-visited', textContent: '已拜訪' }) : '',
       r.groupSize > 1 ? el('span', { className: 'badge badge-group', textContent: `同老闆 ${r.groupSize} 家` }) : '',
@@ -1194,7 +1332,7 @@
       if (statsKey !== String(dataVersion)) { renderStats(); statsKey = String(dataVersion); }
     } else if (tab === 'rules') {
       buildRules();
-    } else renderList();
+    } else { renderList(); renderRemindBar(); }
   }
 
   /* ---------------- 詳細資料抽屜 ---------------- */
@@ -1211,8 +1349,14 @@
     editBtn.onclick = () => openEditor(r.id);
     const dealBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '承作檢核' });
     dealBtn.onclick = () => openDealCheck(r.id);
+    // 公司名稱旁一顆複製：查商工登記、找 104、貼進系統都要打公司名，打字容易錯
+    const copyName = el('button', { className: 'btn btn-tiny copy-name', type: 'button', textContent: '複製', title: `複製 ${r.company}` });
+    copyName.onclick = async () => {
+      const ok = await copyText(r.company);
+      toast(ok ? `已複製：${r.company}` : '這個瀏覽器不讓網頁複製，請長按公司名稱手動複製');
+    };
     body.append(el('div', { className: 'detail-head' }, [
-      el('h2', { textContent: r.company }),
+      el('div', { className: 'detail-title' }, [el('h2', { textContent: r.company }), copyName]),
       r.aliases.length ? el('p', { className: 'detail-alias', textContent: `關係企業：${r.aliases.join('、')}` }) : '',
       el('div', { className: 'detail-badges' }, [
         outcomeBadge(r),
@@ -1247,6 +1391,8 @@
     } else if (r.phoneRaw) {
       body.append(el('p', { className: 'muted', textContent: `電話：${r.phoneRaw}` }));
     }
+
+    body.append(reminderSection(r));
 
     // 同一老闆的公司
     const members = groupMembers(r);
@@ -1450,7 +1596,7 @@
     const mineLogs = state.logs
       .filter((l) => l.recordId === r.id)
       .sort((a, b) => b.createdAt - a.createdAt)
-      .map((l) => ({ date: l.date, text: l.text || `（${window.Normalize.outcomeLabel(l.outcome)}）`, mine: true, logId: l.logId }));
+      .map((l) => ({ date: l.date, time: l.createdAt ? timeLabel(l.createdAt) : '', text: l.text || `（${window.Normalize.outcomeLabel(l.outcome)}）`, mine: true, logId: l.logId }));
     const entries = mineLogs.concat(r.timeline || []);
     if (entries.length) {
       const sec = el('div', { className: 'detail-section' }, [el('h3', { textContent: `訪談紀錄（${entries.length}）` })]);
@@ -1459,7 +1605,7 @@
         const li = el('li');
         li.append(el('time', {
           className: e.mine ? 'is-mine' : '',
-          textContent: `${e.date ? dateLabel(e.date) : (e.dateRaw || '日期未標示')}${e.mine ? ' · 我的紀錄' : ''}`,
+          textContent: `${e.date ? dateLabel(e.date) : (e.dateRaw || '日期未標示')}${e.time ? `  ${e.time}` : ''}${e.mine ? ' · 我的紀錄' : ''}`,
         }));
         li.append(el('p', { textContent: e.text }));
         if (e.mine) {
@@ -3053,7 +3199,7 @@ export default {
     allViews().forEach((r) => {
       const mine = state.logs.filter((l) => l.recordId === r.id)
         .sort((a, b) => b.createdAt - a.createdAt)
-        .map((l) => `${l.date ? rocSlash(l.date) : ''} [${window.Normalize.outcomeLabel(l.outcome)}] ${l.text}`.trim());
+        .map((l) => `${l.date ? rocSlash(l.date) : ''}${l.createdAt ? ` ${timeLabel(l.createdAt)}` : ''} [${window.Normalize.outcomeLabel(l.outcome)}] ${l.text}`.trim());
       const notes = [...mine, r.notesRaw || ''].filter(Boolean).join('\n');
       rows.push([r.company, r.taxId, r.grade, r.founded, r.capital, r.phoneRaw, r.owner, r.keyman, r.industry,
         r.nextDate ? ymdShort(r.nextDate) : '', r.lastDate ? ymdShort(r.lastDate) : '', notes,
@@ -3431,6 +3577,8 @@ export default {
     prebuildRules();
     checkForUpdate(false);
     maybeAutoRegistry().catch((err) => console.error('自動更新商工登記失敗', err));
+    checkReminders();
+    setInterval(checkReminders, 30000);
     /*
      * 切回這個分頁時再檢查一次。
      *
