@@ -435,6 +435,7 @@ button, input, select { font: inherit; color: inherit; }
 @media (max-width: 520px) { .remind-row { grid-template-columns: 44px 1fr auto; } .remind-actions { flex-direction: column; } }
 .badge-remind { border-color: var(--warn); color: var(--warn); }
 .badge-remind.is-due { border-color: var(--danger); color: var(--danger); font-weight: 600; }
+.draft-note { font-size: 12px; margin: 4px 0 6px; }
 .remind-note { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); margin: 6px 0; }
 .remind-custom { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); }
 /* 承作檢核 */
