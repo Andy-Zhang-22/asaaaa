@@ -1397,6 +1397,8 @@
   ];
   const TITLE_RE = new RegExp(`([\\u4e00-\\u9fff]{1,3})(${KEY_TITLES.map(([t]) => t).join('|')})`, 'g');
   const TITLE_WEIGHT = Object.fromEntries(KEY_TITLES);
+  const TITLE_TAIL_RE = new RegExp(`(${KEY_TITLES.map(([t]) => t).join('|')})$`);
+  const TITLE_HEAD_RE = new RegExp(`^(${KEY_TITLES.map(([t]) => t).join('|')})`);
   const NOT_PERSON_RE = /總機|櫃台|櫃檯|客服|警衛|門市|公司|本公司|中租|老闆娘說|沒有/;
   const NEG_RE = /不是\s*(KEYMAN|keyman|窗口|決策|負責的)|非\s*KEYMAN|沒有決定權|不能決定|作不了主|做不了主|只是(總機|助理|櫃台)|不負責|已離職|離職/i;
 
@@ -1413,7 +1415,11 @@
   function validName(token) {
     const t = String(token || '');
     const m = t.match(new RegExp(`^([\\u4e00-\\u9fff]{1,3}?)(${TITLE_ALT})$`));
-    if (m) { const s = trimToName(m[1]); return s && !NOT_PERSON_RE.test(s + m[2]) ? s + m[2] : ''; }
+    if (m) {
+      if (TITLE_TAIL_RE.test(m[1])) return '';   // 「楊副總秘書」是身分描述，不是名字
+      const s = trimToName(m[1]);
+      return s && !NOT_PERSON_RE.test(s + m[2]) ? s + m[2] : '';
+    }
     if (t.length >= 2 && t.length <= 3 && trimToName(t) === t && !NOT_PERSON_RE.test(t)) return t;
     return '';
   }
@@ -1452,7 +1458,9 @@
         if (m) { explicit = m; break; }
       }
       if (explicit) {
-        const name = validName(explicit[1]);
+        // 「KEYMAN 是楊副總秘書」：名字後面緊接著另一個職稱，整段是身分描述
+        const after = text.slice(explicit.index + explicit[0].length);
+        const name = TITLE_HEAD_RE.test(after) ? '' : validName(explicit[1]);
         const around = text.slice(Math.max(0, explicit.index - 10), explicit.index + explicit[0].length + 10);
         if (name && !NEG_RE.test(around)) candidates.push({ name, weight: 9, order, snippet: around.trim() });
       }
@@ -1461,6 +1469,8 @@
         TITLE_RE.lastIndex = 0;
         let m;
         while ((m = TITLE_RE.exec(clause)) !== null) {
+          // 「謝小姐(楊副總秘書)」：稱謂前面已經是另一個職稱，那是在描述身分，不是名字
+          if (TITLE_TAIL_RE.test(m[1])) continue;
           const surname = trimToName(m[1]);
           if (!surname) continue;
           const name = surname + m[2];
