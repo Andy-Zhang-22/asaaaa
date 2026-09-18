@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-64';
+  const APP_VERSION = '20260916-65';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -1177,6 +1177,18 @@
       if (!v) return;
       dl.append(el('dt', { textContent: k }), el('dd', { textContent: v }));
     });
+    // 行銷區域：依規範用「公司登記地址」判，跟服務區域（看實際地址）分開
+    {
+      const reg = window.Normalize.parseAddress(r.addressRegistered);
+      const b = window.Rules && window.Rules.branchOf ? window.Rules.branchOf(reg.city, reg.district) : null;
+      if (b && b.label) {
+        dl.append(el('dt', { textContent: '行銷區域' }),
+          el('dd', { textContent: b.label, className: b.kind === 'common' ? 'branch-common' : '' }));
+      } else if (reg.city) {
+        dl.append(el('dt', { textContent: '行銷區域' }),
+          el('dd', { className: 'muted', textContent: `${reg.city}${reg.district} 不在劃分表上（登記地址）` }));
+      }
+    }
     if (r.territory) {
       dl.append(el('dt', { textContent: '服務區域' }),
         el('dd', { textContent: r.territory === '範圍外'
