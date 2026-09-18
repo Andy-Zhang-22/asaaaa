@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-63';
+  const APP_VERSION = '20260916-64';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -150,7 +150,7 @@
       if (edits && edits.addressActual !== undefined) out.addressActual = String(edits.addressActual || '').trim();
       if (!out.addressActual) out.addressActual = out.addressRegistered;
       out.address = out.addressRegistered;
-      Object.assign(out, window.Normalize.parseAddress(out.addressActual || out.addressRegistered));
+      Object.assign(out, window.Normalize.parseAddressAny(out.addressActual, out.addressRegistered));
     }
 
     out.scale = capitalScale(out);
@@ -690,7 +690,7 @@
       if (f.outcome.size && !f.outcome.has(r.blocked ? 'blocked' : r.outcome)) return false;
       if (f.city.size && !f.city.has(r.city || '其他')) return false;
       if (f.scale.size && !f.scale.has(r.scale || '未填資本額')) return false;
-      if (f.territory.size && !f.territory.has(r.territory || '未填地址')) return false;
+      if (f.territory.size && !f.territory.has(r.territory || '看不出縣市')) return false;
       if (f.relation.size && !f.relation.has(r.dealingKind)) return false;
       if (f.visit.size && !f.visit.has(r.visitKind)) return false;
       if (f.taxKind.size && !f.taxKind.has(r.taxKind)) return false;
@@ -798,7 +798,7 @@
     const scaleCounts = new Map(SCALE_ORDER.map((k) => [k, 0]));
     all.forEach((r) => { const k = r.scale || '未填資本額'; scaleCounts.set(k, (scaleCounts.get(k) || 0) + 1); });
     chips($('#fltScale'), 'scale', SCALE_ORDER.map((k) => [k, scaleCounts.get(k)]), state.filters.scale);
-    chips($('#fltTerritory'), 'territory', tally((r) => r.territory || '未填地址'), state.filters.territory);
+    chips($('#fltTerritory'), 'territory', tally((r) => r.territory || '看不出縣市'), state.filters.territory);
 
     // 二分法，順序固定成「有往來 → 沒往來」，不跟著筆數浮動
     const dealCounts = [['active', 0], ['none', 0]];
@@ -1568,7 +1568,7 @@
         address: v.address, addressActual: v.addressActual || v.address, notesRaw: '', timeline: [], outcome: 'new',
         importedAt: Date.now(),
       };
-      Object.assign(record, window.Normalize.parseAddress(v.addressActual || v.address));
+      Object.assign(record, window.Normalize.parseAddressAny(v.addressActual, v.address));
       await window.Store.saveRecords([record]);
       await reload();
       closeOverlays();
@@ -2600,7 +2600,7 @@ export default {
           nextDate: null, lastDate: null, addedDate: today, country: '台灣',
           address: v.address, addressActual: v.addressActual || v.address, notesRaw: notes, importedAt: Date.now(),
         };
-        Object.assign(record, window.Normalize.parseAddress(v.addressActual || v.address));
+        Object.assign(record, window.Normalize.parseAddressAny(v.addressActual, v.address));
         record.timeline = window.Normalize.parseNotes(notes);
         record.outcome = window.Normalize.guessOutcome(notes);
         return record;

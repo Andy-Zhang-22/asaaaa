@@ -445,15 +445,37 @@
     return { registered: text, actual: text };
   }
 
+  /*
+   * 2010／2014 升格前的舊寫法：名單上還有不少「臺北縣板橋市」「桃園縣龜山鄉」。
+   * 只認新名字的話這些客戶會被歸到「未填地址」，明明地址就寫在那裡。
+   * 縣名換成現在的市名，底下的鄉鎮市一律換成區（直轄市底下只有區）。
+   */
+  const LEGACY_CITY = {
+    臺北縣: '新北市', 台北縣: '新北市', 桃園縣: '桃園市',
+    臺中縣: '臺中市', 台中縣: '臺中市', 臺南縣: '臺南市', 台南縣: '臺南市', 高雄縣: '高雄市',
+  };
+  const MUNICIPALITIES = new Set(['臺北市', '新北市', '桃園市', '臺中市', '臺南市', '高雄市']);
   function parseAddress(raw) {
-    const text = String(raw || '').replace(/\s+/g, '');
+    let text = String(raw || '').replace(/\s+/g, '');
+    let legacy = false;
+    Object.entries(LEGACY_CITY).forEach(([old, now]) => {
+      if (text.includes(old)) { text = text.replace(old, now); legacy = true; }
+    });
     const city = CITIES.find((c) => text.includes(c)) || '';
     let district = '';
     if (city) {
       const after = text.slice(text.indexOf(city) + city.length);
       district = (after.match(/^[一-龥]{1,3}[區鄉鎮市]/) || [''])[0];
     }
-    return { city: city.replace(/^台/, '臺'), district };
+    const cityNow = city.replace(/^台/, '臺');
+    if ((legacy || MUNICIPALITIES.has(cityNow)) && /[鄉鎮市]$/.test(district)) district = district.replace(/[鄉鎮市]$/, '區');
+    return { city: cityNow, district };
+  }
+  /** 先看實際地址，看不出縣市再看登記地址——兩個欄位有一個能判讀就不算沒地址。 */
+  function parseAddressAny(actual, registered) {
+    const first = parseAddress(actual);
+    if (first.city || !registered) return first;
+    return parseAddress(registered);
   }
 
   /** 從訪談內容推出一個粗略的洽談狀態，讓業務可以快速篩。 */
@@ -1122,7 +1144,7 @@
         notesRaw,
       };
       // 縣市、行政區看實際地址：業務要去的是公司實際在的地方
-      Object.assign(record, parseAddress(addressActual || address));
+      Object.assign(record, parseAddressAny(addressActual, address));
       record.timeline = parseNotes(notesRaw);
       record.outcome = guessOutcome(notesRaw);
       records.push(record);
@@ -1332,6 +1354,6 @@
     looksLikeAddress,
     validateAddress: (t) => VALIDATORS.address(t) || '',
     INTERNAL_UNITS, PEER_UNITS, BANKS,
-    parseAddress, splitAddress, guessOutcome, OUTCOME_LABEL, normalizeOutcome, outcomeLabel, makeId, toHalfWidth,
+    parseAddress, parseAddressAny, splitAddress, guessOutcome, OUTCOME_LABEL, normalizeOutcome, outcomeLabel, makeId, toHalfWidth,
   };
 })(window);
