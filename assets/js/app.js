@@ -9,8 +9,9 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-76';
+  const APP_VERSION = '20260916-78';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
+  const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
     capitalUp: '增資', capitalDown: '減資', address: '變更登記地址', owner: '負責人異動',
@@ -34,7 +35,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), taxKind: new Set(), regChange: new Set(), branch: new Set(), added: new Set(), industry: '' },
+    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), taxKind: new Set(), phoneKind: new Set(), regChange: new Set(), branch: new Set(), added: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -322,6 +323,7 @@
     }
     // 有沒有統編：欄位裡有數字就算有（編輯過的以編輯後為準）
     out.taxKind = /\d/.test(String(out.taxId || '')) ? 'yes' : 'no';
+    out.phoneKind = (out.phones && out.phones.length) ? 'yes' : 'no';
     // 變更登記：最近一次查到異動的種類；查過但從沒異動＝無變更；沒查過＝未查核
     out.regChange = (mine && mine.regChange) || null;
     out.regAt = (mine && mine.regAt) || 0;
@@ -918,6 +920,7 @@
       if (f.relation.size && !f.relation.has(r.dealingKind)) return false;
       if (f.visit.size && !f.visit.has(r.visitKind)) return false;
       if (f.taxKind.size && !f.taxKind.has(r.taxKind)) return false;
+      if (f.phoneKind.size && !f.phoneKind.has(r.phoneKind)) return false;
       if (f.regChange.size && !r.regKinds.some((k) => f.regChange.has(k))) return false;
       if (f.branch.size && !f.branch.has(r.branchKey)) return false;
       if (f.added.size && !f.added.has(r.addedBucket)) return false;
@@ -1084,6 +1087,10 @@
     const taxCounts = [['yes', 0], ['no', 0]];
     all.forEach((r) => { taxCounts[r.taxKind === 'yes' ? 0 : 1][1] += 1; });
     chips($('#fltTax'), 'taxKind', taxCounts, state.filters.taxKind, (v) => TAX_LABEL[v]);
+    // 電話：同一組「資料完整度」的第二排；統編與電話是兩個條件，可以疊加（有統編＋無電話）
+    const phoneCounts = [['yes', 0], ['no', 0]];
+    all.forEach((r) => { phoneCounts[r.phoneKind === 'yes' ? 0 : 1][1] += 1; });
+    chips($('#fltPhone'), 'phoneKind', phoneCounts, state.filters.phoneKind, (v) => PHONE_LABEL[v]);
 
     // 變更登記：固定順序含 0 筆；一家可能同時算在好幾顆裡，所以總和可以超過名單筆數
     const regCounts = new Map(REG_KIND_ORDER.map((k) => [k, 0]));
