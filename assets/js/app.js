@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-82';
+  const APP_VERSION = '20260916-83';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -275,7 +275,10 @@
     // 電話與地址改過就要先重新解析，再去算衍生欄位。
     // 順序不能反過來：服務區域是從地址拆出來的縣市與行政區算的，先算就會拿到
     // 編輯前的舊縣市，改了地址之後篩選與卡片標記都不會跟著動。
-    if (edits && edits.phoneRaw !== undefined) out.phones = window.Normalize.extractPhones(edits.phoneRaw);
+    // 電話每次都從原文重新拆：拆法改了（例如備註各歸各的）舊資料才會跟著更新，
+    // 不用等重新匯入；名單檔存的 phones 只當原文空白時的備援
+    if (String(base.phoneRaw || '').trim()) out.phones = window.Normalize.extractPhones(base.phoneRaw);
+    else if (edits && edits.phoneRaw !== undefined) out.phones = [];
     // 登記地址／實際地址：舊資料一格裡寫「104登記：… / 公司登記：…」的在這裡拆開；
     // 實際地址空著就用登記地址。縣市、行政區看實際地址。
     {
