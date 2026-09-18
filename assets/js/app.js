@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-75';
+  const APP_VERSION = '20260916-77';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -1539,7 +1539,9 @@
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存紀錄' });
     save.onclick = async () => {
       const text = memo.value.trim();
-      if (!text && !nextInput.value) { toast('請至少填寫內容或下次聯絡日'); return; }
+      // 禁止推廣不需要內容或下次聯絡日：判定了就是判定了，之後也不會再打
+      const blocking = outcomeSel.value === 'blocked';
+      if (!text && !nextInput.value && !blocking) { toast('請至少填寫內容或下次聯絡日'); return; }
       const today = todayISO();
 
       /*
@@ -1569,7 +1571,7 @@
       }
       state.logs = await window.Store.allLogs();
       const extra = targets.length > 1 ? `（同時記到 ${targets.length} 家）` : '';
-      toast(auto ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : `已儲存通話紀錄${extra}`);
+      toast(blocking && !text ? `已標記禁止推廣${extra}` : auto ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : `已儲存通話紀錄${extra}`);
       render();
       openDetail(r.id);
       scheduleSync();
