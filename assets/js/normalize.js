@@ -357,17 +357,35 @@
       return m && /[^\d\s-]/.test(m[1]) ? m[1].trim() : '';
     };
 
+    const PHONE_RE_SRC = '\\(?0\\d{1,3}\\)?[\\s-]?\\d{3,4}[\\s-]?\\d{3,4}';
+    const STOP_LEAD = /^(電話|手機|公司|市話|傳真|TEL|Tel|tel|FAX|Fax|行動|聯絡電話|公司電話|辦公室|總機)$/;
     for (const line of toHalfWidth(raw).split(/\n+/)) {
-      const re = /\(?0\d{1,3}\)?[\s-]?\d{3,4}[\s-]?\d{3,4}/g;
+      const re = new RegExp(PHONE_RE_SRC, 'g');
       let m;
       let foundInLine = false;
+      let lastEnd = 0;
+      const single = (line.match(new RegExp(PHONE_RE_SRC, 'g')) || []).length === 1;
       while ((m = re.exec(line)) !== null) {
         const digits = m[0].replace(/\D/g, '');
         if (digits.length < 8 || digits.length > 11) continue;
         foundInLine = true;
-        const tail = line.slice(m.index + m[0].length);
-        const ext = extOf(tail) || extOf(line);
-        const note = noteOf(tail) || noteOf(line);
+        /*
+         * 一行裡好幾支電話時，每支的備註各自歸各自：
+         *   「馬少軒0936-570087呂彥皇(員工?)0987-729-798」
+         *   → 0936 的備註是前面的「馬少軒」；「呂彥皇(員工?)」是 0987 的。
+         * 尾巴只看到下一支電話之前；尾巴的括號要緊接著號碼才算這支的。
+         */
+        let tail = line.slice(m.index + m[0].length);
+        const nextAt = tail.search(new RegExp(PHONE_RE_SRC));
+        if (nextAt >= 0) tail = tail.slice(0, nextAt);
+        const head = line.slice(lastEnd, m.index).replace(/^[\s\-,，、;；/]+/, '');
+        lastEnd = m.index + m[0].length;
+        const ext = extOf(tail) || (single ? extOf(line) : '');
+        const tailNote = /^[\s\-,，、;；]*\(/.test(tail) ? noteOf(tail) : '';
+        const headParen = noteOf(head);
+        let lead = head.replace(/\([^)]*\)/g, ' ').replace(/[\d\s\-()#、,，;；/:：]/g, ' ').replace(/分機|轉/g, ' ').trim();
+        if (STOP_LEAD.test(lead) || lead.length < 2 || lead.length > 12) lead = '';
+        const note = tailNote || [lead, headParen].filter(Boolean).join(' ') || (single ? noteOf(line) : '');
         const key = digits + '#' + ext;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -396,6 +414,21 @@
       }
     }
     return out;
+  }
+
+  /** 電話欄拆成一列一列（號碼、分機、備註），給編輯表單用；serializePhones 再拼回去。 */
+  function phoneRows(raw) {
+    return extractPhones(raw).map((p) => {
+      const [digits, ext] = p.dial.split(',');
+      return { number: p.display.split(' 分機')[0].trim(), digits, ext: ext || '', note: p.note || '' };
+    });
+  }
+  /** 一支電話一行：「0936-570087 分機23 (馬少軒)」，extractPhones 讀得回來。 */
+  function serializePhones(rows) {
+    return rows
+      .filter((r) => String(r.number || '').replace(/\D/g, '').length >= 8)
+      .map((r) => `${String(r.number).trim()}${r.ext ? ` 分機${String(r.ext).trim()}` : ''}${r.note ? ` (${String(r.note).trim()})` : ''}`)
+      .join('\n');
   }
 
   /** 把訪談內容切成一則則帶日期的紀錄，新到舊排序。 */
@@ -1448,7 +1481,7 @@
   global.Normalize = {
     detectVisit, VISIT_LABEL, detectKeyman,
     parseKeyValue,
-    toRecords, detectHeader, parseDate, extractPhones, parseNotes, splitCompanyNames,
+    toRecords, detectHeader, parseDate, extractPhones, phoneRows, serializePhones, parseNotes, splitCompanyNames,
     parseCsv, parseDelimited, detectDelimiter, parsePasted, STANDARD_HEADER,
     validate, resolveRow, detectShift, VALIDATORS,
     detectRelations, relationKinds, RELATION_LABEL,
