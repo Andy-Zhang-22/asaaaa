@@ -309,6 +309,224 @@
     return notes;
   }
 
+
+  /* ---------------- 承作檢核：案件架構 × 訪談內容 × 規則 ---------------- */
+
+  /**
+   * 從訪談片段抓本餘金額，換成仟元。
+   * 「本餘 300 萬」→ 3,000；「本於1200萬」→ 12,000；「本餘 5,000 仟」→ 5,000；
+   * 沒單位：≥ 1,000,000 當「元」，其餘當「萬」（名單上最常見的寫法）。
+   */
+  function parseBalance(text) {
+    const t = String(text || '').replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0)).replace(/,/g, '');
+    const m = t.match(/(?:本餘|本金餘額|本於|本金於)\s*(?:約|大約|大概|還有|剩|剩下)?\s*([\d.]+)\s*(億|萬|仟|千)?/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const unit = m[2] || '';
+    if (unit === '億') return Math.round(n * 100000);
+    if (unit === '萬') return Math.round(n * 10);
+    if (unit === '仟' || unit === '千') return Math.round(n);
+    return n >= 1000000 ? Math.round(n / 1000) : Math.round(n * 10);
+  }
+
+  /** 訪談裡提到的中租單位屬於哪一邊。 */
+  const UNIT_SIDE = (name) => {
+    if (/微企/.test(name)) return '微企處';
+    if (/大企/.test(name)) return '大企部';
+    if (/融專/.test(name)) return '融資專案處';
+    if (/城北|一版組|設備組|長租/.test(name)) return `一般組其他單位（${name}）`;
+    return '中租（單位不明）';
+  };
+
+  /**
+   * 承作檢核。把案件架構、名單資料、訪談判讀丟進來，回傳事實、衝突與調整建議。
+   * 金額一律仟元；level：block（衝突，不能照這樣送）／warn（要注意或要補程序）／ok。
+   */
+  function checkDeal(input) {
+    const facts = [];
+    const findings = [];
+    const suggestions = [];
+    const push = (level, text, rule) => findings.push({ level, text, rule: rule || '' });
+    const suggest = (text) => { if (!suggestions.includes(text)) suggestions.push(text); };
+    const fact = (label, value, source) => facts.push({ label, value, source: source || '' });
+
+    const myBranch = input.myBranch || '新莊';
+    const myUnit = input.myUnit || '一般組';
+    const amount = Number(input.amount) || 0;
+    const capital = Number(input.capital) || 0;
+    const balance = Number(input.balance) || 0;
+    const exposure = balance + amount;
+    const branch = input.branch || { kind: '', label: '' };
+    const actual = input.actualBranch || { kind: '', label: '' };
+    const dealing = input.dealing || { kind: 'none' };
+    const relations = input.relations || { internal: [], peer: [], bank: [] };
+    const caseType = input.caseType || '一般案件';
+
+    // ---- 一、行銷區域（依公司登記地址） ----
+    let sameRegion = true;
+    if (branch.kind === 'branch') {
+      sameRegion = branch.branches[0] === myBranch;
+      fact('登記地址行銷區', branch.label, '登記地址');
+    } else if (branch.kind === 'common') {
+      sameRegion = branch.branches.includes(myBranch);
+      fact('登記地址行銷區', branch.label, '登記地址');
+    } else if (branch.kind === 'shared') {
+      fact('登記地址行銷區', '全公司共同區域', '登記地址');
+    } else {
+      fact('登記地址行銷區', '判不出（登記地址缺或不在劃分表上）', '登記地址');
+      push('warn', '登記地址判不出所屬行銷區，請先確認登記地址是否正確；行銷區以公司登記地址為準。', '行銷區域劃分與客戶歸屬');
+    }
+    if (branch.kind === 'branch' && !sameRegion) {
+      push('block', `客戶登記地址在「${branch.label}」行銷區，不是本行銷區（${myBranch}分公司）。依【一般組】行銷規範第(三)項一律採「協銷」辦理，須至「業務跨區申覆協銷作業系統」提出申請，經雙方主管簽核同意。`, '行銷區域劃分與客戶歸屬');
+      if (actual.kind === 'branch' && actual.branches[0] === myBranch) {
+        suggest(`實際地址在本行銷區（${actual.label}）：可依「申覆變更歸屬」第(一)款（登記地無人辦公、實際辦公地點在本區）申覆，由被申覆方（${branch.branches[0]}分公司）同意；不同意則需檢附證明文件。申覆後 180 天內未起租會歸還原單位。`);
+      } else {
+        suggest(`改採協銷：由 ${branch.branches[0]}分公司承作、本單位協銷，業績依「一般案件協銷」分享（起租單位 70%／協銷單位 30%，自核准日起一年）。`);
+        suggest('若主要財務人員或負責人在本區，且本區金融機構額度佔比達 80%（含）以上，可依第(二)款檢附金融徵信資料申覆變更歸屬。');
+      }
+    } else if (branch.kind === 'common') {
+      if (sameRegion) {
+        push('ok', `登記地址在共同區（${branch.branches.join('、')}分公司共用），本分公司可承作。若對方單位已往來，申覆對象為「${branch.appealTo}」。`, '附表一');
+      } else {
+        push('block', `登記地址在「${branch.branches.join('、')}分公司」的共同區，本分公司（${myBranch}）不在其中，一律採協銷辦理。`, '附表一');
+        suggest(`協銷給 ${branch.appealTo}（附表一的被申覆單位），或依申覆變更歸屬條件申覆。`);
+      }
+    } else if (branch.kind === 'branch') {
+      push('ok', `登記地址在本行銷區（${branch.label}）。`, '行銷區域劃分表');
+    }
+
+    // ---- 二、訪談內容：跟中租哪個單位往來 ----
+    const internal = (relations.internal || []).map((x) => x.name);
+    const sides = [...new Set(internal.map(UNIT_SIDE))];
+    let ownerElsewhere = false;
+    let counterpartOldCustomer = false;
+    let currentUnit = '新戶';
+    if (dealing.kind === 'active') {
+      fact('往來情形', `有跟中租往來${sides.length ? `（${sides.join('、')}）` : ''}`, dealing.snippet ? `訪談：「${dealing.snippet}」` : '訪談內容');
+      if (sides.some((s) => s === '微企處')) {
+        currentUnit = '微企處';
+        if (myUnit === '一般組') {
+          counterpartOldCustomer = true;
+          if (exposure > MICRO_CREDIT_LIMIT) {
+            push('warn', `客戶是微企處舊戶，單戶累計（本餘 ${fmt(balance)} ＋ 本案 ${fmt(amount)} ＝ ${fmt(exposure)} 仟元）超過 ${fmt(MICRO_CREDIT_LIMIT)} 仟元：微企處應主動辦理移交，由原承作單位陪同共同拜訪；移交須經微企處處級主管同意（五個工作日內未回覆視為同意）。`, '微企處行銷規範');
+            if (amount < HANDOVER_MIN_LEASE) {
+              push('block', `移交一般組後單筆最低起租金額為 ${fmt(HANDOVER_MIN_LEASE)} 仟元（含），本案 ${fmt(amount)} 仟元未達門檻，三個月內送件且批覆書有效期內起租的規定會卡住。`, '微企處行銷規範');
+              suggest(`把本案起租金額提高到 ${fmt(HANDOVER_MIN_LEASE)} 仟元（含）以上（不論是否分次撥動都要符合），或改由微企處承作、本單位協銷。`);
+            }
+          } else {
+            push('block', `客戶是微企處舊戶，單戶累計 ${fmt(exposure)} 仟元仍在微企處授信上限 ${fmt(MICRO_CREDIT_LIMIT)} 仟元內，一般組要承作須先向微企處申覆並經其處級主管同意，否則應由微企處承作。`, '微企處行銷規範');
+            suggest('先向微企處申覆客戶移交（微企處五個工作日內未回覆視為同意）；或協銷予微企處承作（微企協銷分享 70/30，微企處分享額單戶上限 16,000 仟元）。');
+          }
+        }
+      } else if (sides.some((s) => /大企部|融資專案處|一般組其他單位/.test(s))) {
+        ownerElsewhere = true;
+        currentUnit = '一般組';
+        push('block', `訪談內容顯示客戶目前跟「${sides.filter((s) => /大企部|融資專案處|一般組其他單位/.test(s)).join('、')}」往來，客戶已歸屬其他單位，一律採協銷辦理。`, '行銷區域劃分與客戶歸屬');
+        suggest('向原歸屬單位協銷（一般案件協銷 70/30、分享一年），或確認該筆本餘是否已結束超過 180 天（結束滿 180 天即依登記地址重新歸屬）。');
+      } else {
+        currentUnit = myUnit;
+        push('warn', '訪談內容提到跟中租往來，但看不出是哪個單位。送件前請確認客戶目前歸屬，若是其他單位的舊戶就要協銷。', '行銷區域劃分與客戶歸屬');
+        suggest('在訪談內容補上往來單位（例如「本餘 300 萬在微企」），下次檢核就能自動判斷。');
+      }
+    } else if (dealing.ended) {
+      fact('往來情形', '曾與中租往來，最新一期訪談顯示已結束', dealing.snippet ? `訪談：「${dealing.snippet}」` : '');
+      push('warn', '舊戶本餘結束後未滿 180 天仍歸原承辦單位；滿 180 天才依登記地址重新歸屬。請確認結束日期。', '行銷區域劃分與客戶歸屬（五）');
+    } else {
+      fact('往來情形', '沒有跟中租往來（訪談內容看不到本餘或往來字眼）', '訪談內容');
+    }
+    if (relations.peer && relations.peer.length) fact('同業往來', relations.peer.map((x) => x.name).join('、'), '訪談內容（不影響歸屬）');
+    if (relations.bank && relations.bank.length) fact('銀行往來', relations.bank.map((x) => x.name).join('、'), '訪談內容（不影響歸屬）');
+    if (balance) fact('既有本餘', `${fmt(balance)} 仟元`, input.balanceSource || '');
+
+    // ---- 三、客戶規模與收益率（沿用承作單位判定） ----
+    if (capital) fact('資本額', `${fmt(capital)} 仟元${capital < MICRO_CAPITAL_LIMIT ? '（微企範疇）' : capital >= LARGE_CAPITAL_LIMIT ? '（大企部範疇）' : '（一般組範疇）'}`, '名單');
+    if (capital >= LARGE_CAPITAL_LIMIT && myUnit !== '大企部') {
+      push('warn', `資本額 ${fmt(capital)} 仟元達 ${fmt(LARGE_CAPITAL_LIMIT)} 仟元，屬大企部範疇；送件前請確認客戶是否已歸屬大企部，若是則須協銷。`, '客戶規模');
+    }
+    routeCustomer({
+      capital, exposure, spread: input.spread === '' || input.spread === undefined ? '' : Number(input.spread),
+      // 這裡的 currentUnit 是「誰要承作」：微企舊戶的移交規則上面第二段已經處理過
+      currentUnit: myUnit,
+      sameRegion: true,   // 行銷區上面已經講過，這裡不重複
+      ownerElsewhere: false,
+      counterpartOldCustomer,
+      handoverType: input.handoverType || '',
+    }).forEach((n) => {
+      if (/沒有觸發特別的/.test(n.text)) return;
+      // 規模判定要看是誰要做：一般組做非微企範疇的客戶是常態，不用提醒；
+      // 微企處做超過範疇的客戶才是衝突；一般組做微企範疇的客戶要注意收益率控管
+      let level = n.level;
+      if (/不屬微企處客戶範疇/.test(n.text)) level = myUnit === '微企處' ? 'block' : 'ok';
+      if (/屬【微型企業營業處】客戶範疇/.test(n.text)) level = myUnit === '一般組' ? 'warn' : 'ok';
+      push(level, n.text, '承作單位判定');
+      if (n.level === 'block' && /Spread/.test(n.text)) {
+        suggest(`把本案 Spread 拉高到 ${MICRO_MIN_SPREAD}% 以上（不含 ${MICRO_MIN_SPREAD}%），或協銷予微企處承作。也可以把單戶累計往來拉到 ${fmt(MICRO_CREDIT_LIMIT)} 仟元以上（例如合併其他需求一起承作），就不受這條限制。`);
+      }
+      if (n.level === 'warn' && /請填入本案 Spread/.test(n.text)) suggest('填入本案 Spread 才能檢核收益率控管。');
+      if (n.level === 'warn' && /實質收益率」不得低於雙方二年內/.test(n.text)) suggest('送件後請審查提供一般組／微企處二年內起租案件的最低實質收益率，本案實質收益率不得低於該值；不符時要向前起租單位申覆並由總經理核決。');
+      if (n.level === 'warn' && /被動移交/.test(n.text)) suggest(`被動移交後本案實質收益率至少 ${PASSIVE_MIN_YIELD}%，或不低於微企處最後一筆起租案件實質收益率減 2%。`);
+    });
+    if (input.yieldRate !== '' && input.yieldRate !== undefined && input.handoverType === '被動移交' && Number(input.yieldRate) < PASSIVE_MIN_YIELD) {
+      push('block', `本案實質收益率 ${input.yieldRate}% 低於被動移交後的下限 ${PASSIVE_MIN_YIELD}%。`, '收益率控管');
+    }
+
+    // ---- 四、案件類型 ----
+    if (caseType === '存貨擔保融資') {
+      if (myBranch !== '高屏') {
+        push('block', '存貨擔保融資是【高屏一科、二科】專屬業務，其他單位不得承作。', '存貨擔保融資');
+        suggest('協銷予高屏一科、二科承作；倉儲須在台中（含）以南且經我方認可，客戶須為存貨所有權人。');
+      } else {
+        push('warn', '存貨擔保融資：僅限倉儲置放地為台中（含）以南且經我方認可之倉儲公司；三方買賣須回歸存貨擔保架構、驗貨完成後始得撥款。', '存貨擔保融資');
+      }
+    }
+    if (caseType === 'OSF') {
+      push('warn', 'OSF 案件之申戶（境外法人）仍受單一歸屬規範，以申戶母公司（保證公司，資本額五億元以下）的公司登記地址認定行銷區，請用母公司地址重新確認上面的行銷區判定。', 'OSF 案件');
+    }
+
+    // ---- 五、償還本金管理（頭小尾大／不規則） ----
+    let principal = null;
+    if (amount > 0 && input.months > 0) {
+      principal = evaluate({
+        principal: amount, months: input.months, periodMonths: input.periodMonths || 1,
+        schedule: input.schedule || [], method: input.method, collaterals: input.collaterals || [],
+      });
+      if (principal.control.controlled) {
+        push(principal.failed.length ? 'block' : 'warn', `本案受「案件償還本金管理辦法」第四條管制（${principal.control.reason}）：每 6 個月至少累計償還起租本金 10%。`, '案件償還本金管理辦法');
+        principal.failed.forEach((c) => {
+          push('block', `第 ${c.index} 個檢核點（第 ${c.month} 個月）累計至少要還 ${fmt(c.required)} 仟元，還款計畫只還 ${fmt(c.actual)} 仟元，差 ${fmt(c.shortfall)} 仟元。`, '案件償還本金管理辦法');
+        });
+        if (principal.failed.length) {
+          const first = principal.failed[0];
+          suggest(`調整還款計畫：第 ${first.month} 個月前累計償還至少 ${fmt(first.required)} 仟元（每 6 個月再加 10%），或改為本息／本金平均攤還，或徵提不動產、股票、基金、債券擔保即可排除管制。`);
+        }
+        if (!principal.failed.length && !(input.schedule || []).length && IRREGULAR_METHODS.includes(input.method)) {
+          push('warn', '還沒填還款計畫，無法逐點檢核；請把每期償還本金填進去。', '案件償還本金管理辦法');
+        }
+      }
+      if (!principal.control.controlled && IRREGULAR_METHODS.includes(input.method)) {
+        push('ok', `不受「案件償還本金管理辦法」第四條管制：${principal.control.reason}`, '案件償還本金管理辦法');
+      }
+      principal.notes.forEach((t) => push('warn', t, '案件償還本金管理辦法'));
+      if (input.months > CONTROL_LIMIT_MONTHS && principal.control.controlled) suggest('承作期間超過五年：先取得審查處主管同意再送件，或把期數縮到 60 期以內。');
+    }
+
+    // ---- 六、分享試算提示 ----
+    const needsShare = findings.some((f) => f.level === 'block' && /協銷/.test(f.text));
+    if (needsShare && amount) {
+      const s = shareSplit({ scenario: 'general-cross', amount, profit: 0 });
+      if (s) fact('若改協銷的業績分享', `起租單位 ${fmt(s.originAmount)}／協銷單位 ${fmt(s.partnerAmount)} 仟元（70/30，一年）`, '業績分享原則');
+    }
+
+    const blocks = findings.filter((f) => f.level === 'block').length;
+    const warns = findings.filter((f) => f.level === 'warn').length;
+    return {
+      facts, findings, suggestions, principal, sameRegion, currentUnit, exposure,
+      verdict: blocks ? 'block' : warns ? 'warn' : 'ok',
+      summary: blocks ? `有 ${blocks} 項跟規則衝突，照這個架構送件會被退` : warns ? `沒有衝突，但有 ${warns} 項要先處理或確認` : '照這個架構送件沒有跟規則衝突',
+    };
+  }
+
   /* ---------------- 規章內容 ---------------- */
 
   const SHARE_COLUMNS = ['單　位', '業績（LF 受讓金額）', '淨收益（LF 毛利）'];
@@ -683,6 +901,7 @@
   global.Rules = {
     RULES, ANALYSIS, evaluate, assessControl, buildCheckpoints, parseSchedule, fmt,
     shareSplit, routeCustomer, SHARE_SCENARIOS, branchOf, BRANCH_AREAS, COMMON_AREAS,
+    checkDeal, parseBalance, HANDOVER_MIN_LEASE, PASSIVE_MIN_YIELD,
     EXCLUDING, CONTROLLED_COLLATERAL, IRREGULAR_METHODS,
     MICRO_CAPITAL_LIMIT, LARGE_CAPITAL_LIMIT, MICRO_CREDIT_LIMIT, MICRO_SHARE_CAP, MICRO_MIN_SPREAD,
   };
