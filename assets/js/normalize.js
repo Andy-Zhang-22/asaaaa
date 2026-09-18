@@ -1469,8 +1469,9 @@
         TITLE_RE.lastIndex = 0;
         let m;
         while ((m = TITLE_RE.exec(clause)) !== null) {
-          // 「謝小姐(楊副總秘書)」：稱謂前面已經是另一個職稱，那是在描述身分，不是名字
-          if (TITLE_TAIL_RE.test(m[1])) continue;
+          // 「謝小姐(楊副總秘書)」：稱謂前面已經是另一個職稱，或後面緊接著另一個職稱
+          //（「是楊副總秘書」會先對到「楊副總」），那是在描述身分，不是名字
+          if (TITLE_TAIL_RE.test(m[1]) || TITLE_HEAD_RE.test(clause.slice(m.index + m[0].length))) continue;
           const surname = trimToName(m[1]);
           if (!surname) continue;
           const name = surname + m[2];
