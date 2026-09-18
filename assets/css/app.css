@@ -395,6 +395,7 @@ button, input, select { font: inherit; color: inherit; }
 .badge-micro { border-color: var(--primary); color: var(--primary); }
 .badge-large { border-color: #7c3aed; color: #7c3aed; }
 .badge-regchange { border-color: #d97706; color: #b45309; }
+.branch-common { color: #b45309; }
 
 /* ---------- 長列表的繪製成本 ---------- */
 /*
