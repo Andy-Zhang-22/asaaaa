@@ -413,16 +413,26 @@ button, input, select { font: inherit; color: inherit; }
 .branch-common { color: #b45309; }
 .badge-branch { border-color: #0f766e; color: #0f766e; }
 /* 回撥提醒 */
-.remind-bar { border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; }
+.remind-bar { border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 10px; }
 .remind-bar.is-due { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--surface)); }
-.remind-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; margin-bottom: 6px; }
-.remind-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px; padding: 6px 0; border-top: 1px dashed var(--border); font-size: 13.5px; }
-.remind-row.is-due b { color: var(--danger); }
-.remind-row.is-today b { color: var(--primary); }
-.remind-sub { margin-top: 8px; }
-.remind-hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
-.remind-open { background: none; border: 0; padding: 0; color: var(--text); cursor: pointer; text-align: left; font: inherit; }
-.remind-open b { font-variant-numeric: tabular-nums; }
+.remind-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13.5px; }
+.remind-toggle { background: none; border: 0; padding: 4px 0; font: inherit; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.remind-caret { font-size: 11px; opacity: .7; }
+.remind-tools { display: flex; gap: 6px; flex-shrink: 0; }
+.remind-list { margin-top: 4px; }
+.remind-row { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px dashed var(--border); font-size: 13.5px; }
+.remind-time { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; }
+.remind-row.is-due .remind-time { color: var(--danger); }
+.remind-row.is-today .remind-time { color: var(--primary); }
+.remind-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.remind-open { background: none; border: 0; padding: 0; color: var(--text); cursor: pointer; text-align: left; font: inherit; min-width: 0; }
+.remind-name { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remind-meta { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remind-meta:empty { display: none; }
+.remind-tel { font-size: 12.5px; color: var(--primary); text-decoration: none; white-space: nowrap; }
+.remind-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.remind-actions .btn-tiny { padding: 3px 8px; }
+@media (max-width: 520px) { .remind-row { grid-template-columns: 44px 1fr auto; } .remind-actions { flex-direction: column; } }
 .badge-remind { border-color: var(--warn); color: var(--warn); }
 .badge-remind.is-due { border-color: var(--danger); color: var(--danger); font-weight: 600; }
 .remind-note { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); margin: 6px 0; }

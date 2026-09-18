@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-85';
+  const APP_VERSION = '20260916-86';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -178,68 +178,85 @@
     try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) { /* 不支援就算了 */ }
     renderRemindBar();
   }
+  const REMIND_OPEN_KEY = 'remind-bar-open';
+  /*
+   * 提醒列：一份清單就好。
+   *
+   * 有時間的回撥提醒與「下次聯絡日是今天」合在一起，同一家只列一次（有時間的優先）；
+   * 每列固定三欄：時間｜公司＋窗口、電話｜動作，不換行。說明文字不放在列上，
+   * 整條可收起，收起後只剩一行標題。
+   */
+  function remindItems() {
+    const now = Date.now();
+    const items = reminders().map((r) => ({ r, kind: 'timed', at: r.remindAt, due: r.remindAt <= now }));
+    const seen = new Set(items.map((x) => x.r.id));
+    dueToday().forEach((r) => { if (!seen.has(r.id)) items.push({ r, kind: 'date', at: 0, due: false }); });
+    // 到期的排最前，再來有時間的照時間，最後是只有日期的
+    items.sort((x, y) => (Number(y.due) - Number(x.due)) || ((x.at || Infinity) - (y.at || Infinity)) || x.r.company.localeCompare(y.r.company, 'zh-Hant'));
+    return items;
+  }
   function renderRemindBar() {
     const bar = $('#remindBar');
     if (!bar) return;
-    const list = reminders();
-    const todayList = dueToday();
-    bar.hidden = !list.length && !todayList.length;
+    const items = remindItems();
+    bar.hidden = !items.length;
     bar.textContent = '';
     if (bar.hidden) return;
-    const now = Date.now();
-    const dueCount = list.filter((r) => r.remindAt <= now).length;
+    const dueCount = items.filter((x) => x.due).length;
+    const dateCount = items.filter((x) => x.kind === 'date').length;
     bar.classList.toggle('is-due', dueCount > 0);
-    const head = el('div', { className: 'remind-head' }, [
-      el('strong', { textContent: dueCount ? `⏰ 該回撥了（${dueCount}）` : list.length ? `⏰ 回撥提醒（${list.length}）` : `📅 今天要聯絡（${todayList.length}）` }),
+    let open = true;
+    try { open = localStorage.getItem(REMIND_OPEN_KEY) !== '0'; } catch (e) { /* 無痕模式 */ }
+    bar.classList.toggle('is-closed', !open);
+
+    const toggle = el('button', { className: 'remind-toggle', type: 'button', title: open ? '收起' : '展開' }, [
+      el('strong', { textContent: dueCount ? `⏰ 該回撥了（${dueCount}）` : `⏰ 今天要打（${items.length}）` }),
+      el('span', { className: 'remind-caret', textContent: open ? '▾' : '▸' }),
     ]);
-    if ('Notification' in window && Notification.permission === 'default') {
-      const btn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '開啟瀏覽器通知' });
-      btn.onclick = async () => { try { await Notification.requestPermission(); } catch (e) { /* 使用者拒絕 */ } renderRemindBar(); };
-      head.append(btn);
-    }
-    head.append(el('span', { className: 'muted', textContent: '網站開著才會提醒；手機請把網站加到主畫面再開通知。' }));
-    bar.append(head);
-    list.forEach((r) => {
-      const row = el('div', { className: `remind-row ${r.remindAt <= now ? 'is-due' : ''}` });
-      const open = el('button', { className: 'remind-open', type: 'button' }, [
-        el('b', { textContent: whenLabel(r.remindAt) }),
-        el('span', { textContent: ` ${r.company}` }),
-        r.remindNote ? el('span', { className: 'muted', textContent: `　${r.remindNote}` }) : null,
-        r.phones && r.phones[0] ? el('span', { className: 'muted', textContent: `　📞 ${r.phones[0].display || r.phones[0].digits}` }) : null,
-      ].filter(Boolean));
-      open.onclick = () => openDetail(r.id);
-      const done = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '完成' });
-      done.onclick = () => setReminder(r.id, null);
-      const later = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '延 15 分' });
-      later.onclick = () => setReminder(r.id, Math.max(now, r.remindAt) + 15 * 60000, r.remindNote);
-      row.append(open, el('div', { className: 'card-actions' }, [done, later]));
-      bar.append(row);
-    });
-    // 下次聯絡日是今天的：列出來，多的話給一顆「只看今天」
-    if (todayList.length) {
-      const LIMIT = 12;
-      const sub = el('div', { className: 'remind-head remind-sub' }, [
-        el('strong', { textContent: `📅 今天要聯絡（${todayList.length}）` }),
-      ]);
-      const onlyToday = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '只看今天到期' });
+    toggle.onclick = () => {
+      try { localStorage.setItem(REMIND_OPEN_KEY, open ? '0' : '1'); } catch (e) { /* 無痕模式 */ }
+      renderRemindBar();
+    };
+    const head = el('div', { className: 'remind-head' }, [toggle]);
+    const tools = el('div', { className: 'remind-tools' });
+    if (dateCount) {
+      const onlyToday = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '只看今天到期', title: '把名單篩成下次聯絡日是今天的' });
       onlyToday.onclick = () => { applyDueQuick('today'); state.limit = PAGE_SIZE; render(); };
-      sub.append(onlyToday, el('span', { className: 'muted', textContent: '訪談紀錄填了下次聯絡日的，當天自動列在這裡。' }));
-      if (list.length) bar.append(el('hr', { className: 'remind-hr' }));
-      bar.append(sub);
-      todayList.slice(0, LIMIT).forEach((r) => {
-        const row = el('div', { className: 'remind-row is-today' });
-        const open = el('button', { className: 'remind-open', type: 'button' }, [
-          el('b', { textContent: '今天' }),
-          el('span', { textContent: ` ${r.company}` }),
-          r.keyman ? el('span', { className: 'muted', textContent: `　${r.keyman}` }) : null,
-          r.phones && r.phones[0] ? el('span', { className: 'muted', textContent: `　📞 ${r.phones[0].display || r.phones[0].digits}` }) : null,
-        ].filter(Boolean));
-        open.onclick = () => openDetail(r.id);
-        row.append(open);
-        bar.append(row);
-      });
-      if (todayList.length > LIMIT) bar.append(el('p', { className: 'muted', textContent: `…還有 ${todayList.length - LIMIT} 家，按「只看今天到期」看全部。` }));
+      tools.append(onlyToday);
     }
+    if ('Notification' in window && Notification.permission === 'default') {
+      const btn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '開通知', title: '時間到了讓瀏覽器跳通知。網站開著才會提醒；手機請先把網站加到主畫面。' });
+      btn.onclick = async () => { try { await Notification.requestPermission(); } catch (e) { /* 使用者拒絕 */ } renderRemindBar(); };
+      tools.append(btn);
+    }
+    head.append(tools);
+    bar.append(head);
+    if (!open) return;
+
+    const list = el('div', { className: 'remind-list' });
+    items.forEach(({ r, kind, due }) => {
+      const row = el('div', { className: `remind-row ${due ? 'is-due' : ''} ${kind === 'date' ? 'is-today' : ''}` });
+      const time = el('b', { className: 'remind-time', textContent: kind === 'timed' ? whenLabel(r.remindAt) : '今天' });
+      const openBtn = el('button', { className: 'remind-open', type: 'button' }, [
+        el('span', { className: 'remind-name', textContent: r.company }),
+        el('span', { className: 'remind-meta', textContent: [r.remindNote, r.keyman].filter(Boolean).join('　') }),
+      ]);
+      openBtn.onclick = () => openDetail(r.id);
+      const main = el('div', { className: 'remind-main' }, [openBtn]);
+      const p = r.phones && r.phones[0];
+      if (p) main.append(el('a', { className: 'remind-tel', href: `tel:${p.dial || p.digits}`, textContent: `📞 ${p.display || p.digits}` }));
+      const actions = el('div', { className: 'remind-actions' });
+      if (kind === 'timed') {
+        const done = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '完成', title: '取消這個提醒' });
+        done.onclick = () => setReminder(r.id, null);
+        const later = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '延 15 分' });
+        later.onclick = () => setReminder(r.id, Math.max(Date.now(), r.remindAt) + 15 * 60000, r.remindNote);
+        actions.append(done, later);
+      }
+      row.append(time, main, actions);
+      list.append(row);
+    });
+    bar.append(list);
   }
   /** 詳細頁的「回撥提醒」區塊 */
   function reminderSection(r) {
