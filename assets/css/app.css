@@ -479,6 +479,12 @@ button, input, select { font: inherit; color: inherit; }
 @media (max-width: 600px) { .shot-grid { grid-template-columns: 1fr; } }
 .edit-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 12px; margin: 16px 0; }
 @media (max-width: 520px) { .edit-form { grid-template-columns: 1fr; } }
+.phone-field { grid-column: 1 / -1; }
+.phone-field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.phone-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.phone-row { display: grid; grid-template-columns: minmax(130px, 1.4fr) 70px minmax(100px, 1fr) auto; gap: 6px; align-items: center; }
+.edit-form .phone-row input { width: 100%; }
+@media (max-width: 520px) { .phone-row { grid-template-columns: 1fr 64px; } .phone-row input:nth-child(3) { grid-column: 1; } }
 .edit-form textarea { min-height: 52px; resize: vertical; }
 .edit-form .rule-field input, .edit-form .rule-field textarea {
   width: 100%; padding: 8px 10px; border-radius: 8px;

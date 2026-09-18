@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-80';
+  const APP_VERSION = '20260916-81';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -927,7 +927,8 @@
   /** 這筆有沒有通過目前的條件；skip 指定「不算哪一組」，算該組晶片家數時用。 */
   function passesFilters(r, skip, terms) {
     const f = state.filters;
-    if (state.hideBlocked && r.blocked) return false;
+    // 「隱藏禁止推廣」對洽談狀態那組不算：禁打的家數還是要看得到，才知道藏了幾筆
+    if (state.hideBlocked && r.blocked && skip !== 'outcome') return false;
     for (const key of Object.keys(FACET_VALUE)) {
       if (key === skip) continue;
       if (f[key].size && !facetHas(f[key], FACET_VALUE[key](r))) return false;
@@ -1822,10 +1823,53 @@
   ];
 
   /** 產生編輯表單，回傳 { node, read }。 */
+  /** 電話列表編輯器：每列號碼／分機／備註，最後一顆「＋ 新增電話」。 */
+  function phoneEditor(raw) {
+    const node = el('div', { className: 'phone-editor' });
+    const list = el('div', { className: 'phone-rows' });
+    const add = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '＋ 加一支電話' });
+    const rows = [];
+    const addRow = (r) => {
+      const number = el('input', { type: 'tel', placeholder: '02-1234-5678 或 0912-345-678', value: r.number || '' });
+      const ext = el('input', { type: 'text', placeholder: '分機', value: r.ext || '', className: 'phone-ext' });
+      const note = el('input', { type: 'text', placeholder: '備註（找誰、身分）', value: r.note || '' });
+      const del = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '刪除', title: '刪除這支電話' });
+      const row = el('div', { className: 'phone-row' }, [number, ext, note, del]);
+      const item = { number, ext, note, row };
+      del.onclick = () => { row.remove(); rows.splice(rows.indexOf(item), 1); if (!rows.length) addRow({}); };
+      rows.push(item);
+      list.append(row);
+      return item;
+    };
+    const set = (text) => {
+      rows.splice(0); list.textContent = '';
+      const parsed = window.Normalize.phoneRows(text);
+      (parsed.length ? parsed : [{}]).forEach(addRow);
+    };
+    add.onclick = () => { addRow({}).number.focus(); };
+    set(raw);
+    node.append(list, add);
+    return {
+      node,
+      set,
+      read: () => window.Normalize.serializePhones(rows.map((r) => ({ number: r.number.value, ext: r.ext.value, note: r.note.value }))),
+    };
+  }
+
   function editForm(values) {
     const node = el('div', { className: 'edit-form' });
     const inputs = {};
+    let phoneEd = null;
     EDIT_FIELDS.forEach(([key, label, type]) => {
+      if (key === 'phoneRaw') {
+        // 電話一支一列：號碼、分機、備註，可刪可加。原本一整段文字擠在一起，改不動
+        phoneEd = phoneEditor(values.phoneRaw || '');
+        inputs.phoneRaw = { get value() { return phoneEd.read(); }, set value(v) { phoneEd.set(v); } };
+        node.append(el('div', { className: 'rule-field rule-field-wide phone-field' }, [
+          el('span', { textContent: label }), phoneEd.node,
+        ]));
+        return;
+      }
       const control = type === 'textarea'
         ? el('textarea', { rows: 2, value: values[key] || '' })
         : el('input', { type: 'text', value: values[key] || '' });
