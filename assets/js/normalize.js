@@ -418,8 +418,12 @@
     }
     marks.forEach((mark, i) => {
       const end = i + 1 < marks.length ? marks[i + 1].at : text.length;
-      const body = text.slice(mark.at + mark.raw.length, end).trim();
-      entries.push({ date: parseDate(mark.raw), dateRaw: mark.raw, text: body });
+      let body = text.slice(mark.at + mark.raw.length, end).trim();
+      // 日期後面緊接著的「11:00」是網站記通話時存的時間，另外收起來，不算內容
+      let time = '';
+      const t = body.match(/^(\d{1,2}:\d{2})(?=\s|$|\[|［)/);
+      if (t) { time = t[1].padStart(5, '0'); body = body.slice(t[0].length).trim(); }
+      entries.push({ date: parseDate(mark.raw), dateRaw: mark.raw, time, text: body });
     });
     return entries.filter((e) => e.text || e.date);
   }

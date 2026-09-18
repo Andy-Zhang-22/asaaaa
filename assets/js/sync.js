@@ -59,6 +59,13 @@
       out.regChange = older.regChange;
     }
     if (!out.regChange) delete out.regChange;
+    // 回撥提醒：取設定時間比較新的那份（取消提醒也算一次設定）
+    if ((older.remindSetAt || 0) > (newer.remindSetAt || 0)) {
+      out.remindAt = older.remindAt;
+      out.remindNote = older.remindNote;
+      out.remindSetAt = older.remindSetAt;
+    }
+    if (!out.remindAt) { delete out.remindAt; delete out.remindNote; }
     return out;
   }
 
@@ -134,7 +141,7 @@
     const stateDead = (st) => {
       const r = records.get(st.recordId);
       if (!r) return true;
-      const stamp = Math.max(st.updatedAt || 0, st.editsAt || 0, st.groupAt || 0, st.regAt || 0, lastLogAt.get(st.recordId) || 0);
+      const stamp = Math.max(st.updatedAt || 0, st.editsAt || 0, st.groupAt || 0, st.regAt || 0, st.remindSetAt || 0, lastLogAt.get(st.recordId) || 0);
       const sourceKilled = tombstones.sources[r.source];
       if (sourceKilled && sourceKilled > stamp) return true;
       const selfKilled = tombstones.records[st.recordId];
