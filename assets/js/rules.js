@@ -388,9 +388,13 @@
     } else if (branch.kind === 'common') {
       if (sameRegion) {
         push('ok', `登記地址在共同區（${branch.branches.join('、')}分公司共用），本分公司可承作。若對方單位已往來，申覆對象為「${branch.appealTo}」。`, '附表一');
+      } else if (dealing.kind === 'active') {
+        // 使用者的實務：共同區的客戶可以申覆承作，前提是客戶沒有跟該行銷區的單位往來
+        push('block', `登記地址在「${branch.branches.join('、')}分公司」的共同區，本分公司（${myBranch}）不在其中，而且訪談內容顯示客戶已跟中租往來，應採協銷辦理。`, '附表一');
+        suggest(`向原歸屬單位協銷（一般案件協銷 70/30、分享一年）；若該往來已結束超過 180 天，可改向 ${branch.appealTo} 申覆。`);
       } else {
-        push('block', `登記地址在「${branch.branches.join('、')}分公司」的共同區，本分公司（${myBranch}）不在其中，一律採協銷辦理。`, '附表一');
-        suggest(`協銷給 ${branch.appealTo}（附表一的被申覆單位），或依申覆變更歸屬條件申覆。`);
+        push('warn', `登記地址在「${branch.branches.join('、')}分公司」的共同區，本分公司（${myBranch}）不在其中；客戶目前沒有跟該區單位往來，可向「${branch.appealTo}」申覆後承作。申覆後 180 天內未起租會歸還原單位。`, '附表一');
+        suggest(`到「業務跨區申覆協銷作業系統」向 ${branch.appealTo} 提出申覆，取得同意後承作；申覆後 180 天內要起租。`);
       }
     } else if (branch.kind === 'branch') {
       push('ok', `登記地址在本行銷區（${branch.label}）。`, '行銷區域劃分表');
