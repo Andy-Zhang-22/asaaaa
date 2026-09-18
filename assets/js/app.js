@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-62';
+  const APP_VERSION = '20260916-63';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -1687,7 +1687,7 @@ export default {
   };
 
   /** 一批客戶逐一查商工登記，回傳差異與失敗清單；不寫入。 */
-  async function registryBatch(targets, { blanksOnly, useMirror, onProgress, isCancelled, delay = 300 }) {
+  async function registryBatch(targets, { useMirror, onProgress, isCancelled, delay = 300 }) {
     const diffs = [];
     const failures = [];
     const checked = [];   // 每一筆查成功的都在這裡，含沒差異的；變更登記的分類靠它
@@ -1706,7 +1706,7 @@ export default {
           const now = listValue(key, r);
           const next = registryValue(key, res.data);
           if (next && next !== now) all[key] = { from: now, to: next };
-          if (blanksOnly && now) return;   // 只補空白模式：本來就有值的一律不碰
+          // 查到不一致就更新，不分「只補空白」——查到了不寫入，等於白查
           if (next && next !== now) changes[key] = { from: now, to: next };
         });
         checked.push({ rec, r, changes: all });
@@ -1791,7 +1791,7 @@ export default {
     registryPref('registry-auto-last', today);   // 先記，避免同一天多個分頁重複跑
     const targets = state.records.map((rec) => ({ rec, r: view(rec) }));
     const { diffs, failures, checked } = await registryBatch(targets, {
-      blanksOnly: false, useMirror: registryPref('registry-mirror') === '1', delay: 300,
+      useMirror: registryPref('registry-mirror') === '1', delay: 300,
     });
     if (checked.length) await recordRegistryChecks(checked);
     if (!diffs.length && failures.length && failures.length >= Math.min(8, targets.length)) {
@@ -1945,31 +1945,22 @@ export default {
     host.append(result);
 
     /*
-     * 範圍分兩種，因為用途完全不同：
+     * 範圍只決定「查哪些客戶」，查到的差異一律直接更新到欄位。
      *
-     *   全部  —— 校正既有資料，四個欄位都比對，會蓋掉不一致的內容。
-     *   補地址 —— 只處理地址空白的那幾筆，而且只寫地址。
-     *
-     * 分開的理由不只是快（872 筆查完要四分半，只補地址可能只要幾十筆）：
-     * 「只填空白、絕不覆蓋」是個明確得多的承諾。想補地址的人不會希望順手把
-     * 負責人也改掉——登記上的負責人未必比業務手上的新。
+     * 以前分「只補空白」與「全部校正」，查完還要再按一次套用。使用者實際用起來
+     * 是：變更登記那邊已經看到增資、換負責人，欄位卻還是舊的——查到了不更新，
+     * 等於白查。現在查到不一致就寫入（記成「已修改」，詳細頁可還原）。
+     * 「只查有空白的」留著是因為快：872 筆要四分半，只查缺欄位的可能幾十筆。
      */
     const scope = el('select', {}, [
-      el('option', { value: 'blank', textContent: '只補空白欄位（絕不覆蓋任何既有內容）' }),
-      el('option', { value: 'all', textContent: '全部校正（會覆蓋跟登記不一致的內容）' }),
+      el('option', { value: 'blank', textContent: '只查欄位有空白的客戶（較快；查到的差異一樣會更新）' }),
+      el('option', { value: 'all', textContent: '查全部客戶（每一筆都跟登記核對）' }),
     ]);
     host.append(el('label', { className: 'rule-field' }, [
       el('span', { textContent: '範圍' }), scope,
     ]));
 
-    /*
-     * 「只補空白」涵蓋四個欄位而不只是地址。
-     *
-     * 看過原始 PDF 才知道：沒地址的那批，統編在來源就是空的，不是解析掉的。
-     * 而統編空著就只能用名稱查，名稱一字不差才找得到——所以順手把查回來的統編
-     * 也填上，下一次就能用統編精準查，路會越走越順。
-     * 承諾維持不變：只填空白，既有內容一個字都不動。
-     */
+    // 「有空白」看五個欄位（統編、資本額、負責人、登記地址、成立年）任一個空著
     const scopeTargets = () => state.records
       .map((rec) => ({ rec, r: view(rec) }))
       .filter(({ r }) => (scope.value === 'blank'
@@ -2133,9 +2124,9 @@ export default {
         return;
       }
       if (!confirm(`要查 ${all.length} 筆嗎？\n\n`
-        + (blanksOnly ? '只會填入目前空白的欄位，既有內容一個字都不會動。\n\n' : '')
-        + '會一筆一筆送出（每筆間隔 0.3 秒，避免對政府網站造成負擔），'
-        + '中途可以按停止。查完會先列出有差異的項目，確認後才寫入。')) return;
+        + '會一筆一筆送出（每筆間隔 0.3 秒，避免對政府網站造成負擔），中途可以按停止。\n\n'
+        + '查到跟登記不一致的欄位（統編、資本額、負責人、登記地址、成立年）會直接更新，'
+        + '記成「已修改」，每一筆都可以在詳細頁還原。')) return;
       cancelled = false;
       tryOne.disabled = true; runAll.disabled = true; stop.hidden = false;
       result.textContent = '';
@@ -2143,12 +2134,14 @@ export default {
       result.append(progress);
 
       const { diffs, failures, checked } = await registryBatch(all, {
-        blanksOnly, useMirror: mirror.checked,
+        useMirror: mirror.checked,
         onProgress: (i, n, r) => { progress.textContent = `查詢中 ${i} / ${n}：${r.company}`; },
         isCancelled: () => cancelled,
       });
-      // 查到的結果先記成「變更登記」分類（不管要不要套用），篩選那邊馬上看得到
-      if (checked.length) { await recordRegistryChecks(checked); await reload(); render(); scheduleSync(); }
+      // 查到的結果記成「變更登記」分類，差異直接更新到欄位；兩件事做完再重繪一次
+      if (checked.length) await recordRegistryChecks(checked);
+      if (diffs.length) await applyRegistryDiffs(diffs);
+      if (checked.length) { await reload(); render(); scheduleSync(); }
 
       stop.hidden = true; stop.textContent = '停止'; tryOne.disabled = false;
       result.textContent = '';
@@ -2158,11 +2151,11 @@ export default {
         note(failures[0].reason);
         return;
       }
-      note(`查完 ${all.length} 筆：${diffs.length} 筆${blanksOnly ? '查到可補的資料' : '有差異'}，`
+      note(`查完 ${all.length} 筆：${diffs.length} 筆跟登記不一致、已直接更新，`
         + `${failures.length} 筆查不到或失敗。`,
         'rule-verdict is-ok');
       if (!diffs.length) {
-        note(blanksOnly ? '這些客戶在商工登記上查不到可以補的資料。' : '登記資料跟名單一致，沒有要更新的。');
+        note('登記資料跟名單一致，沒有要更新的。');
         return;
       }
 
@@ -2177,20 +2170,9 @@ export default {
           [el('strong', { textContent: d.company || d.r.company }), dl]));
       });
       if (diffs.length > 20) note(`※ 另外還有 ${diffs.length - 20} 筆有差異，這裡只列前 20 筆。`);
-
-      const apply = el('button', { className: 'btn btn-primary', type: 'button',
-        textContent: blanksOnly ? `填入這 ${diffs.length} 筆` : `套用這 ${diffs.length} 筆更新` });
-      apply.onclick = async () => {
-        apply.disabled = true;
-        await applyRegistryDiffs(diffs);
-        await reload();
-        closeOverlays();
-        render();
-        toast(`已依登記資料更新 ${diffs.length} 筆`);
-        scheduleSync();
-      };
-      result.append(el('div', { className: 'card-actions' }, [apply]));
-      note('套用後會記成「已修改」，每一筆都可以在詳細頁按「還原成名單原始內容」退回。');
+      note('以上都已更新到客戶欄位並記成「已修改」，每一筆都可以在詳細頁按「還原成名單原始內容」退回。'
+        + '篩選區的「變更登記」也已依此分類。');
+      toast(`已依登記資料更新 ${diffs.length} 筆`);
     };
 
     $('#editor').hidden = false;
