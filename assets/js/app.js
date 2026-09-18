@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-74';
+  const APP_VERSION = '20260916-75';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -269,7 +269,7 @@
       outcome: window.Normalize.normalizeOutcome((mine && mine.outcome) || (lastLog && lastLog.outcome) || window.Normalize.guessOutcome(base.notesRaw || '')),
       starred: !!(mine && mine.starred),
       edited: !!edits,
-      group: (mine && mine.group) || '',
+      group: groupMap().get(record.id) || '',
     };
     // 電話與地址改過就要先重新解析，再去算衍生欄位。
     // 順序不能反過來：服務區域是從地址拆出來的縣市與行政區算的，先算就會拿到
@@ -570,18 +570,46 @@
    *   - 記通話時可以一次記到整組：每家各寫一則紀錄、各自更新狀態，這樣任何
    *     一家單獨看都是完整的。
    * ------------------------------------------------------------------ */
+  /*
+   * 每一筆的實際組別。
+   *
+   * 連結時每家都記 group（組別）與 groupIds（整組成員）。曾經發生 A 連了 B、
+   * B 那邊卻沒顯示：B 的組別欄位被別的來源蓋掉了。所以組別不只看自己那份，
+   * 別家的成員名單裡有我、而我沒有更新的「解除」紀錄，就一樣算同組——
+   * 兩邊互相備援，任何一家還留著就補得回來。
+   */
+  let groupMapKey = '';
+  let groupMapCache = new Map();
+  function groupMap() {
+    const key = String(dataVersion);
+    if (groupMapKey === key) return groupMapCache;
+    const exists = (id) => state.records.some((x) => x.id === id);
+    const map = new Map();
+    state.userStates.forEach((st, id) => { if (st.group && exists(id)) map.set(id, st.group); });
+    state.userStates.forEach((st) => {
+      if (!st.group || !Array.isArray(st.groupIds)) return;
+      st.groupIds.forEach((id) => {
+        if (map.has(id) || !exists(id)) return;
+        const own = state.userStates.get(id);
+        // 自己有比對方更新的「解除連結」紀錄，就尊重解除，不補
+        if (own && (own.groupAt || 0) > (st.groupAt || 0)) return;
+        map.set(id, st.group);
+      });
+    });
+    groupMapKey = key;
+    groupMapCache = map;
+    return map;
+  }
   function groupMembers(r) {
     if (!r.group) return [];
     const out = [];
-    state.userStates.forEach((st, id) => {
-      if (st.group === r.group && id !== r.id && state.records.some((x) => x.id === id)) out.push(id);
-    });
+    groupMap().forEach((group, id) => { if (group === r.group && id !== r.id) out.push(id); });
     return out.map((id) => view(state.records.find((x) => x.id === id)));
   }
 
   async function setGroup(ids, group) {
     const at = Date.now();
-    for (const id of ids) await saveState(id, { group: group || undefined, groupAt: at });
+    for (const id of ids) await saveState(id, { group: group || undefined, groupIds: group ? ids : undefined, groupAt: at });
   }
 
   function openGroupEditor(r) {
@@ -651,7 +679,10 @@
       scheduleSync();
     };
     unlink.onclick = async () => {
+      const rest = members.map((m) => m.id);
       await setGroup([r.id], '');
+      // 其他成員的成員名單也要更新，否則備援機制會把這家補回去
+      if (rest.length > 1) await setGroup(rest, r.group); else if (rest.length === 1) await setGroup(rest, '');
       $('#editor').hidden = true;
       toast('已解除連結');
       render();
@@ -714,9 +745,7 @@
     const key = `${dataVersion}|${todayISO()}`;
     if (viewsKey === key) return viewsCache;
     const groupCount = new Map();
-    state.userStates.forEach((st, id) => {
-      if (st.group && state.records.some((x) => x.id === id)) groupCount.set(st.group, (groupCount.get(st.group) || 0) + 1);
-    });
+    groupMap().forEach((group) => groupCount.set(group, (groupCount.get(group) || 0) + 1));
     viewsCache = state.records.map((record) => {
       const v = view(record);
       v.groupSize = v.group ? (groupCount.get(v.group) || 0) : 0;
@@ -1342,6 +1371,14 @@
     if (!raw) return;
     // 用 allViews 的版本：關係企業連動後的日期在那裡
     const r = allViews().find((x) => x.id === id) || view(raw);
+    // 組別是靠別家備援補回來的，就順手寫回自己這筆，之後不用再靠別人
+    {
+      const mine = state.userStates.get(id);
+      if (r.group && (!mine || mine.group !== r.group)) {
+        const ids = [id, ...groupMembers(r).map((m) => m.id)];
+        saveState(id, { group: r.group, groupIds: ids, groupAt: Date.now() }).then(() => scheduleSync()).catch(() => {});
+      }
+    }
     const body = $('#drawerBody');
     body.textContent = '';
 
