@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-71';
+  const APP_VERSION = '20260916-72';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -1392,8 +1392,6 @@
       body.append(el('p', { className: 'muted', textContent: `電話：${r.phoneRaw}` }));
     }
 
-    body.append(reminderSection(r));
-
     // 同一老闆的公司
     const members = groupMembers(r);
     {
@@ -1552,6 +1550,9 @@
     }
     section.append(form);
     body.append(section);
+
+    // 回撥提醒放在記通話的下面、往來情形的上面：掛了電話先記錄、再設提醒
+    body.append(reminderSection(r));
 
     // 往來情形：先講二分法的結論，再列往來對象當佐證
     {
