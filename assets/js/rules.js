@@ -440,7 +440,7 @@
     if (balance) fact('既有本餘', `${fmt(balance)} 仟元`, input.balanceSource || '');
 
     // ---- 三、客戶規模與收益率（沿用承作單位判定） ----
-    if (capital) fact('資本額', `${fmt(capital)} 仟元${capital < MICRO_CAPITAL_LIMIT ? '（微企範疇）' : capital >= LARGE_CAPITAL_LIMIT ? '（大企部範疇）' : '（一般組範疇）'}`, '名單');
+    if (capital) fact('資本額', `${fmt(capital)} 仟元`, '名單');
     if (capital >= LARGE_CAPITAL_LIMIT && myUnit !== '大企部') {
       push('warn', `資本額 ${fmt(capital)} 仟元達 ${fmt(LARGE_CAPITAL_LIMIT)} 仟元，屬大企部範疇；送件前請確認客戶是否已歸屬大企部，若是則須協銷。`, '客戶規模');
     }
@@ -454,12 +454,10 @@
       handoverType: input.handoverType || '',
     }).forEach((n) => {
       if (/沒有觸發特別的/.test(n.text)) return;
-      // 規模判定要看是誰要做：一般組做非微企範疇的客戶是常態，不用提醒；
-      // 微企處做超過範疇的客戶才是衝突；一般組做微企範疇的客戶要注意收益率控管
-      let level = n.level;
-      if (/不屬微企處客戶範疇/.test(n.text)) level = myUnit === '微企處' ? 'block' : 'ok';
-      if (/屬【微型企業營業處】客戶範疇/.test(n.text)) level = myUnit === '一般組' ? 'warn' : 'ok';
-      push(level, n.text, '承作單位判定');
+      // 資本額屬不屬微企範疇這條使用者說跟他們的規則無關，承作檢核不列；
+      // 該不該由微企處做，看的是上面「微企處舊戶」與往來金額那幾條
+      if (/微企處客戶範疇|微型企業營業處】客戶範疇/.test(n.text)) return;
+      push(n.level, n.text, '承作單位判定');
       if (n.level === 'block' && /Spread/.test(n.text)) {
         suggest(`把本案 Spread 拉高到 ${MICRO_MIN_SPREAD}% 以上（不含 ${MICRO_MIN_SPREAD}%），或協銷予微企處承作。也可以把單戶累計往來拉到 ${fmt(MICRO_CREDIT_LIMIT)} 仟元以上（例如合併其他需求一起承作），就不受這條限制。`);
       }
