@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-68';
+  const APP_VERSION = '20260916-69';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -589,8 +589,38 @@
         v.phoneRaw, v.address, v.addressActual, v.notesRaw, v.source].join(' ').toLowerCase();
       return v;
     });
+    linkGroupDates(viewsCache);
     viewsKey = key;
     return viewsCache;
+  }
+
+  /*
+   * 關係企業（手動連結的同老闆公司）的下次聯絡日、最近聯絡日連動。
+   *
+   * 打給老闆談的是整組，但通話可能只記在其中一家。整組以「最近聯絡日最晚的那家」
+   * 為準：它的最近聯絡日與下次聯絡日套到每一家；它沒填下次聯絡日就取整組最晚的。
+   * 只影響顯示、篩選與排序，不改任何一家存起來的資料。
+   */
+  function linkGroupDates(views) {
+    const byGroup = new Map();
+    views.forEach((v) => {
+      if (!v.group) return;
+      if (!byGroup.has(v.group)) byGroup.set(v.group, []);
+      byGroup.get(v.group).push(v);
+    });
+    byGroup.forEach((members) => {
+      if (members.length < 2) return;
+      const lead = members.reduce((a, b) => ((b.lastDate || '') > (a.lastDate || '') ? b : a));
+      const lastDate = lead.lastDate || null;
+      const nextDate = lead.nextDate || members.map((m) => m.nextDate).filter(Boolean).sort().pop() || null;
+      members.forEach((m) => {
+        if ((m.lastDate || null) === lastDate && (m.nextDate || null) === nextDate) return;
+        m.groupDatesFrom = lead.company;
+        m.lastDate = lastDate;
+        m.nextDate = nextDate;
+        m.bucket = dueBucket(nextDate);
+      });
+    });
   }
 
   /*
@@ -1170,7 +1200,8 @@
   function openDetail(id) {
     const raw = state.records.find((r) => r.id === id);
     if (!raw) return;
-    const r = view(raw);
+    // 用 allViews 的版本：關係企業連動後的日期在那裡
+    const r = allViews().find((x) => x.id === id) || view(raw);
     const body = $('#drawerBody');
     body.textContent = '';
 
@@ -1241,8 +1272,8 @@
       ['統一編號', r.taxId], ['負責人', r.owner], ['KEYMAN', r.keyman],
       ['產業別', r.industry], ['成立年', r.founded],
       ['資本額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
-      ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) : ''],
-      ['最近聯絡', r.lastDate ? dateLabel(r.lastDate) : ''],
+      ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) + (r.groupDatesFrom ? `　（關係企業連動，以 ${r.groupDatesFrom} 為準）` : '') : ''],
+      ['最近聯絡', r.lastDate ? dateLabel(r.lastDate) + (r.groupDatesFrom ? `　（關係企業連動，以 ${r.groupDatesFrom} 為準）` : '') : ''],
       ['名單新增', r.addedDate ? dateLabel(r.addedDate) : ''],
     ];
     rows.forEach(([k, v]) => {
