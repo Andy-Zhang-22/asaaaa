@@ -7,7 +7,7 @@
 <meta name="description" content="把電話推廣名單 PDF 轉成可搜尋、可撥號、可追蹤的工作台。資料只存在本機瀏覽器。">
 <meta name="theme-color" content="#0f172a">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>">
-<link rel="stylesheet" href="assets/css/app.css?v=20260916-66">
+<link rel="stylesheet" href="assets/css/app.css?v=20260916-67">
 </head>
 <body data-theme="auto">
 
@@ -63,61 +63,61 @@
       <h2>篩選</h2>
       <button id="btnResetFilters" class="btn btn-tiny">清除</button>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="due">
       <label>聯絡時程（下次聯絡日）</label>
       <div class="chips" id="fltDue"></div>
       <div class="due-range" id="fltDueRange"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="added">
       <label>名單新增</label>
       <div class="chips" id="fltAdded"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="outcome">
       <label>洽談狀態</label>
       <div class="chips" id="fltOutcome"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="city">
       <label>縣市</label>
       <div class="chips" id="fltCity"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="scale">
       <label>客戶規模（依資本額）</label>
       <div class="chips" id="fltScale"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="territory">
       <label>服務區域</label>
       <div class="chips" id="fltTerritory"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="relation">
       <label>往來情形</label>
       <div class="chips" id="fltRelation"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="visit">
       <label>拜訪</label>
       <div class="chips" id="fltVisit"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="tax">
       <label>統編</label>
       <div class="chips" id="fltTax"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="regchange">
       <label>變更登記</label>
       <div class="chips" id="fltRegChange"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="branch">
       <label>歸屬分公司（依登記地址）</label>
-      <div class="chips" id="fltBranch"></div>
+      <select id="fltBranch"></select>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="industry">
       <label>產業別</label>
       <input id="fltIndustry" type="search" list="industryList" placeholder="輸入產業關鍵字">
       <datalist id="industryList"></datalist>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="source">
       <label>名單來源</label>
       <div class="chips" id="fltSource"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="sort">
       <label>排序</label>
       <select id="sortBy">
         <option value="next">依下次聯絡日</option>
@@ -250,16 +250,16 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="assets/vendor/pdfjs/pdf.min.js?v=20260916-66"></script>
-<script src="assets/vendor/xlsx/xlsx.min.js?v=20260916-66"></script>
+<script src="assets/vendor/pdfjs/pdf.min.js?v=20260916-67"></script>
+<script src="assets/vendor/xlsx/xlsx.min.js?v=20260916-67"></script>
 <script src="assets/vendor/tesseract/tesseract.min.js"></script>
-<script src="assets/js/pdf-table.js?v=20260916-66"></script>
-<script src="assets/js/normalize.js?v=20260916-66"></script>
-<script src="assets/js/registry.js?v=20260916-66"></script>
-<script src="assets/js/ocr.js?v=20260916-66"></script>
-<script src="assets/js/rules.js?v=20260916-66"></script>
-<script src="assets/js/store.js?v=20260916-66"></script>
-<script src="assets/js/sync.js?v=20260916-66"></script>
-<script src="assets/js/app.js?v=20260916-66"></script>
+<script src="assets/js/pdf-table.js?v=20260916-67"></script>
+<script src="assets/js/normalize.js?v=20260916-67"></script>
+<script src="assets/js/registry.js?v=20260916-67"></script>
+<script src="assets/js/ocr.js?v=20260916-67"></script>
+<script src="assets/js/rules.js?v=20260916-67"></script>
+<script src="assets/js/store.js?v=20260916-67"></script>
+<script src="assets/js/sync.js?v=20260916-67"></script>
+<script src="assets/js/app.js?v=20260916-67"></script>
 </body>
 </html>

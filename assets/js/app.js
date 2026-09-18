@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-66';
+  const APP_VERSION = '20260916-67';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
@@ -743,6 +743,50 @@
         : state.filters[filter].has(value);
       chip.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+    const sel = $('#fltBranch');
+    if (sel) sel.value = [...state.filters.branch][0] || '';
+    updateFilterCounts();
+  }
+
+  /*
+   * 篩選區每一組可收合。手機上一開始只展開聯絡時程、洽談狀態、歸屬分公司、排序，
+   * 其他收起來只留標題與「已選幾個」；電腦版側欄有自己的捲軸，預設全部展開。
+   * 使用者收合過的記在這台裝置上。
+   */
+  const GROUPS_KEY = 'filter-groups-open';
+  const MOBILE_DEFAULT_OPEN = new Set(['due', 'outcome', 'branch', 'sort']);
+  function initFilterGroups() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(GROUPS_KEY) || '{}') || {}; } catch (e) { saved = {}; }
+    const mobile = window.matchMedia('(max-width: 900px)').matches;
+    document.querySelectorAll('#filters .filter-group[data-group]').forEach((g) => {
+      const key = g.dataset.group;
+      const open = saved[key] !== undefined ? !!saved[key] : (mobile ? MOBILE_DEFAULT_OPEN.has(key) : true);
+      g.classList.toggle('is-closed', !open);
+      const label = g.querySelector(':scope > label');
+      if (!label) return;
+      label.onclick = () => {
+        const closed = g.classList.toggle('is-closed');
+        saved[key] = !closed;
+        try { localStorage.setItem(GROUPS_KEY, JSON.stringify(saved)); } catch (e) { /* 無痕模式 */ }
+      };
+    });
+  }
+  /** 每一組標題後面標「已選幾個」，收起來也看得到有沒有篩選在作用。 */
+  function updateFilterCounts() {
+    document.querySelectorAll('#filters .filter-group[data-group]').forEach((g) => {
+      let n = g.querySelectorAll('.chip[aria-pressed="true"]').length;
+      const key = g.dataset.group;
+      if (key === 'due') n = (state.filters.due || state.filters.dueFrom || state.filters.dueTo || state.filters.dueNone) ? 1 : 0;
+      if (key === 'industry') n = state.filters.industry ? 1 : 0;
+      if (key === 'branch') n = state.filters.branch.size;
+      if (key === 'sort') n = 0;
+      const label = g.querySelector(':scope > label');
+      let pill = label && label.querySelector('.filter-count');
+      if (!n) { if (pill) pill.remove(); return; }
+      if (!pill) { pill = el('span', { className: 'filter-count' }); label.append(pill); }
+      pill.textContent = String(n);
+    });
   }
 
   function renderFilters() {
@@ -832,8 +876,19 @@
     all.forEach((r) => { r.regKinds.forEach((k) => regCounts.set(k, (regCounts.get(k) || 0) + 1)); });
     chips($('#fltRegChange'), 'regChange', REG_KIND_ORDER.map((k) => [k, regCounts.get(k)]), state.filters.regChange, (v) => REG_KIND_LABEL[v]);
 
-    // 歸屬分公司：依筆數排，自己分公司的通常最多、排最前面
-    chips($('#fltBranch'), 'branch', tally((r) => r.branchKey), state.filters.branch);
+    // 歸屬分公司：下拉選單，依筆數排，自己分公司的通常最多、排最前面
+    {
+      const sel = $('#fltBranch');
+      sel.textContent = '';
+      sel.append(el('option', { value: '', textContent: '全部' }));
+      tally((r) => r.branchKey).forEach(([key, n]) => sel.append(el('option', { value: key, textContent: `${key}（${n}）` })));
+      sel.onchange = () => {
+        state.filters.branch.clear();
+        if (sel.value) state.filters.branch.add(sel.value);
+        state.limit = PAGE_SIZE;
+        render();
+      };
+    }
 
     // 順序固定成由新到舊，不依筆數排——「今天新增」永遠在第一個位置才好按
     const addedCounts = new Map(ADDED_ORDER.map((k) => [k, 0]));
@@ -3024,6 +3079,7 @@ export default {
       render();
     };
 
+    initFilterGroups();
     $('#btnFilters').onclick = () => {
       const open = $('#filters').classList.toggle('is-open');
       $('#btnFilters').setAttribute('aria-expanded', String(open));
