@@ -50,9 +50,10 @@
     // 同老闆的公司連結也一樣：解除（把 group 清掉）也算一次改動
     if ((older.groupAt || 0) > (newer.groupAt || 0)) {
       out.group = older.group;
+      out.groupIds = older.groupIds;
       out.groupAt = older.groupAt;
     }
-    if (!out.group) delete out.group;
+    if (!out.group) { delete out.group; delete out.groupIds; }
     // 商工登記查核結果（regAt / regChange）也一樣：取查核時間比較新的那份
     if ((older.regAt || 0) > (newer.regAt || 0)) {
       out.regAt = older.regAt;
