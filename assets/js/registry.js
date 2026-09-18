@@ -356,6 +356,8 @@
       err.body = describe();
       throw err;
     }
+    // 政府這支 API 查無資料時回的是空白（Content-Type 仍是 JSON），那是「有收到、查無資料」
+    if (!text.trim()) return [];
     try {
       return unwrap(JSON.parse(text));
     } catch (e) {

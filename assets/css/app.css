@@ -418,6 +418,9 @@ button, input, select { font: inherit; color: inherit; }
 .remind-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; margin-bottom: 6px; }
 .remind-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px; padding: 6px 0; border-top: 1px dashed var(--border); font-size: 13.5px; }
 .remind-row.is-due b { color: var(--danger); }
+.remind-row.is-today b { color: var(--primary); }
+.remind-sub { margin-top: 8px; }
+.remind-hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
 .remind-open { background: none; border: 0; padding: 0; color: var(--text); cursor: pointer; text-align: left; font: inherit; }
 .remind-open b { font-variant-numeric: tabular-nums; }
 .badge-remind { border-color: var(--warn); color: var(--warn); }

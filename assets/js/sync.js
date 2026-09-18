@@ -58,6 +58,7 @@
     if ((older.regAt || 0) > (newer.regAt || 0)) {
       out.regAt = older.regAt;
       out.regChange = older.regChange;
+      out.regError = older.regError;
     }
     if (!out.regChange) delete out.regChange;
     // 回撥提醒：取設定時間比較新的那份（取消提醒也算一次設定）

@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-83';
+  const APP_VERSION = '20260916-85';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -125,11 +125,39 @@
   function reminders() {
     return allViews().filter((r) => r.remindAt).sort((a, b) => a.remindAt - b.remindAt);
   }
+  /*
+   * 下次聯絡日也算提醒：訪談紀錄填了下次聯絡日，就不用再另外設時間，
+   * 當天打開網站就列在提醒列、跳一次提示與通知（一天一次）。
+   */
+  const DUE_NOTIFIED_KEY = 'due-notified';
+  function dueToday() {
+    const today = todayISO();
+    return allViews().filter((r) => r.nextDate === today && !r.blocked)
+      .sort((a, b) => a.company.localeCompare(b.company, 'zh-Hant'));
+  }
+  function checkDueToday() {
+    const today = todayISO();
+    let seen = '';
+    try { seen = localStorage.getItem(DUE_NOTIFIED_KEY) || ''; } catch (e) { /* 無痕模式 */ }
+    if (seen === today) return;
+    const list = dueToday();
+    if (!list.length) return;
+    try { localStorage.setItem(DUE_NOTIFIED_KEY, today); } catch (e) { /* 無痕模式 */ }
+    const names = list.slice(0, 3).map((r) => r.company).join('、') + (list.length > 3 ? ` 等 ${list.length} 家` : '');
+    toast(`📅 今天要聯絡：${names}`);
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        const n = new Notification(`今天要聯絡 ${list.length} 家`, { body: names, tag: 'due-today' });
+        n.onclick = () => { window.focus(); applyDueQuick('today'); state.limit = PAGE_SIZE; render(); };
+      } catch (e) { /* 有些瀏覽器不給在網頁直接 new Notification */ }
+    }
+  }
   function notifiedSet() {
     try { return new Set(JSON.parse(localStorage.getItem(NOTIFIED_KEY) || '[]')); } catch (e) { return new Set(); }
   }
   function checkReminders() {
     const now = Date.now();
+    checkDueToday();
     const due = reminders().filter((r) => r.remindAt <= now);
     if (!due.length) return;
     const seen = notifiedSet();
@@ -154,14 +182,15 @@
     const bar = $('#remindBar');
     if (!bar) return;
     const list = reminders();
-    bar.hidden = !list.length;
+    const todayList = dueToday();
+    bar.hidden = !list.length && !todayList.length;
     bar.textContent = '';
-    if (!list.length) return;
+    if (bar.hidden) return;
     const now = Date.now();
     const dueCount = list.filter((r) => r.remindAt <= now).length;
     bar.classList.toggle('is-due', dueCount > 0);
     const head = el('div', { className: 'remind-head' }, [
-      el('strong', { textContent: dueCount ? `⏰ 該回撥了（${dueCount}）` : `⏰ 回撥提醒（${list.length}）` }),
+      el('strong', { textContent: dueCount ? `⏰ 該回撥了（${dueCount}）` : list.length ? `⏰ 回撥提醒（${list.length}）` : `📅 今天要聯絡（${todayList.length}）` }),
     ]);
     if ('Notification' in window && Notification.permission === 'default') {
       const btn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '開啟瀏覽器通知' });
@@ -186,6 +215,31 @@
       row.append(open, el('div', { className: 'card-actions' }, [done, later]));
       bar.append(row);
     });
+    // 下次聯絡日是今天的：列出來，多的話給一顆「只看今天」
+    if (todayList.length) {
+      const LIMIT = 12;
+      const sub = el('div', { className: 'remind-head remind-sub' }, [
+        el('strong', { textContent: `📅 今天要聯絡（${todayList.length}）` }),
+      ]);
+      const onlyToday = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '只看今天到期' });
+      onlyToday.onclick = () => { applyDueQuick('today'); state.limit = PAGE_SIZE; render(); };
+      sub.append(onlyToday, el('span', { className: 'muted', textContent: '訪談紀錄填了下次聯絡日的，當天自動列在這裡。' }));
+      if (list.length) bar.append(el('hr', { className: 'remind-hr' }));
+      bar.append(sub);
+      todayList.slice(0, LIMIT).forEach((r) => {
+        const row = el('div', { className: 'remind-row is-today' });
+        const open = el('button', { className: 'remind-open', type: 'button' }, [
+          el('b', { textContent: '今天' }),
+          el('span', { textContent: ` ${r.company}` }),
+          r.keyman ? el('span', { className: 'muted', textContent: `　${r.keyman}` }) : null,
+          r.phones && r.phones[0] ? el('span', { className: 'muted', textContent: `　📞 ${r.phones[0].display || r.phones[0].digits}` }) : null,
+        ].filter(Boolean));
+        open.onclick = () => openDetail(r.id);
+        row.append(open);
+        bar.append(row);
+      });
+      if (todayList.length > LIMIT) bar.append(el('p', { className: 'muted', textContent: `…還有 ${todayList.length - LIMIT} 家，按「只看今天到期」看全部。` }));
+    }
   }
   /** 詳細頁的「回撥提醒」區塊 */
   function reminderSection(r) {
@@ -330,6 +384,7 @@
     // 變更登記：最近一次查到異動的種類；查過但從沒異動＝無變更；沒查過＝未查核
     out.regChange = (mine && mine.regChange) || null;
     out.regAt = (mine && mine.regAt) || 0;
+    out.regError = (mine && mine.regError) || '';
     // 歸屬分公司：依規範用「公司登記地址」對劃分表；卡片標示與篩選都用這個
     {
       const reg = window.Normalize.parseAddress(out.addressRegistered);
@@ -344,7 +399,7 @@
     out.remindNote = (mine && mine.remindNote) || '';
     out.regKinds = out.regChange && out.regChange.kinds && out.regChange.kinds.length
       ? out.regChange.kinds
-      : (out.regAt ? ['none'] : ['unchecked']);
+      : (out.regAt && !out.regError ? ['none'] : ['unchecked']);
     /*
      * 禁止推廣獨立於 outcome。
      *
@@ -917,7 +972,6 @@
     outcome: (r) => (r.blocked ? 'blocked' : r.outcome),
     city: (r) => r.city || '其他',
     scale: (r) => r.scale || '未填資本額',
-    territory: (r) => r.territory || '看不出縣市',
     relation: (r) => r.dealingKind,
     visit: (r) => r.visitKind,
     taxKind: (r) => r.taxKind,
@@ -1130,7 +1184,6 @@
     const scaleCounts = new Map(SCALE_ORDER.map((k) => [k, 0]));
     all.forEach((r) => { const k = r.scale || '未填資本額'; scaleCounts.set(k, (scaleCounts.get(k) || 0) + 1); });
     chips($('#fltScale'), 'scale', SCALE_ORDER.map((k) => [k, scaleCounts.get(k)]), state.filters.scale);
-    chips($('#fltTerritory'), 'territory', tally((r) => r.territory || '看不出縣市'), state.filters.territory);
 
     // 二分法，順序固定成「有往來 → 沒往來」，不跟著筆數浮動
     const dealCounts = [['active', 0], ['none', 0]];
@@ -1592,7 +1645,15 @@
           dd.append(el('div', { className: 'muted', textContent: `${label}：${ch.from || '（空）'} → ${ch.to}` }));
         });
       } else {
-        dd.append(document.createTextNode(r.regAt ? '無變更' : '未查核'));
+        if (r.regError) {
+          dd.append(document.createTextNode('未查核：查不到'));
+          dd.append(el('div', { className: 'muted', textContent: `商工登記查不到這家（${r.regError}）。統編或公司名稱跟登記不一樣就會查不到，改對之後明天自動更新會再查，或用選單「從商工登記更新公司資料」馬上查。` }));
+        } else if (r.regAt) {
+          dd.append(document.createTextNode('無變更'));
+        } else {
+          dd.append(document.createTextNode('未查核'));
+          dd.append(el('div', { className: 'muted', textContent: '還沒查過商工登記：每天第一次打開網站會自動查一次，之後新增的客戶要等明天，或用選單「從商工登記更新公司資料」馬上查。' }));
+        }
       }
       if (r.regAt) dd.append(el('div', { className: 'muted', textContent: `最近查核 ${dateLabel(new Date(r.regAt).toISOString().slice(0, 10))}` }));
       dl.append(dd);
@@ -2152,6 +2213,7 @@
       openDetail(id);
       toast('已新增客戶');
       scheduleSync();
+      checkNewRecords([id]);
     };
     host.append(el('div', { className: 'card-actions' }, [save]));
     $('#editor').hidden = false;
@@ -2274,7 +2336,7 @@ export default {
       const opts = { useMirror };
       // 統編查不齊（資料集只回一半）會自動再用名稱補，所以統編、名稱一起給
       const res = await window.Registry.lookupCompany({ taxId: r.taxId, name: r.company }, opts);
-      if (!res.ok) { failures.push({ company: r.company, reason: res.reason }); }
+      if (!res.ok) { failures.push({ rec, company: r.company, reason: res.reason }); }
       else {
         const changes = {};
         const all = {};
@@ -2320,12 +2382,17 @@ export default {
    * （日期、種類、欄位前後值），沒異動的保留上一次的 regChange，篩選才看得到
    * 「這家今年增資過」，不會隔天套用完就變回無變更。
    */
-  async function recordRegistryChecks(checked) {
+  async function recordRegistryChecks(checked, failures) {
     const now = Date.now();
     const date = todayISO();
+    // 查不到的也記下來（時間與原因），詳細頁才分得出「還沒查」和「查了查不到」
+    for (const f of failures || []) {
+      if (!f.rec) continue;
+      await saveState(f.rec.id, { regAt: now, regError: String(f.reason || '查不到').split('\n')[0].slice(0, 120) });
+    }
     for (const c of checked) {
       const kinds = classifyRegistryChanges(c.changes);
-      const patch = { regAt: now };
+      const patch = { regAt: now, regError: undefined };
       if (kinds.length) {
         const kept = {};
         Object.entries(c.changes).forEach(([key, ch]) => { if (String(ch.from || '').trim()) kept[key] = ch; });
@@ -2333,6 +2400,36 @@ export default {
       }
       await saveState(c.rec.id, patch);
     }
+  }
+
+  /*
+   * 新增客戶後立刻查核。
+   *
+   * 每天自動查核只在當天第一次打開網站時跑一次，之後手動新增、貼上、104 加入的
+   * 客戶會一直掛著「未查核」到隔天。有開自動更新的話，新增完就在背景查這幾筆。
+   */
+  /** 失敗原因是「查無資料」這類（有回應但沒這家），而不是連不上。 */
+  const lookedUpButMissing = (reason) => /查無資料|沒有一筆的統編是|只回了部分欄位|不是 8 碼/.test(String(reason || ''));
+
+  async function checkNewRecords(ids) {
+    if (registryPref('registry-auto') !== '1' || !ids.length) return;
+    const targets = state.records.filter((r) => ids.includes(r.id)).map((rec) => ({ rec, r: view(rec) }));
+    if (!targets.length) return;
+    try {
+      const { diffs, failures, checked } = await registryBatch(targets, { useMirror: registryPref('registry-mirror') === '1', delay: 300 });
+      if (!checked.length && failures.length === targets.length && !failures.some((f) => lookedUpButMissing(f.reason))) {
+        // 來源掛了（連一個「查無資料」都沒有，全是連不上）就不記成查不到，明天自動更新再試
+        toast('商工登記查不到，明天自動更新會再試（細節在選單「從商工登記更新公司資料」）');
+        return;
+      }
+      await recordRegistryChecks(checked, failures);
+      if (diffs.length) await applyRegistryDiffs(diffs);
+      await reload();
+      render();
+      if ($('#drawer') && !$('#drawer').hidden && ids.length === 1) openDetail(ids[0]);
+      scheduleSync();
+      toast(diffs.length ? `已依商工登記更新 ${diffs.length} 筆新客戶的資料` : `新客戶已查核商工登記${failures.length ? `（${failures.length} 筆查不到）` : ''}`);
+    } catch (err) { console.error('新客戶查核失敗', err); }
   }
 
   /** 把差異寫成「編輯」：看得出是後來動過的，同步到其他裝置，詳細頁可還原。 */
@@ -2369,14 +2466,16 @@ export default {
     const { diffs, failures, checked } = await registryBatch(targets, {
       useMirror: registryPref('registry-mirror') === '1', delay: 300,
     });
-    if (checked.length) await recordRegistryChecks(checked);
-    if (!diffs.length && failures.length && failures.length >= Math.min(8, targets.length)) {
+    if (!checked.length && failures.length && failures.length >= Math.min(8, targets.length)
+      && !failures.some((f) => lookedUpButMissing(f.reason))) {
       registryPref('registry-auto-summary', `全部失敗（${failures[0].reason.split('\n')[0]}）`);
       toast('商工登記自動更新失敗：來源連不上，明天再試。細節在選單「從商工登記更新公司資料」。');
       return;
     }
+    // 查不到的也記下來，詳細頁才分得出「還沒查」和「查了查不到」
+    if (checked.length || failures.length) await recordRegistryChecks(checked, failures);
     if (diffs.length) await applyRegistryDiffs(diffs);
-    if (checked.length) { await reload(); render(); scheduleSync(); }
+    if (checked.length || failures.length) { await reload(); render(); scheduleSync(); }
     registryPref('registry-auto-summary', `查 ${targets.length} 筆，更新 ${diffs.length} 筆，${failures.length} 筆查不到`);
     toast(diffs.length ? `商工登記自動更新：已更新 ${diffs.length} 筆` : '商工登記自動更新：資料都是最新的');
   }
@@ -2714,10 +2813,12 @@ export default {
         onProgress: (i, n, r) => { progress.textContent = `查詢中 ${i} / ${n}：${r.company}`; },
         isCancelled: () => cancelled,
       });
-      // 查到的結果記成「變更登記」分類，差異直接更新到欄位；兩件事做完再重繪一次
-      if (checked.length) await recordRegistryChecks(checked);
+      // 查到的結果記成「變更登記」分類，差異直接更新到欄位；兩件事做完再重繪一次。
+      // 全部都失敗是來源掛了，不把每一家都記成「查不到」
+      const sourceDown = !checked.length && failures.length === all.length && all.length && !failures.some((f) => lookedUpButMissing(f.reason));
+      if (!sourceDown && (checked.length || failures.length)) await recordRegistryChecks(checked, failures);
       if (diffs.length) await applyRegistryDiffs(diffs);
-      if (checked.length) { await reload(); render(); scheduleSync(); }
+      if (!sourceDown && (checked.length || failures.length)) { await reload(); render(); scheduleSync(); }
 
       stop.hidden = true; stop.textContent = '停止'; tryOne.disabled = false;
       result.textContent = '';
@@ -2842,6 +2943,7 @@ export default {
       if (parsed.records.length === 1) openDetail(parsed.records[0].id);
       toast(`已新增 ${added} 筆${parsed.records.length - added ? `、更新 ${parsed.records.length - added} 筆` : ''}`);
       scheduleSync();
+      checkNewRecords(parsed.records.map((r) => r.id));
     };
 
     box.oninput = run;
@@ -3207,6 +3309,7 @@ export default {
       toast(`已加入 ${toSave.length} 家公司`);
       if (toSave.length === 1) openDetail(toSave[0].id);
       scheduleSync();
+      checkNewRecords(toSave.map((r) => r.id));
     };
 
     host.append(el('div', { className: 'card-actions' }, [lookupAll, add, cancel]), progress, list);
