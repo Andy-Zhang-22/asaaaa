@@ -129,7 +129,19 @@ button, input, select { font: inherit; color: inherit; }
 .filter-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .filter-head h2 { font-size: 14px; }
 .filter-group { margin-bottom: 14px; }
+/* 每一組可收合：標題列點一下展開／收起，收起時只留標題與已選數量，篩選區才不會一長串 */
 .filter-group > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+#filters .filter-group[data-group] > label {
+  display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+}
+#filters .filter-group[data-group] > label::before { content: '▾'; font-size: 10px; opacity: .7; }
+#filters .filter-group.is-closed > label::before { content: '▸'; }
+#filters .filter-group.is-closed > label { margin-bottom: 0; }
+#filters .filter-group.is-closed > :not(label) { display: none; }
+.filter-count {
+  margin-left: auto; font-size: 11px; background: var(--primary); color: var(--primary-ink);
+  border-radius: 999px; padding: 0 7px; line-height: 16px;
+}
 .filter-group input, .filter-group select {
   width: 100%; padding: 7px 10px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--surface-2);
