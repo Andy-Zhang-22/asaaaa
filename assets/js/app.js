@@ -1346,7 +1346,7 @@
     outcomeSel.value = r.outcome === 'new' ? 'noanswer' : r.outcome;
     const nextInput = el('input', { type: 'date', value: r.nextDate || '' });
     const quick = el('div', { className: 'card-actions' });
-    [['明天', 1], ['3 天後', 3], ['一週後', 7], ['兩週後', 14], ['一個月後', 30], ['三個月後', 90]].forEach(([label, days]) => {
+    [['今天', 0], ['明天', 1], ['3 天後', 3], ['一週後', 7], ['兩週後', 14], ['一個月後', 30], ['三個月後', 90]].forEach(([label, days]) => {
       const b = el('button', { className: 'btn btn-tiny', type: 'button', textContent: label });
       b.onclick = () => {
         nextInput.value = addDays(todayISO(), days);

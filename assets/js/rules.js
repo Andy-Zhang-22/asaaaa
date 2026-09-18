@@ -446,14 +446,20 @@
     }
     routeCustomer({
       capital, exposure, spread: input.spread === '' || input.spread === undefined ? '' : Number(input.spread),
-      currentUnit: currentUnit === '新戶' ? myUnit : currentUnit,
+      // 這裡的 currentUnit 是「誰要承作」：微企舊戶的移交規則上面第二段已經處理過
+      currentUnit: myUnit,
       sameRegion: true,   // 行銷區上面已經講過，這裡不重複
       ownerElsewhere: false,
       counterpartOldCustomer,
       handoverType: input.handoverType || '',
     }).forEach((n) => {
       if (/沒有觸發特別的/.test(n.text)) return;
-      push(n.level, n.text, '承作單位判定');
+      // 規模判定要看是誰要做：一般組做非微企範疇的客戶是常態，不用提醒；
+      // 微企處做超過範疇的客戶才是衝突；一般組做微企範疇的客戶要注意收益率控管
+      let level = n.level;
+      if (/不屬微企處客戶範疇/.test(n.text)) level = myUnit === '微企處' ? 'block' : 'ok';
+      if (/屬【微型企業營業處】客戶範疇/.test(n.text)) level = myUnit === '一般組' ? 'warn' : 'ok';
+      push(level, n.text, '承作單位判定');
       if (n.level === 'block' && /Spread/.test(n.text)) {
         suggest(`把本案 Spread 拉高到 ${MICRO_MIN_SPREAD}% 以上（不含 ${MICRO_MIN_SPREAD}%），或協銷予微企處承作。也可以把單戶累計往來拉到 ${fmt(MICRO_CREDIT_LIMIT)} 仟元以上（例如合併其他需求一起承作），就不受這條限制。`);
       }
@@ -497,6 +503,9 @@
         if (!principal.failed.length && !(input.schedule || []).length && IRREGULAR_METHODS.includes(input.method)) {
           push('warn', '還沒填還款計畫，無法逐點檢核；請把每期償還本金填進去。', '案件償還本金管理辦法');
         }
+      }
+      if (!principal.control.controlled && IRREGULAR_METHODS.includes(input.method)) {
+        push('ok', `不受「案件償還本金管理辦法」第四條管制：${principal.control.reason}`, '案件償還本金管理辦法');
       }
       principal.notes.forEach((t) => push('warn', t, '案件償還本金管理辦法'));
       if (input.months > CONTROL_LIMIT_MONTHS && principal.control.controlled) suggest('承作期間超過五年：先取得審查處主管同意再送件，或把期數縮到 60 期以內。');
