@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-84';
+  const APP_VERSION = '20260916-85';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -125,11 +125,39 @@
   function reminders() {
     return allViews().filter((r) => r.remindAt).sort((a, b) => a.remindAt - b.remindAt);
   }
+  /*
+   * 下次聯絡日也算提醒：訪談紀錄填了下次聯絡日，就不用再另外設時間，
+   * 當天打開網站就列在提醒列、跳一次提示與通知（一天一次）。
+   */
+  const DUE_NOTIFIED_KEY = 'due-notified';
+  function dueToday() {
+    const today = todayISO();
+    return allViews().filter((r) => r.nextDate === today && !r.blocked)
+      .sort((a, b) => a.company.localeCompare(b.company, 'zh-Hant'));
+  }
+  function checkDueToday() {
+    const today = todayISO();
+    let seen = '';
+    try { seen = localStorage.getItem(DUE_NOTIFIED_KEY) || ''; } catch (e) { /* 無痕模式 */ }
+    if (seen === today) return;
+    const list = dueToday();
+    if (!list.length) return;
+    try { localStorage.setItem(DUE_NOTIFIED_KEY, today); } catch (e) { /* 無痕模式 */ }
+    const names = list.slice(0, 3).map((r) => r.company).join('、') + (list.length > 3 ? ` 等 ${list.length} 家` : '');
+    toast(`📅 今天要聯絡：${names}`);
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        const n = new Notification(`今天要聯絡 ${list.length} 家`, { body: names, tag: 'due-today' });
+        n.onclick = () => { window.focus(); applyDueQuick('today'); state.limit = PAGE_SIZE; render(); };
+      } catch (e) { /* 有些瀏覽器不給在網頁直接 new Notification */ }
+    }
+  }
   function notifiedSet() {
     try { return new Set(JSON.parse(localStorage.getItem(NOTIFIED_KEY) || '[]')); } catch (e) { return new Set(); }
   }
   function checkReminders() {
     const now = Date.now();
+    checkDueToday();
     const due = reminders().filter((r) => r.remindAt <= now);
     if (!due.length) return;
     const seen = notifiedSet();
@@ -154,14 +182,15 @@
     const bar = $('#remindBar');
     if (!bar) return;
     const list = reminders();
-    bar.hidden = !list.length;
+    const todayList = dueToday();
+    bar.hidden = !list.length && !todayList.length;
     bar.textContent = '';
-    if (!list.length) return;
+    if (bar.hidden) return;
     const now = Date.now();
     const dueCount = list.filter((r) => r.remindAt <= now).length;
     bar.classList.toggle('is-due', dueCount > 0);
     const head = el('div', { className: 'remind-head' }, [
-      el('strong', { textContent: dueCount ? `⏰ 該回撥了（${dueCount}）` : `⏰ 回撥提醒（${list.length}）` }),
+      el('strong', { textContent: dueCount ? `⏰ 該回撥了（${dueCount}）` : list.length ? `⏰ 回撥提醒（${list.length}）` : `📅 今天要聯絡（${todayList.length}）` }),
     ]);
     if ('Notification' in window && Notification.permission === 'default') {
       const btn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '開啟瀏覽器通知' });
@@ -186,6 +215,31 @@
       row.append(open, el('div', { className: 'card-actions' }, [done, later]));
       bar.append(row);
     });
+    // 下次聯絡日是今天的：列出來，多的話給一顆「只看今天」
+    if (todayList.length) {
+      const LIMIT = 12;
+      const sub = el('div', { className: 'remind-head remind-sub' }, [
+        el('strong', { textContent: `📅 今天要聯絡（${todayList.length}）` }),
+      ]);
+      const onlyToday = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '只看今天到期' });
+      onlyToday.onclick = () => { applyDueQuick('today'); state.limit = PAGE_SIZE; render(); };
+      sub.append(onlyToday, el('span', { className: 'muted', textContent: '訪談紀錄填了下次聯絡日的，當天自動列在這裡。' }));
+      if (list.length) bar.append(el('hr', { className: 'remind-hr' }));
+      bar.append(sub);
+      todayList.slice(0, LIMIT).forEach((r) => {
+        const row = el('div', { className: 'remind-row is-today' });
+        const open = el('button', { className: 'remind-open', type: 'button' }, [
+          el('b', { textContent: '今天' }),
+          el('span', { textContent: ` ${r.company}` }),
+          r.keyman ? el('span', { className: 'muted', textContent: `　${r.keyman}` }) : null,
+          r.phones && r.phones[0] ? el('span', { className: 'muted', textContent: `　📞 ${r.phones[0].display || r.phones[0].digits}` }) : null,
+        ].filter(Boolean));
+        open.onclick = () => openDetail(r.id);
+        row.append(open);
+        bar.append(row);
+      });
+      if (todayList.length > LIMIT) bar.append(el('p', { className: 'muted', textContent: `…還有 ${todayList.length - LIMIT} 家，按「只看今天到期」看全部。` }));
+    }
   }
   /** 詳細頁的「回撥提醒」區塊 */
   function reminderSection(r) {
