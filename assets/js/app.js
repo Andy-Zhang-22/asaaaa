@@ -9,8 +9,9 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260916-77';
+  const APP_VERSION = '20260916-79';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
+  const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
   const REG_KIND_LABEL = {
     capitalUp: '增資', capitalDown: '減資', address: '變更登記地址', owner: '負責人異動',
@@ -34,7 +35,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), taxKind: new Set(), regChange: new Set(), branch: new Set(), added: new Set(), industry: '' },
+    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), taxKind: new Set(), phoneKind: new Set(), regChange: new Set(), branch: new Set(), added: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -304,8 +305,25 @@
     // 有沒有實際拜訪過：跟往來情形一樣，網站上記的通話也算
     out.visit = window.Normalize.detectVisit(allNotes);
     out.visitKind = out.visit.visited ? 'yes' : 'no';
+    /*
+     * KEYMAN：使用者自己改過的最優先；訪談裡明講「KEYMAN 是 X」次之（比名單檔新）；
+     * 再來是名單檔原本的值；都沒有就用訪談稱謂判讀；還是沒有就填負責人。
+     */
+    {
+      const edited = edits && edits.keyman !== undefined ? String(edits.keyman || '').trim() : null;
+      const found = window.Normalize.detectKeyman(allNotes);
+      const fileValue = String(record.keyman || '').trim();
+      if (edited !== null && edited) { out.keyman = edited; out.keymanFrom = 'edit'; }
+      else if (found.name && found.reason === '訪談明講') { out.keyman = found.name; out.keymanFrom = 'notes'; }
+      else if (fileValue) { out.keyman = fileValue; out.keymanFrom = 'file'; }
+      else if (found.name) { out.keyman = found.name; out.keymanFrom = 'notes'; }
+      else if (out.owner) { out.keyman = out.owner; out.keymanFrom = 'owner'; }
+      else { out.keyman = ''; out.keymanFrom = ''; }
+      out.keymanInfo = found;
+    }
     // 有沒有統編：欄位裡有數字就算有（編輯過的以編輯後為準）
     out.taxKind = /\d/.test(String(out.taxId || '')) ? 'yes' : 'no';
+    out.phoneKind = (out.phones && out.phones.length) ? 'yes' : 'no';
     // 變更登記：最近一次查到異動的種類；查過但從沒異動＝無變更；沒查過＝未查核
     out.regChange = (mine && mine.regChange) || null;
     out.regAt = (mine && mine.regAt) || 0;
@@ -902,6 +920,7 @@
       if (f.relation.size && !f.relation.has(r.dealingKind)) return false;
       if (f.visit.size && !f.visit.has(r.visitKind)) return false;
       if (f.taxKind.size && !f.taxKind.has(r.taxKind)) return false;
+      if (f.phoneKind.size && !f.phoneKind.has(r.phoneKind)) return false;
       if (f.regChange.size && !r.regKinds.some((k) => f.regChange.has(k))) return false;
       if (f.branch.size && !f.branch.has(r.branchKey)) return false;
       if (f.added.size && !f.added.has(r.addedBucket)) return false;
@@ -1068,6 +1087,10 @@
     const taxCounts = [['yes', 0], ['no', 0]];
     all.forEach((r) => { taxCounts[r.taxKind === 'yes' ? 0 : 1][1] += 1; });
     chips($('#fltTax'), 'taxKind', taxCounts, state.filters.taxKind, (v) => TAX_LABEL[v]);
+    // 電話：同一組「資料完整度」的第二排；統編與電話是兩個條件，可以疊加（有統編＋無電話）
+    const phoneCounts = [['yes', 0], ['no', 0]];
+    all.forEach((r) => { phoneCounts[r.phoneKind === 'yes' ? 0 : 1][1] += 1; });
+    chips($('#fltPhone'), 'phoneKind', phoneCounts, state.filters.phoneKind, (v) => PHONE_LABEL[v]);
 
     // 變更登記：固定順序含 0 筆；一家可能同時算在好幾顆裡，所以總和可以超過名單筆數
     const regCounts = new Map(REG_KIND_ORDER.map((k) => [k, 0]));
@@ -1455,7 +1478,8 @@
 
     const dl = el('dl', { className: 'detail-grid' });
     const rows = [
-      ['統一編號', r.taxId], ['負責人', r.owner], ['KEYMAN', r.keyman],
+      ['統一編號', r.taxId], ['負責人', r.owner],
+      ['KEYMAN', r.keyman ? `${r.keyman}${r.keymanFrom === 'notes' ? `　（${r.keymanInfo.reason}：「${r.keymanInfo.snippet}」）` : r.keymanFrom === 'owner' ? '　（訪談看不出 KEYMAN，先填負責人）' : ''}` : ''],
       ['產業別', r.industry], ['成立年', r.founded],
       ['資本額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
       ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) : ''],
@@ -1539,9 +1563,7 @@
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存紀錄' });
     save.onclick = async () => {
       const text = memo.value.trim();
-      // 禁止推廣不需要內容或下次聯絡日：判定了就是判定了，之後也不會再打
-      const blocking = outcomeSel.value === 'blocked';
-      if (!text && !nextInput.value && !blocking) { toast('請至少填寫內容或下次聯絡日'); return; }
+      if (!text && !nextInput.value) { toast('請至少填寫內容或下次聯絡日'); return; }
       const today = todayISO();
 
       /*
@@ -1571,7 +1593,7 @@
       }
       state.logs = await window.Store.allLogs();
       const extra = targets.length > 1 ? `（同時記到 ${targets.length} 家）` : '';
-      toast(blocking && !text ? `已標記禁止推廣${extra}` : auto ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : `已儲存通話紀錄${extra}`);
+      toast(auto ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : `已儲存通話紀錄${extra}`);
       render();
       openDetail(r.id);
       scheduleSync();
@@ -1929,7 +1951,9 @@
       textContent: '修改內容會蓋在原始名單之上。重新匯入同一份 PDF 不會覆蓋你改過的欄位，'
         + '也會透過雲端同步帶到其他裝置。' }));
 
-    const form = editForm({ ...r, addressActual: r.addressActual === r.addressRegistered ? '' : r.addressActual });
+    // KEYMAN 若是判讀出來的就不預填，免得存別的欄位時把判讀值當成使用者填的
+    const form = editForm({ ...r, keyman: r.keymanFrom === 'edit' || r.keymanFrom === 'file' ? r.keyman : '',
+      addressActual: r.addressActual === r.addressRegistered ? '' : r.addressActual });
     host.append(form.node);
 
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存' });
