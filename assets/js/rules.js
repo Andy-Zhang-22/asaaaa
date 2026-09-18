@@ -538,8 +538,9 @@
     { division: '北二分處', branch: '新莊', areas: { 新北市: ['樹林', '三重', '新莊', '泰山', '林口', '蘆洲', '五股', '八里'] } },
     { division: '北二分處', branch: '桃園', areas: { 桃園市: ['中壢', '新屋', '觀音', '大溪', '復興', '大園', '蘆竹', '桃園', '龜山', '八德'] } },
     { division: '北二分處', branch: '新竹', areas: { 新竹市: 'all', 新竹縣: 'all', 苗栗縣: ['竹南', '頭份', '三灣', '南庄', '獅潭', '後龍', '苗栗', '造橋', '頭屋'] } },
-    { division: '北二分處', branch: '宜花（宜蘭一科、二科）', areas: { 新北市: ['瑞芳', '平溪', '雙溪', '貢寮', '坪林', '石碇'], 宜蘭縣: 'all' } },
-    { division: '北二分處', branch: '宜花（花蓮一科、二科）', areas: { 花蓮縣: 'all' } },
+    // 宜花分公司底下分宜蘭、花蓮各兩科；卡片與篩選只顯示「宜花」，科別放在說明裡
+    { division: '北二分處', branch: '宜花', unit: '宜蘭一科、二科', areas: { 新北市: ['瑞芳', '平溪', '雙溪', '貢寮', '坪林', '石碇'], 宜蘭縣: 'all' } },
+    { division: '北二分處', branch: '宜花', unit: '花蓮一科、二科', areas: { 花蓮縣: 'all' } },
     { division: '中區分處', branch: '北台中', areas: { 臺中市: ['神岡', '大雅', '后里', '豐原', '潭子', '石岡', '東勢', '新社', '和平'] } },
     { division: '中區分處', branch: '南台中', areas: { 臺中市: ['烏日', '大里', '太平', '霧峰'] } },
     { division: '中區分處', branch: '中彰', areas: { 臺中市: ['大甲', '大安', '清水', '梧棲', '沙鹿', '外埔', '大肚', '龍井'], 彰化縣: ['彰化市', '和美鎮', '鹿港鎮', '伸港鄉', '線西鄉', '福興鄉'] } },
@@ -566,7 +567,7 @@
     { branches: ['北高雄', '南高雄'], city: '高雄市', districts: ['三民', '左營', '前金', '楠梓', '鼓山', '鹽埕'], appealTo: '北高雄分公司' },
     { branches: ['北高雄', '南高雄'], city: '高雄市', districts: ['苓雅', '新興', '旗津'], appealTo: '南高雄分公司' },
     { branches: ['南高雄', '高屏'], city: '高雄市', districts: ['大寮', '林園', '鳳山'], appealTo: '南高雄分公司' },
-    { branches: ['高屏', '花蓮一科', '花蓮二科'], city: '臺東縣', districts: 'all', appealTo: '高屏分公司' },
+    { branches: ['高屏', '宜花'], city: '臺東縣', districts: 'all', appealTo: '高屏分公司', note: '高屏、花蓮一科、花蓮二科共同區' },
   ];
   const SHARED_CITIES = ['澎湖縣', '金門縣', '連江縣'];
   const DIVISION_OF = {};
@@ -588,14 +589,14 @@
       if (cm.city === c && hit(cm.districts)) {
         return { kind: 'common', branches: cm.branches, appealTo: cm.appealTo,
           division: DIVISION_OF[cm.branches[0]] || '',
-          label: `${cm.branches.join('、')}分公司共同區（申覆對象：${cm.appealTo}）` };
+          label: `${cm.note || `${cm.branches.join('、')}分公司共同區`}（申覆對象：${cm.appealTo}）` };
       }
     }
     for (const b of BRANCH_AREAS) {
       const list = b.areas[c];
       if (list && hit(list)) {
-        return { kind: 'branch', branches: [b.branch], division: b.division,
-          label: `${b.branch}分公司（${b.division}）` };
+        return { kind: 'branch', branches: [b.branch], division: b.division, unit: b.unit || '',
+          label: `${b.branch}分公司（${b.division}${b.unit ? `，${b.unit}` : ''}）` };
       }
     }
     return { kind: '', label: '' };
