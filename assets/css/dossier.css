@@ -36,6 +36,8 @@
 /* 段落 */
 .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
 .section h2 { font-size: 16px; margin-bottom: 4px; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.section-head h2 { margin-bottom: 0; }
 .section .desc { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
 .section textarea.summary {
   width: 100%; min-height: 70px; resize: vertical; padding: 9px 11px; border-radius: 8px;

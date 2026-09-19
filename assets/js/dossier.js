@@ -162,7 +162,10 @@
     const section = el('div', { className: 'section' });
     const key = state.tab;
     const meta = M.SECTIONS.find((s) => s.key === key);
-    section.append(el('h2', { textContent: meta.title }));
+    // 每一段都有自己的匯入按鈕：丟進來的檔案只會放到這一段，不用再在預覽裡挑
+    const importBtn = el('button', { className: 'btn btn-tiny section-import', type: 'button', textContent: '📥 匯入 PDF／Excel 到這一段' });
+    importBtn.onclick = () => { importState.pendingTarget = key; $('#importPick').click(); };
+    section.append(el('div', { className: 'section-head' }, [el('h2', { textContent: meta.title }), importBtn]));
 
     if (key === 'debts') {
       section.append(el('p', { className: 'desc', textContent: '公司與負責人／關係人在各銀行的授信餘額（單位：仟元）。Excel 會依「類別」分組，每組自動加總計。' }));
@@ -658,10 +661,13 @@
 
   /* ---------------- 匯入 PDF／Excel ---------------- */
 
-  const importState = { found: [], picks: {} };
+  const importState = { found: [], picks: {}, target: '', pendingTarget: '' };
 
-  /** 讀進來的檔案 → 認出區塊 → 開預覽。 */
-  async function importFiles(files) {
+  /**
+   * 讀進來的檔案 → 認出區塊 → 開預覽。
+   * target 有值（從某一段的按鈕進來）時：只留自動認成那一段的區塊；一塊都沒有就全部指到那一段，讓使用者自己確認。
+   */
+  async function importFiles(files, target) {
     if (!state.current) { toast('請先打開一份徵信資料'); return; }
     const list = Array.from(files || []).filter((f) => /\.(pdf|xlsx|xlsm|xls|csv|txt)$/i.test(f.name));
     if (!list.length) { toast('請選 PDF、Excel 或 CSV 檔'); return; }
@@ -680,10 +686,21 @@
         toast('沒有認出可以匯入的表格：請確認檔案裡有「銀行／科目／餘額」「統編／月平均」「地號／建號」或財務科目這類標題');
         return;
       }
-      importState.found = found;
+      let kept = found;
+      if (target) {
+        const matching = found.filter((f) => f.section === target);
+        kept = matching.length ? matching : found;
+        kept.forEach((f) => { f.section = target; });
+      }
+      kept.forEach((f, i) => { f.id = String(i + 1); });
+      importState.found = kept;
+      importState.target = target || '';
       importState.picks = {};
-      found.forEach((f) => { importState.picks[f.id] = f.section; });
+      kept.forEach((f) => { importState.picks[f.id] = f.section; });
       renderImportPreview();
+      $('#importIntro').textContent = target
+        ? `會放到「${SECTION_LABEL[target]}」；認出的表格如下，確認後按「匯入」。數字照原檔的單位帶入，請留意是「元」還是「仟元」。`
+        : '認出下面這些表格，確認要放到哪個段落後按「匯入」。數字照原檔的單位帶入，請留意是「元」還是「仟元」。';
       $('#importDlg').hidden = false;
     } catch (err) {
       console.error(err);
@@ -789,11 +806,13 @@
   }
 
   function wireImport() {
-    $('#btnImportFile').onclick = () => $('#importPick').click();
+    $('#btnImportFile').onclick = () => { importState.pendingTarget = ''; $('#importPick').click(); };
     $('#importPick').onchange = async (e) => {
       const files = Array.from(e.target.files || []);
       e.target.value = '';
-      await importFiles(files);
+      const target = importState.pendingTarget;
+      importState.pendingTarget = '';
+      await importFiles(files, target);
     };
     $('#btnImportApply').onclick = applyImport;
     $('#importDlg').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) $('#importDlg').hidden = true; });
@@ -808,7 +827,9 @@
       e.preventDefault();
       depth = 0;
       view.classList.remove('is-dragover');
-      importFiles(e.dataTransfer.files);
+      // 拖到段落（表格）上就只放這一段；拖到頁面其他地方照自動判斷
+      const onSection = e.target.closest && e.target.closest('#sectionHost .section');
+      importFiles(e.dataTransfer.files, onSection ? state.tab : '');
     });
     if (window.pdfjsLib) {
       const v = (SCRIPT_SRC.match(/[?&]v=([^&]+)/) || [])[1];
