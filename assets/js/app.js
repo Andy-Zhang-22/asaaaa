@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-105';
+  const APP_VERSION = '20260919-106';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -2578,18 +2578,22 @@ export default {
     const stopBtn = $('#btnRegistryStop');
     const closeBtn = $('#btnRegistryClose');
     if (j.running) {
-      $('#registryBarTitle').textContent = `商工登記更新中 ${j.done} / ${j.total}`;
-      $('#registryBarNote').textContent = j.company ? `目前：${j.company}　已更新 ${j.updated} 筆` : '準備中…';
+      $('#registryBarTitle').textContent = `登記更新 ${j.done}/${j.total}`;
+      $('#registryBarNote').textContent = j.updated ? `已更新 ${j.updated}` : '';
+      // 公司名稱放在提示文字裡：列太小了塞不下，但滑過去還看得到查到哪一家
+      bar.title = j.company ? `商工登記更新中 ${j.done} / ${j.total}　目前：${j.company}` : '商工登記更新中';
       stopBtn.hidden = false;
-      stopBtn.textContent = j.cancelled ? '停止中…' : '停止';
+      stopBtn.textContent = j.cancelled ? '停止中' : '停止';
       stopBtn.disabled = j.cancelled;
       closeBtn.hidden = true;
     } else {
       const r = j.result;
-      $('#registryBarTitle').textContent = r.stopped ? '商工登記更新已停止' : '商工登記更新完成';
-      $('#registryBarNote').textContent = r.sourceDown
+      const detail = r.sourceDown
         ? '每一筆都失敗，來源被擋住了，不是資料的問題。'
         : `查了 ${r.checkedCount} 筆，更新 ${r.updated} 筆，${r.failed} 筆查不到。`;
+      $('#registryBarTitle').textContent = r.stopped ? '登記更新已停止' : '登記更新完成';
+      $('#registryBarNote').textContent = r.sourceDown ? '來源被擋住' : `更新 ${r.updated}／查不到 ${r.failed}`;
+      bar.title = `${r.stopped ? '商工登記更新已停止' : '商工登記更新完成'}　${detail}`;
       stopBtn.hidden = true;
       closeBtn.hidden = false;
     }

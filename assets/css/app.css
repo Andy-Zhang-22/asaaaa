@@ -545,21 +545,23 @@ button, input, select { font: inherit; color: inherit; }
 }
 .update-bar .btn { padding: 6px 12px; font-size: 13px; }
 
-/* 商工登記在背景更新時的進度條：固定在底部，不擋住名單 */
+/* 商工登記在背景更新時的進度條：縮到右下角一小條，盡量不擋畫面 */
 .registry-bar {
-  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 94;
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  width: min(560px, calc(100% - 32px));
-  padding: 10px 14px; border-radius: 14px;
+  position: fixed; right: 12px; bottom: 12px; z-index: 94;
+  display: flex; align-items: center; gap: 8px;
+  max-width: calc(100% - 24px);
+  padding: 5px 8px 7px; border-radius: 999px;
   background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow);
-  font-size: 13.5px;
+  font-size: 12px; line-height: 1.3; overflow: hidden; opacity: .94;
 }
-.registry-bar-text { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 2px; }
-.registry-bar-text .muted { font-size: 12.5px; }
-.registry-track { flex-basis: 100%; height: 4px; border-radius: 999px; background: var(--surface-2); overflow: hidden; order: 3; }
+.registry-bar:hover { opacity: 1; }
+.registry-bar strong { font-weight: 600; white-space: nowrap; }
+.registry-bar .muted { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.registry-bar .btn-tiny { padding: 2px 8px; font-size: 11.5px; flex: none; }
+.registry-track { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--surface-2); }
 .registry-fill { height: 100%; background: var(--primary); transition: width .2s ease; }
 /* 兩條都出現時，更新提示讓到上面 */
-body.has-registry-bar .update-bar { bottom: 96px; }
+body.has-registry-bar .update-bar { bottom: 60px; }
 
 .badge-priority { border-color: var(--ok); color: var(--ok); font-weight: 600; }
 .badge-outside { border-color: var(--danger); color: var(--danger); }
