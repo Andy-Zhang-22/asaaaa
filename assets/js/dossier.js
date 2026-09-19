@@ -87,7 +87,7 @@
     });
     $('#listSummary').textContent = `${list.length} 份徵信資料`;
     $('#emptyState').hidden = !!state.dossiers.length;
-    $('#brandSub').textContent = state.dossiers.length ? `${state.dossiers.length} 份資料` : '六張表 → 一份 Excel';
+    $('#brandSub').textContent = state.dossiers.length ? `${state.dossiers.length} 份資料` : '五個分頁 → 六張工作表';
   }
 
   function showList() {
@@ -171,21 +171,25 @@
       section.append(el('p', { className: 'desc', textContent: '公司與負責人／關係人在各銀行的授信餘額（單位：仟元）。Excel 會依「類別」分組，每組自動加總計。' }));
       section.append(gridEditor(M.DEBT_COLUMNS, d.debts.rows, { defaults: { type: 'company' } }));
     }
-    if (key === 'sales' || key === 'purchases') {
-      const sec = d[key];
-      const summary = el('textarea', {
-        className: 'summary', value: sec.summary || '',
-        placeholder: key === 'sales' ? '綜合說明：客戶規模、客戶集中度、收款方式…' : '綜合說明：主要供應商、付款方式、往來年資…',
+    if (key === 'vendors') {
+      // 銷貨、進貨放同一頁（客戶多半一起給），Excel 還是分兩張工作表
+      [['sales', '銷貨廠商資料', '綜合說明：客戶規模、客戶集中度、收款方式…'], ['purchases', '進貨廠商資料', '綜合說明：主要供應商、付款方式、往來年資…']].forEach(([part, title, hint]) => {
+        const sec = d[part];
+        const box = el('div', { className: 'section-part' });
+        box.dataset.part = part;
+        box.append(el('h3', { textContent: title }));
+        const summary = el('textarea', { className: 'summary', value: sec.summary || '', placeholder: hint });
+        summary.oninput = () => { sec.summary = summary.value; scheduleSave(); };
+        box.append(summary);
+        box.append(gridEditor(part === 'sales' ? M.SALES_COLUMNS : M.PURCHASE_COLUMNS, sec.rows, {
+          footer: (rows) => {
+            const total = rows.reduce((s, r) => s + M.num(r.monthly), 0);
+            const ratio = part === 'sales' ? rows.reduce((s, r) => s + M.num(r.ratio), 0) : 0;
+            return `月平均往來合計 ${fmt(total)} 仟${part === 'sales' ? ` · 佔營收比率合計 ${fmt(ratio)}%` : ''}`;
+          },
+        }));
+        section.append(box);
       });
-      summary.oninput = () => { sec.summary = summary.value; scheduleSave(); };
-      section.append(summary);
-      section.append(gridEditor(key === 'sales' ? M.SALES_COLUMNS : M.PURCHASE_COLUMNS, sec.rows, {
-        footer: (rows) => {
-          const total = rows.reduce((s, r) => s + M.num(r.monthly), 0);
-          const ratio = key === 'sales' ? rows.reduce((s, r) => s + M.num(r.ratio), 0) : 0;
-          return `月平均往來合計 ${fmt(total)} 仟${key === 'sales' ? ` · 佔營收比率合計 ${fmt(ratio)}%` : ''}`;
-        },
-      }));
     }
     if (key === 'vat') {
       const vat = d.vat;
@@ -688,9 +692,11 @@
       }
       let kept = found;
       if (target) {
-        const matching = found.filter((f) => f.section === target);
+        // target 是編輯頁的分頁；進銷貨廠商那一頁同時收銷貨和進貨
+        const matching = found.filter((f) => M.tabOf(f.section) === target);
         kept = matching.length ? matching : found;
-        kept.forEach((f) => { f.section = target; });
+        const fallback = target === 'vendors' ? 'sales' : target;
+        kept.forEach((f) => { if (M.tabOf(f.section) !== target) f.section = fallback; });
       }
       kept.forEach((f, i) => { f.id = String(i + 1); });
       importState.found = kept;
@@ -711,7 +717,7 @@
     }
   }
 
-  const SECTION_LABEL = Object.fromEntries(M.SECTIONS.map((s) => [s.key, s.short]));
+  const SECTION_LABEL = Object.fromEntries(M.IMPORT_TARGETS.map((s) => [s.key, s.label]).concat(M.SECTIONS.map((s) => [s.key, s.short])));
 
   function renderImportPreview() {
     const host = $('#importFound');
@@ -721,7 +727,7 @@
       const box = el('div', { className: `import-block${section === 'skip' ? ' is-skip' : ''}` });
       const head = el('div', { className: 'import-block-head' });
       const sel = el('select');
-      M.SECTIONS.forEach((s) => sel.append(el('option', { value: s.key, textContent: `放到 ${s.short}` })));
+      M.IMPORT_TARGETS.forEach((s) => sel.append(el('option', { value: s.key, textContent: `放到 ${s.label}` })));
       sel.append(el('option', { value: 'skip', textContent: '略過這一塊' }));
       sel.value = section;
       sel.onchange = () => { importState.picks[f.id] = sel.value; renderImportPreview(); };
@@ -797,8 +803,8 @@
     if (d.baseDate) $('#fBaseDate').value = d.baseDate;
     if (d.owner && !$('#fOwner').value.trim()) $('#fOwner').value = d.owner;
     const parts = Object.entries(added).map(([k, n]) => `${SECTION_LABEL[k].replace(/^[①-⑩]\s*/, '')} ${n}${k === 'fin' || k === 'vat' ? ' 個數字' : ' 列'}`);
-    const first = M.SECTIONS.find((s) => added[s.key]);
-    if (first) state.tab = first.key;
+    const first = M.IMPORT_TARGETS.find((s) => added[s.key]);
+    if (first) state.tab = M.tabOf(first.key);
     await saveNow();
     renderTabs();
     renderSection();
