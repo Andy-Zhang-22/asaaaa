@@ -545,6 +545,22 @@ button, input, select { font: inherit; color: inherit; }
 }
 .update-bar .btn { padding: 6px 12px; font-size: 13px; }
 
+/* 商工登記在背景更新時的進度條：固定在底部，不擋住名單 */
+.registry-bar {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 94;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  width: min(560px, calc(100% - 32px));
+  padding: 10px 14px; border-radius: 14px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow);
+  font-size: 13.5px;
+}
+.registry-bar-text { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 2px; }
+.registry-bar-text .muted { font-size: 12.5px; }
+.registry-track { flex-basis: 100%; height: 4px; border-radius: 999px; background: var(--surface-2); overflow: hidden; order: 3; }
+.registry-fill { height: 100%; background: var(--primary); transition: width .2s ease; }
+/* 兩條都出現時，更新提示讓到上面 */
+body.has-registry-bar .update-bar { bottom: 96px; }
+
 .badge-priority { border-color: var(--ok); color: var(--ok); font-weight: 600; }
 .badge-outside { border-color: var(--danger); color: var(--danger); }
 
