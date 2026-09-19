@@ -460,6 +460,10 @@
 
   /** 把一塊資料對到指定段落，回傳預覽用的結果。 */
   function mapBlock(block, section) {
+    if (block.estate) {
+      if (section !== 'estates') return section === 'fin' ? { section, fin: { periods: null, values: {}, count: 0, keys: 0 } } : section === 'vat' ? { section, vat: { rows: [], summary: '', count: 0 } } : { section, rows: [], columns: [] };
+      return { section, rows: block.estate.rows.map((r) => ({ ...r })), columns: ['owner', 'address', 'section', 'landNo', 'buildNo', 'buildPing', 'liens', 'note'] };
+    }
     if (block.finOne) {
       if (section !== 'fin') return section === 'vat' ? { section, vat: { rows: [], summary: '', count: 0 } } : { section, rows: [], columns: [] };
       const f = block.finOne;
@@ -996,6 +1000,372 @@
     }
   }
 
+  /* ---------------- 建物謄本（地政電傳／登記謄本掃描）→ 不動產 ---------------- */
+  /*
+   * 謄本一棟建物三部：標示部（門牌、地號、面積、完工日、共有部分）、所有權部（取得日期與原因、所有權人）、
+   * 他項權利部（每一筆抵押：登記日期、權利人銀行、擔保債權總金額）。都是掃描圖、表格有框線、常微微歪斜。
+   * 做法：整頁散落辨識拿字的位置 → 估歪斜角轉正 → 用「格線」和「字的位置」切出每一列 → 逐列裁圖辨識（單行模式最準）
+   * → 用關鍵字從每列文字挑欄位 → 依建號把三部併成一棟 → 對到不動產表：
+   *   坪數＝(總面積＋附屬建物面積)×0.3025；共有部分另一行＝共有面積×權利範圍×0.3025
+   *   設定金額每筆一行「2024.08.26-H1 合作金庫 17,960仟」；備註＝屋齡、完工日、取得日與原因、用途。
+   * 所有權人在謄本上是遮蔽的（林＊＊），留給使用者填；市價謄本沒有，也留白。
+   */
+  const M2_TO_PING = 0.3025;
+  const fullToHalf = (t) => String(t || '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 48)).replace(/[Ａ-Ｚａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFF21 + 65));
+  const ROC_DATE_RE = /民國\s*(\d{2,3})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日曰]?/;
+  /** 民國年月日 → 西元；年份不合理（例如抓到「擔保債權確定期日 143 年」）就當沒讀到。 */
+  const rocDate = (m) => {
+    if (!m) return null;
+    const y = Number(m[1]) + 1911;
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    if (y < 1912 || y > new Date().getFullYear() + 1 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return { y, m: mo, d, text: `${y}.${String(mo).padStart(2, '0')}.${String(d).padStart(2, '0')}` };
+  };
+  /** 從幾行文字裡挑第一個合法日期。 */
+  const dateOf = (arr, exclude) => {
+    for (const t of arr) {
+      if (exclude && exclude.test(t)) continue;
+      const d = rocDate(t.match(ROC_DATE_RE));
+      if (d) return d;
+    }
+    return null;
+  };
+
+  /** 把 canvas 轉正（角度用散落文字每一列最左、最右兩個字的高低差估）。 */
+  function deskewCanvas(canvas, words) {
+    const rows = clusterRows(words);
+    const slopes = [];
+    rows.forEach((r) => {
+      const ws = r.words.slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+      const L = ws[0];
+      const R = ws[ws.length - 1];
+      const dx = R.bbox.x0 - L.bbox.x0;
+      if (dx > canvas.width * 0.3) slopes.push(((R.bbox.y0 + R.bbox.y1) / 2 - (L.bbox.y0 + L.bbox.y1) / 2) / dx);
+    });
+    if (!slopes.length) return { canvas, angle: 0 };
+    slopes.sort((a, b) => a - b);
+    const angle = Math.atan(slopes[Math.floor(slopes.length / 2)]);
+    if (Math.abs(angle) < 0.003) return { canvas, angle: 0 };
+    const out = document.createElement('canvas');
+    out.width = canvas.width;
+    out.height = canvas.height;
+    const g = out.getContext('2d');
+    g.fillStyle = '#fff';
+    g.fillRect(0, 0, out.width, out.height);
+    g.translate(out.width / 2, out.height / 2);
+    g.rotate(-angle);
+    g.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+    return { canvas: out, angle };
+  }
+  function clusterRows(words) {
+    const rows = [];
+    words.forEach((w) => {
+      const cy = (w.bbox.y0 + w.bbox.y1) / 2;
+      const r = rows.find((x) => Math.abs(x.cy - cy) <= 22);
+      if (r) { r.words.push(w); r.cy = (r.cy * (r.words.length - 1) + cy) / r.words.length; } else rows.push({ cy, words: [w] });
+    });
+    return rows;
+  }
+  /** 水平格線的 y（墨水量夠多的列）。 */
+  function inkLines(canvas) {
+    const { width, height } = canvas;
+    const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+    const ink = new Int32Array(height);
+    let max = 0;
+    for (let y = 0; y < height; y++) {
+      let n = 0;
+      const base = y * width * 4;
+      for (let x = 0; x < width; x += 2) {
+        const q = base + x * 4;
+        if (data[q + 3] < 16) continue;
+        if ((data[q] * 299 + data[q + 1] * 587 + data[q + 2] * 114) / 1000 < 200) n++;
+      }
+      ink[y] = n;
+      if (n > max) max = n;
+    }
+    if (max < width * 0.25) return [];
+    const thr = max * 0.5;
+    const lines = [];
+    let start = null;
+    let prev = null;
+    for (let y = 0; y < height; y++) {
+      if (ink[y] < thr) continue;
+      if (start === null) { start = prev = y; continue; }
+      if (y - prev <= 3) { prev = y; continue; }
+      lines.push(Math.round((start + prev) / 2));
+      start = prev = y;
+    }
+    if (start !== null) lines.push(Math.round((start + prev) / 2));
+    return lines;
+  }
+  /** 一頁的列帶：格線之間 ∪ 文字聚成的列，重疊的合併。 */
+  function pageBands(canvas, words) {
+    const bands = [];
+    const lines = inkLines(canvas);
+    if (lines.length >= 5) {
+      for (let i = 0; i < lines.length - 1; i++) {
+        const top = lines[i] + 3;
+        const h = lines[i + 1] - lines[i] - 6;
+        if (h >= 18 && h <= 420) bands.push({ top, bottom: top + h });
+      }
+    }
+    clusterRows(words).forEach((r) => {
+      const y0 = Math.min(...r.words.map((w) => w.bbox.y0)) - 8;
+      const y1 = Math.max(...r.words.map((w) => w.bbox.y1)) + 8;
+      if (y1 - y0 < 20) return;
+      const overlap = bands.find((b) => Math.min(b.bottom, y1) - Math.max(b.top, y0) > (y1 - y0) * 0.5);
+      if (!overlap) bands.push({ top: Math.max(0, y0), bottom: Math.min(canvas.height, y1) });
+    });
+    bands.sort((a, b) => a.top - b.top);
+    const merged = [];
+    bands.forEach((b) => {
+      const last = merged[merged.length - 1];
+      if (last && Math.min(last.bottom, b.bottom) - Math.max(last.top, b.top) > (b.bottom - b.top) * 0.5) {
+        last.top = Math.min(last.top, b.top);
+        last.bottom = Math.max(last.bottom, b.bottom);
+        return;
+      }
+      merged.push({ ...b });
+    });
+    return merged;
+  }
+  async function ocrBand(canvas, band) {
+    const h = band.bottom - band.top;
+    const cc = document.createElement('canvas');
+    cc.width = canvas.width;
+    cc.height = h;
+    cc.getContext('2d').drawImage(canvas, 0, band.top, canvas.width, h, 0, 0, canvas.width, h);
+    const r = await global.Ocr.recognizeData(cc, { tessedit_pageseg_mode: h > 90 ? '6' : '7' });
+    return fullToHalf(r.text).replace(/[|｜]/g, ' ').replace(/[ \t]+/g, ' ').trim();
+  }
+
+  const isWordOk = (w) => w.text.trim() && (w.bbox.y1 - w.bbox.y0) < 120 && (w.bbox.y1 - w.bbox.y0) > 12;
+
+  /**
+   * 逐頁辨識謄本，回傳每頁 { type, header, lines }。
+   * type：mark 標示部、owner 所有權部、lien 他項權利部、other。
+   */
+  async function ocrTranscriptPages(buffer, total, say) {
+    const pages = [];
+    for (let pno = 1; pno <= total; pno++) {
+      say(`⏳ 辨識謄本 第 ${pno}/${total} 頁…`);
+      let canvas = await renderPdfPage(buffer.slice(0), pno, 3);
+      let d = await global.Ocr.recognizeData(canvas, { tessedit_pageseg_mode: '11' });
+      let words = d.words.filter(isWordOk);
+      const flat = d.text.replace(/\s/g, '');
+      const type = /標示部/.test(flat) ? 'mark' : /所有權部/.test(flat) ? 'owner' : /他項權利/.test(flat) ? 'lien' : 'other';
+      if (type === 'other' && words.length < 40) { pages.push({ type, header: null, lines: [] }); continue; }
+      const sk = deskewCanvas(canvas, words);
+      if (sk.angle) {
+        canvas = sk.canvas;
+        d = await global.Ocr.recognizeData(canvas, { tessedit_pageseg_mode: '11' });
+        words = d.words.filter(isWordOk);
+      }
+      const bands = pageBands(canvas, words);
+      const lines = [];
+      for (const b of bands) lines.push(await ocrBand(canvas, b));
+      pages.push({ type, lines, flat: lines.join('\n').replace(/\s/g, '') });
+    }
+    return pages;
+  }
+
+  /** 常見金融機構全名；OCR 會多出雜字，所以用「字按順序出現得到」來比對。 */
+  const BANK_NAMES = ['合作金庫', '臺灣土地銀行', '土地銀行', '臺灣銀行', '第一銀行', '華南銀行', '彰化銀行',
+    '臺灣中小企業銀行', '中小企業銀行', '兆豐國際商業銀行', '兆豐銀行', '國泰世華', '玉山銀行', '台新銀行',
+    '中國信託', '臺北富邦', '富邦銀行', '永豐銀行', '遠東國際商業銀行', '元大銀行', '聯邦銀行', '陽信銀行',
+    '板信銀行', '新光銀行', '日盛銀行', '凱基銀行', '星展銀行', '匯豐銀行', '渣打銀行', '王道銀行',
+    '上海商業儲蓄銀行', '三信商業銀行', '高雄銀行', '京城商業銀行', '安泰銀行', '中華郵政', '農會', '漁會',
+    '信用合作社', '中租迪和', '裕融企業', '和潤企業'];
+  function matchBank(text) {
+    const t = String(text || '').replace(/[\s　]/g, '');
+    let best = '';
+    BANK_NAMES.forEach((name) => {
+      let i = 0;
+      for (const ch of name) { i = t.indexOf(ch, i); if (i < 0) return; i += 1; }
+      if (name.length > best.length) best = name;
+    });
+    return best;
+  }
+
+  /** 謄本抬頭：「臺北市信義區吳興段一小段 01854-000建號」→ 市、區、段、建號。 */
+  function parseHeader(lines) {
+    for (const raw of lines.slice(0, 10)) {
+      const f = fullToHalf(raw).replace(/[\s　]/g, '');
+      const m = f.match(/([一-鿿]{2,20}段[一-鿿]{0,6})(\d{4,5})[-~_.](\d{3})(?!\d)/);
+      if (!m) continue;
+      const loc = m[1];
+      const city = (loc.match(/^[一-鿿]{2}[市縣]/) || [''])[0];
+      const district = (loc.slice(city.length).match(/^[一-鿿]{1,3}[區鄉鎮]/) || [''])[0];
+      const section = loc.slice(city.length + district.length);
+      return { city, district, section, buildNo: `${Number(m[2])}${Number(m[3]) ? `-${Number(m[3])}` : ''}` };
+    }
+    return null;
+  }
+
+  const mode = (arr) => {
+    const count = new Map();
+    arr.filter(Boolean).forEach((x) => count.set(x, (count.get(x) || 0) + 1));
+    let best = '';
+    let n = 0;
+    count.forEach((v, k) => { if (v > n) { best = k; n = v; } });
+    return best;
+  };
+  const USAGE_RE = /(住家用|住商用|商業用|工業用|住宅用|辦公用|店鋪用|停車空間|農業用|倉庫用)/;
+
+  /** 一頁屬於哪一部：整頁散落辨識常漏掉標題，所以用逐列辨識出來的文字判。 */
+  function pageType(lines) {
+    const f = lines.join('').replace(/[\s　]/g, '');
+    if (/他項權利部|擔保債權總金額|最高限額抵押|債權額比例/.test(f)) return 'lien';
+    if (/所有權部|權狀字號|原因發生日期|所有權人/.test(f)) return 'owner';
+    if (/標示部|建物門牌|建築完成日期|主要建材|層次面積/.test(f)) return 'mark';
+    return 'other';
+  }
+
+  /**
+   * 把辨識好的每一頁併成「一棟建物一列」。
+   * 同一棟的三部（標示、所有權、他項權利）分散在好幾頁，OCR 又常把段名讀錯，
+   * 所以用「行政區＋建號」歸戶，欄位再從這一棟的全部文字裡找。
+   */
+  function parseTranscript(pages) {
+    const builds = new Map();
+    let current = null;
+    pages.forEach((pg) => {
+      if (!pg.lines || !pg.lines.length) return;
+      const h = parseHeader(pg.lines);
+      let b = current;
+      if (h) {
+        const key = h.buildNo;   // 一份謄本裡建號夠獨特；段名 OCR 常讀錯，不能當 key
+        if (!builds.has(key)) builds.set(key, { key, cities: [], districts: [], sections: [], buildNo: h.buildNo, mark: [], own: [], lienPages: [], all: [] });
+        b = builds.get(key);
+        b.cities.push(h.city);
+        b.districts.push(h.district);
+        if (h.section) b.sections.push(h.section);
+        current = b;
+      }
+      if (!b) return;
+      const lines = [...new Set(pg.lines.map((t) => fullToHalf(t).replace(/[\s　]/g, '')))].filter(Boolean);
+      const type = pageType(lines);
+      b.all.push(...lines);
+      if (type === 'mark') b.mark.push(...lines);
+      if (type === 'owner') b.own.push(...lines);
+      if (type === 'lien') b.lienPages.push(lines);
+    });
+
+    const nowYear = new Date().getFullYear();
+    const ping = (m2) => (m2 ? (m2 * M2_TO_PING).toFixed(2) : '');
+    const rows = [...builds.values()].map((b) => {
+      const markLines = b.mark.length ? b.mark : b.all;
+      const ownLines = b.own.length ? b.own : b.all;
+      const scan = [...b.mark, ...b.all];   // 標示部優先，其餘頁補漏
+      const city = mode(b.cities);
+      const district = mode(b.districts);
+      const section = mode(b.sections);
+
+      // 門牌
+      let address = '';
+      const doorLine = markLines.find((t) => /門牌/.test(t));
+      if (doorLine) address = doorLine.replace(/^.*門牌/, '');
+      if (!address) address = markLines.find((t) => /(街|路|大道)[一-鿿\d之-]*號/.test(t) && !/地址|權利人|管轄|事務所|列印/.test(t)) || '';
+      address = (address.match(/[一-鿿\d之-]{0,12}(?:街|路|大道)[一-鿿\d之-]*號[一-鿿\d之]{0,6}/) || [''])[0];
+
+      // 地號：4 碼-4 碼（建號是 5 碼-3 碼）
+      let landNo = '';
+      for (const t of scan) {
+        const m = t.match(/(\d{4})[-~_.](\d{4})(?!\d)/);
+        if (m) { landNo = `${Number(m[1])}${Number(m[2]) ? `-${Number(m[2])}` : ''}`; break; }
+      }
+
+      // 面積：總面積（沒有就把層次面積加起來）＋附屬建物
+      let area = 0;
+      const areaLine = scan.find((t) => /總面[積生]/.test(t) && /平方/.test(t));
+      const am = areaLine && areaLine.match(/(\d+(?:\.\d+)?)平方公/);
+      if (am) area = Number(am[1]);
+      if (!area) {
+        const seen = new Set();
+        scan.forEach((t) => {
+          if (!/層次面積/.test(t)) return;
+          (t.match(/(\d+(?:\.\d+)?)\s*平方/g) || []).forEach((x) => seen.add(x.replace(/\s*平方/, '')));
+        });
+        seen.forEach((x) => { area += Number(x); });
+      }
+      const annexSeen = new Set();
+      scan.forEach((t) => {
+        if (!/附屬建物|陽[臺台]|雨遮|露[臺台]|花[臺台]/.test(t) || /總面積|層次面積/.test(t)) return;
+        const m = t.match(/(\d+(?:\.\d+)?)\s*平方/);
+        if (m) annexSeen.add(m[1]);
+      });
+      let annex = 0;
+      annexSeen.forEach((x) => { annex += Number(x); });
+
+      // 共有部分：建號、面積、權利範圍
+      // 共有部分：建號、面積、權利範圍可能分散在相鄰幾列，也常被 OCR 讀壞
+      let common = null;
+      const commonAt = scan.findIndex((t) => /共有部分/.test(t));
+      if (commonAt >= 0) {
+        const near = scan.slice(commonAt, commonAt + 4).join(' ');
+        const no = near.match(/(\d{4,5})[-~_.](\d{3})(?!\d)/);
+        const ar = near.match(/(\d+\.\d+)\s*平方/);
+        const sh = near.match(/(\d+)分之(\d+)/);
+        const share = sh && Number(sh[1]) > 0 ? Number(sh[2]) / Number(sh[1]) : null;
+        if (no || ar) {
+          // 面積或權利範圍任一沒讀到就不算坪數，免得填錯；建號還是帶出來
+          common = { buildNo: no ? `${Number(no[1])}${Number(no[2]) ? `-${Number(no[2])}` : ''}` : '', area: ar && share !== null && share <= 1 ? Number(ar[1]) * share : 0 };
+        }
+      }
+
+      const completed = dateOf(scan.filter((t) => /建築完成|完成日期/.test(t)));
+      const usage = mode(scan.map((t) => (t.match(USAGE_RE) || [''])[0]));
+
+      // 取得日期與原因（所有權部）
+      const acquired = dateOf(ownLines.filter((t) => /登記日期/.test(t)))
+        || dateOf(ownLines, /列印時間|查詢時間|確定期日|清償日期/);
+      const reason = mode(ownLines.map((t) => (t.match(/(買賣|贈與|繼承|拍賣|判決|分割|交換|信託|第一次登記)/) || [''])[0]));
+
+      // 抵押設定：一頁一筆
+      const liens = [];
+      b.lienPages.forEach((lines) => {
+        const amtLine = lines.find((t) => /新[臺台]幣[\d,]+元/.test(t));
+        const amt = amtLine && amtLine.match(/新[臺台]幣([\d,]+)元/);
+        const amount = amt ? Number(amt[1].replace(/,/g, '')) : null;
+        if (amount !== null && liens.some((l) => l.amount === amount)) return;
+        // 金額沒讀到也要留一行：漏一筆設定會把餘值算多，比留個問號危險
+        if (amount === null && !/最高限額抵押|抵押權/.test(lines.join(''))) return;
+        const date = dateOf(lines.filter((t) => /登記日期/.test(t)))
+          || dateOf(lines, /確定期日|清償日期|收件年期|列印時間|查詢時間/);
+        const bankLine = lines.find((t) => matchBank(t) && !/地址|路|街/.test(t)) || lines.find((t) => matchBank(t));
+        liens.push({ date, bank: bankLine ? matchBank(bankLine) : '', amount });
+      });
+      liens.sort((x, y) => (x.date && y.date ? x.date.text.localeCompare(y.date.text) : 0) || (y.amount || 0) - (x.amount || 0));
+      // 同一棟通常就一家銀行；某筆沒讀到名字時沿用（只有一家時才敢）
+      const banks = [...new Set(liens.map((l) => l.bank).filter(Boolean))];
+      if (banks.length === 1) liens.forEach((l) => { l.bank = banks[0]; });
+
+      const notes = [];
+      if (completed) { notes.push(`（屋齡：約${nowYear - completed.y}年）`); notes.push(`建物${completed.text}完工`); }
+      if (acquired) notes.push(`${acquired.text}${reason || ''}取得`);
+      if (usage) notes.push(`用途：${usage}`);
+      // 謄本上有附屬建物（陽臺、雨遮）但沒讀到面積時要講，不然坪數會少算
+      if (!annex && scan.some((t) => /附屬建物|陽[臺台]|雨遮/.test(t))) notes.push('※ 附屬建物面積沒讀到，坪數請核對謄本');
+
+      return {
+        owner: '',
+        address: address ? `${city}${district}${address}` : '',
+        section: `${city}${district}${section}`,
+        landNo,
+        landPing: '',
+        buildNo: [b.buildNo, common && common.buildNo ? `（共有 ${common.buildNo}）` : ''].filter(Boolean).join('\n'),
+        buildPing: [ping(area + annex), common ? ping(common.area) : ''].filter(Boolean).join('\n'),
+        marketValue: '',
+        liens: liens.map((l, i) => `${l.date ? l.date.text : ''}-H${i + 1} ${l.bank} ${l.amount === null ? '？仟（金額沒讀到，請補）' : `${Math.round(l.amount / 1000).toLocaleString('en-US')}仟`}`.replace(/\s+/g, ' ').trim()).join('\n'),
+        lienTotal: '',
+        note: notes.join('\n'),
+      };
+    }).filter((r) => r.buildNo);
+
+    return { rows, count: rows.length, ownerMasked: true };
+  }
+
   /* ---------------- 讀檔 ---------------- */
 
   function parseCsv(text) {
@@ -1085,6 +1455,13 @@
             const again = await global.Ocr.recognizeText(canvas, progress, { tessedit_pageseg_mode: '4' });
             if (is401Text(again) && parse401Text(again, name)) ocr = again;
           }
+          const flatOcr = ocr.replace(/\s/g, '');
+          if (/電傳資訊|建物標示部|建物所有權部|建物他項權利|登記謄本|建物謄本|土地謄本/.test(flatOcr) || /謄本|電傳/.test(name)) {
+            const pages = await ocrTranscriptPages(buffer.slice(0), Math.min(peek.total || 1, 40), say);
+            const est = parseTranscript(pages);
+            if (est.rows.length) return [{ name, rows: [], estate: est }];
+            throw new Error(`${name} 看起來是謄本，但沒讀到建物資料`);
+          }
           if (is401Text(ocr) || /401|營業稅/.test(name)) text401 = ocr;
           else if (/營利事業所得稅|結算申報|申報書/.test(ocr) || /營所稅|結算申報/.test(name)) {
             // 掃描的營所稅申報書：逐頁辨識到找到「損益及稅額計算表」和「資產負債表」為止（最多 6 頁）
@@ -1123,6 +1500,11 @@
     const tables = await readFile(file, onProgress, opts);
     const found = [];
     tables.forEach((t) => {
+      if (t.estate) {
+        const block = { section: 'estates', estate: t.estate, header: null, rows: [], sheet: '謄本' };
+        found.push({ id: `${found.length + 1}`, source: `建物謄本，${t.estate.count} 棟（所有權人謄本上遮蔽、市價謄本沒有，請自己補；坐落、坪數請核對）`, section: 'estates', block, preview: mapBlock(block, 'estates') });
+        return;
+      }
       if (t.finOne) {
         const f = t.finOne;
         const kindName = { bs: '資產負債表', is: '損益表', tax: '營所稅申報書' }[f.kind];
@@ -1246,5 +1628,5 @@
     return added;
   }
 
-  global.DossierImport = { analyze, apply, mapBlock, splitBlocks, readFile, parseCsv, finKeyOf, matchHeader, norm, parseJcic, shortBank, pdfTextLines, parse401Text, parseBalanceSheet, parseIncomeStatement, parseTaxReturn, slotForPeriod, settleSurplus };
+  global.DossierImport = { analyze, apply, mapBlock, splitBlocks, readFile, parseCsv, finKeyOf, matchHeader, norm, parseJcic, shortBank, pdfTextLines, parse401Text, parseBalanceSheet, parseIncomeStatement, parseTaxReturn, slotForPeriod, settleSurplus, parseTranscript, ocrTranscriptPages };
 })(window);

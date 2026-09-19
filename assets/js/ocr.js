@@ -78,6 +78,26 @@
     }
   }
 
+  /**
+   * 辨識並回傳文字＋每個字的位置（給謄本這種「標籤｜值」表格用：先找標籤在哪，再讀右邊那一格）。
+   * rect = { top, left, width, height } 只辨識那一塊。
+   */
+  async function recognizeData(source, params, rect) {
+    const worker = await getWorker();
+    if (params) await worker.setParameters(params);
+    try {
+      const opts = rect ? { rectangle: rect } : {};
+      const { data } = await worker.recognize(source, opts, { text: true, blocks: true });
+      let words = data.words || [];
+      if (!words.length && data.blocks) {
+        data.blocks.forEach((b) => (b.paragraphs || []).forEach((pg) => (pg.lines || []).forEach((ln) => (ln.words || []).forEach((w) => words.push(w)))));
+      }
+      return { text: data.text || '', words: words.map((w) => ({ text: w.text, bbox: w.bbox })) };
+    } finally {
+      if (params) await worker.setParameters(Object.fromEntries(Object.keys(params).map((k) => [k, k === 'tessedit_pageseg_mode' ? '3' : ''])));
+    }
+  }
+
   /* ------------------------------------------------------------------
    * 解析 104 公司頁文字
    * ------------------------------------------------------------------ */
@@ -204,5 +224,5 @@
     return bits.join('');
   }
 
-  global.Ocr = { recognize, parse104, describe, parsePhone, capitalToThousands, recognizeText };
+  global.Ocr = { recognize, parse104, describe, parsePhone, capitalToThousands, recognizeText, recognizeData };
 })(window);
