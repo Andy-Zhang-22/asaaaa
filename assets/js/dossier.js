@@ -560,7 +560,7 @@
       if (act === 'export-json') {
         const blob = new Blob([JSON.stringify(await Store.exportAll())], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
-        const a = el('a', { href: url, download: `客戶管理備份_${new Date().toISOString().slice(0, 10)}.json` });
+        const a = el('a', { href: url, download: `徵信資料備份_${new Date().toISOString().slice(0, 10)}.json` });
         document.body.append(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
@@ -613,7 +613,7 @@
       return;
     }
     if (params.get('customer')) {
-      // 從客戶管理頁過來：已有就開啟，沒有就用客戶資料建一份
+      // 網址帶 customer 參數（舊的客戶管理頁已移除，留著相容）
       const cid = params.get('customer');
       const existing = state.dossiers.filter((d) => d.customerId === cid).sort((a, b) => b.updatedAt - a.updatedAt)[0];
       if (existing) { await openDossier(existing.id); return; }
