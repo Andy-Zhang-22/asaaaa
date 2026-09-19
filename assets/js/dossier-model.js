@@ -242,13 +242,20 @@
     return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
   }
 
+  /** 匯入時可以放的段落（銷貨、進貨分開），跟編輯頁的分頁不同。 */
+  const IMPORT_TARGETS = [
+    { key: 'debts', label: '① 金融負債' }, { key: 'sales', label: '② 銷貨廠商' }, { key: 'purchases', label: '② 進貨廠商' },
+    { key: 'vat', label: '③ 進銷貨比較' }, { key: 'estates', label: '④ 不動產' }, { key: 'fin', label: '⑤ 財務分析' },
+  ];
+  /** 某個匯入段落屬於編輯頁的哪個分頁。 */
+  const tabOf = (section) => (section === 'sales' || section === 'purchases' ? 'vendors' : section);
+
   const SECTIONS = [
     { key: 'debts', title: '金融負債表明細', short: '① 金融負債' },
-    { key: 'sales', title: '銷貨廠商資料', short: '② 銷貨廠商' },
-    { key: 'purchases', title: '進貨廠商資料', short: '③ 進貨廠商' },
-    { key: 'vat', title: '同期進銷貨比較表', short: '④ 進銷貨比較' },
-    { key: 'estates', title: '不動產資料', short: '⑤ 不動產' },
-    { key: 'fin', title: '乙表 財務分析', short: '⑥ 財務分析' },
+    { key: 'vendors', title: '進銷貨廠商明細', short: '② 進銷貨廠商', parts: ['sales', 'purchases'] },   // 客戶多半一起給，編輯頁放同一頁；Excel 仍是兩張工作表
+    { key: 'vat', title: '同期進銷貨比較表', short: '③ 進銷貨比較' },
+    { key: 'estates', title: '不動產資料', short: '④ 不動產' },
+    { key: 'fin', title: '乙表 財務分析', short: '⑤ 財務分析' },
   ];
 
   /** 各段落有沒有填東西，列表頁用來顯示完成度。 */
@@ -259,6 +266,7 @@
       debts: rowsFilled(d.debts && d.debts.rows),
       sales: rowsFilled(d.sales && d.sales.rows) || !!(d.sales && d.sales.summary),
       purchases: rowsFilled(d.purchases && d.purchases.rows) || !!(d.purchases && d.purchases.summary),
+      vendors: rowsFilled(d.sales && d.sales.rows) || !!(d.sales && d.sales.summary) || rowsFilled(d.purchases && d.purchases.rows) || !!(d.purchases && d.purchases.summary),
       vat: vatFilled(d.vat) || !!(d.vat && d.vat.summary),
       estates: rowsFilled(d.estates && d.estates.rows),
       fin: [0, 1, 2, 3].some((i) => hasAnyInput(raw, i)),
@@ -267,7 +275,7 @@
 
   global.DossierModel = {
     num, DEBT_TYPES, DEBT_COLUMNS, SALES_COLUMNS, PURCHASE_COLUMNS, ESTATE_COLUMNS,
-    BS_ITEMS, IS_ITEMS, FIN_ITEMS, PERIODS, SECTIONS,
+    BS_ITEMS, IS_ITEMS, FIN_ITEMS, PERIODS, SECTIONS, IMPORT_TARGETS, tabOf,
     VAT_PERIODS, VAT_YEARS, VAT_KINDS, blankVat, defaultVatYears, vatTotal, vatFilled,
     computeFin, isInput, lienTotalOf, residualOf, blankDossier, defaultPeriods, sectionFilled,
   };

@@ -43,6 +43,9 @@
   width: 100%; min-height: 70px; resize: vertical; padding: 9px 11px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; margin-bottom: 12px;
 }
+.section-part { margin-top: 6px; }
+.section-part + .section-part { margin-top: 22px; padding-top: 16px; border-top: 1px dashed var(--border); }
+.section-part h3 { font-size: 14.5px; margin-bottom: 8px; }
 .section-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
 .section-actions .muted { font-size: 12.5px; }
 
