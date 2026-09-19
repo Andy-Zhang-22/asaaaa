@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-104';
+  const APP_VERSION = '20260919-105';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -2408,7 +2408,7 @@ export default {
   };
 
   /** 一批客戶逐一查商工登記，回傳差異與失敗清單；不寫入。 */
-  async function registryBatch(targets, { useMirror, onProgress, isCancelled, delay = 300 }) {
+  async function registryBatch(targets, { useMirror, onProgress, isCancelled, onEach, delay = 300 }) {
     const diffs = [];
     const failures = [];
     const checked = [];   // 每一筆查成功的都在這裡，含沒差異的；變更登記的分類靠它
@@ -2430,9 +2430,14 @@ export default {
           // 查到不一致就更新，不分「只補空白」——查到了不寫入，等於白查
           if (next && next !== now) changes[key] = { from: now, to: next };
         });
-        checked.push({ rec, r, changes: all });
-        if (Object.keys(changes).length) diffs.push({ rec, r, changes, status: res.data.status });
+        const item = { rec, r, changes: all };
+        checked.push(item);
+        const diff = Object.keys(changes).length ? { rec, r, changes, status: res.data.status } : null;
+        if (diff) diffs.push(diff);
+        // 交給呼叫端決定要不要馬上寫入：背景跑很久，寫在最後的話關掉分頁就整批白做
+        if (onEach) await onEach({ ok: true, checked: item, diff });
       }
+      if (!res.ok && onEach) await onEach({ ok: false, failure: failures[failures.length - 1] });
       // 一筆一筆送，別對政府網站造成負擔；連續失敗太多就是被擋了，不用再耗
       if (failures.length >= 8 && diffs.length === 0 && failures.length === i + 1) break;
       if (delay) await new Promise((done) => setTimeout(done, delay));
@@ -2545,22 +2550,125 @@ export default {
     const today = todayISO();
     if (registryPref('registry-auto-last') === today) return;
     registryPref('registry-auto-last', today);   // 先記，避免同一天多個分頁重複跑
-    const targets = state.records.map((rec) => ({ rec, r: view(rec) }));
-    const { diffs, failures, checked } = await registryBatch(targets, {
-      useMirror: registryPref('registry-mirror') === '1', delay: 300,
+    await runRegistryJob({
+      targets: state.records.map((rec) => ({ rec, r: view(rec) })),
+      useMirror: registryPref('registry-mirror') === '1',
+      auto: true,
     });
-    if (!checked.length && failures.length && failures.length >= Math.min(8, targets.length)
-      && !failures.some((f) => lookedUpButMissing(f.reason))) {
-      registryPref('registry-auto-summary', `全部失敗（${failures[0].reason.split('\n')[0]}）`);
-      toast('商工登記自動更新失敗：來源連不上，明天再試。細節在選單「從商工登記更新公司資料」。');
+  }
+
+  /*
+   * 商工登記更新改成背景工作。
+   *
+   * 882 筆要跑四分多鐘，以前得把設定視窗開著等——那段時間沒辦法打電話。
+   * 現在按下去就把視窗收起來，底部留一條進度，名單照常可以用；查到的差異
+   * 一筆一筆寫進去，中途關掉分頁也只損失還沒查到的那些。
+   */
+  const registryJob = { running: false, cancelled: false, done: 0, total: 0, company: '', updated: 0, result: null, auto: false };
+
+  function renderRegistryBar() {
+    const bar = $('#registryBar');
+    if (!bar) return;
+    const j = registryJob;
+    const show = j.running || !!j.result;
+    bar.hidden = !show;
+    document.body.classList.toggle('has-registry-bar', show);
+    if (!show) return;
+    $('#registryFill').style.width = `${j.total ? Math.round((j.done / j.total) * 100) : 0}%`;
+    const stopBtn = $('#btnRegistryStop');
+    const closeBtn = $('#btnRegistryClose');
+    if (j.running) {
+      $('#registryBarTitle').textContent = `商工登記更新中 ${j.done} / ${j.total}`;
+      $('#registryBarNote').textContent = j.company ? `目前：${j.company}　已更新 ${j.updated} 筆` : '準備中…';
+      stopBtn.hidden = false;
+      stopBtn.textContent = j.cancelled ? '停止中…' : '停止';
+      stopBtn.disabled = j.cancelled;
+      closeBtn.hidden = true;
+    } else {
+      const r = j.result;
+      $('#registryBarTitle').textContent = r.stopped ? '商工登記更新已停止' : '商工登記更新完成';
+      $('#registryBarNote').textContent = r.sourceDown
+        ? '每一筆都失敗，來源被擋住了，不是資料的問題。'
+        : `查了 ${r.checkedCount} 筆，更新 ${r.updated} 筆，${r.failed} 筆查不到。`;
+      stopBtn.hidden = true;
+      closeBtn.hidden = false;
+    }
+    stopBtn.onclick = () => { registryJob.cancelled = true; renderRegistryBar(); };
+    closeBtn.onclick = () => { registryJob.result = null; renderRegistryBar(); };
+  }
+
+  /**
+   * 跑一次商工登記更新。手動「全部更新」與每天自動更新都走這裡。
+   * 同一時間只跑一個；查到的結果一筆一筆寫入，最後才重繪名單（中途重繪會打斷正在看的畫面）。
+   */
+  async function runRegistryJob({ targets, useMirror, auto }) {
+    if (registryJob.running) { toast('商工登記更新正在進行中'); return null; }
+    Object.assign(registryJob, { running: true, cancelled: false, done: 0, total: targets.length, company: '', updated: 0, result: null, auto: !!auto });
+    renderRegistryBar();
+    let wrote = 0;
+    const { diffs, failures, checked } = await registryBatch(targets, {
+      useMirror,
+      onProgress: (i, n, r) => { registryJob.done = i; registryJob.company = r.company; renderRegistryBar(); },
+      isCancelled: () => registryJob.cancelled,
+      onEach: async (item) => {
+        if (!item.ok) return;   // 查不到的最後再一起記，才分得出「來源掛了」
+        await recordRegistryChecks([item.checked], []);
+        if (item.diff) { await applyRegistryDiffs([item.diff]); registryJob.updated += 1; }
+        wrote += 1;
+        renderRegistryBar();
+      },
+    });
+    // 全部都失敗是來源掛了，不把每一家都記成「查不到」
+    const sourceDown = !checked.length && failures.length === targets.length && !!targets.length
+      && !failures.some((f) => lookedUpButMissing(f.reason));
+    if (!sourceDown && failures.length) await recordRegistryChecks([], failures);
+    if (wrote || (!sourceDown && failures.length)) { await reload(); render(); scheduleSync(); }
+
+    registryJob.running = false;
+    registryJob.result = {
+      at: Date.now(), stopped: registryJob.cancelled, sourceDown,
+      checkedCount: checked.length, updated: diffs.length, failed: failures.length,
+      diffs: diffs.slice(0, 20), diffTotal: diffs.length, reason: failures.length ? failures[0].reason : '',
+    };
+    renderRegistryBar();
+    registryPref('registry-auto-summary', sourceDown
+      ? `全部失敗（${String(failures[0].reason || '').split('\n')[0]}）`
+      : `查 ${targets.length} 筆，更新 ${diffs.length} 筆，${failures.length} 筆查不到`);
+    if (sourceDown) toast('商工登記更新失敗：來源連不上。細節在選單「從商工登記更新公司資料」。');
+    else if (!auto || diffs.length) toast(diffs.length ? `商工登記更新：已更新 ${diffs.length} 筆` : '商工登記更新：資料都是最新的');
+    return registryJob.result;
+  }
+
+  /** 把背景工作的進度或結果畫進設定視窗（視窗關著時不影響工作）。 */
+  function renderRegistryRunResult(box) {
+    box.textContent = '';
+    const note = (text, cls) => box.append(el('p', { className: cls || 'rule-note', textContent: text }));
+    if (registryJob.running) {
+      note(`更新進行中 ${registryJob.done} / ${registryJob.total}，已更新 ${registryJob.updated} 筆。`
+        + '關掉這個視窗也會繼續跑，進度在畫面下方。', 'rule-verdict is-ok');
       return;
     }
-    // 查不到的也記下來，詳細頁才分得出「還沒查」和「查了查不到」
-    if (checked.length || failures.length) await recordRegistryChecks(checked, failures);
-    if (diffs.length) await applyRegistryDiffs(diffs);
-    if (checked.length || failures.length) { await reload(); render(); scheduleSync(); }
-    registryPref('registry-auto-summary', `查 ${targets.length} 筆，更新 ${diffs.length} 筆，${failures.length} 筆查不到`);
-    toast(diffs.length ? `商工登記自動更新：已更新 ${diffs.length} 筆` : '商工登記自動更新：資料都是最新的');
+    const r = registryJob.result;
+    if (!r) return;
+    if (r.sourceDown) {
+      note('上次更新：每一筆都失敗，代表來源被擋住了，不是資料的問題。', 'rule-verdict is-fail');
+      if (r.reason) note(r.reason);
+      return;
+    }
+    note(`上次更新（${r.stopped ? '中途停止' : '已完成'}）：查了 ${r.checkedCount} 筆，`
+      + `${r.updated} 筆跟登記不一致、已直接更新，${r.failed} 筆查不到或失敗。`, 'rule-verdict is-ok');
+    if (!r.diffTotal) { note('登記資料跟名單一致，沒有要更新的。'); return; }
+    r.diffs.forEach((d) => {
+      const dl = el('dl');
+      Object.entries(d.changes).forEach(([key, ch]) => {
+        const label = (REGISTRY_FIELDS.find(([k]) => k === key) || [, key])[1];
+        dl.append(el('dt', { textContent: label }), el('dd', { textContent: `${ch.from || '（空）'}　→　${ch.to}` }));
+      });
+      box.append(el('div', { className: 'import-preview' }, [el('strong', { textContent: d.company || d.r.company }), dl]));
+    });
+    if (r.diffTotal > r.diffs.length) note(`※ 另外還有 ${r.diffTotal - r.diffs.length} 筆有差異，這裡只列前 ${r.diffs.length} 筆。`);
+    note('以上都已更新到客戶欄位並記成「已修改」，每一筆都可以在詳細頁按「還原成名單原始內容」退回。'
+      + '篩選區的「變更登記」也已依此分類。');
   }
 
   function openRegistryUpdate() {
@@ -2871,8 +2979,7 @@ export default {
       runAll.disabled = mapped === 0;
     };
 
-    let cancelled = false;
-    stop.onclick = () => { cancelled = true; stop.textContent = '停止中…'; };
+    stop.onclick = () => { registryJob.cancelled = true; stop.textContent = '停止中…'; renderRegistryBar(); };
 
     runAll.onclick = async () => {
       const blanksOnly = scope.value === 'blank';
@@ -2881,59 +2988,22 @@ export default {
         alert(blanksOnly ? '名單裡沒有欄位空白的客戶。' : '名單是空的。');
         return;
       }
+      if (registryJob.running) { toast('已經在更新了，進度在畫面下方'); return; }
       if (!confirm(`要查 ${all.length} 筆嗎？\n\n`
-        + '會一筆一筆送出（每筆間隔 0.3 秒，避免對政府網站造成負擔），中途可以按停止。\n\n'
+        + '會在背景一筆一筆送出（每筆間隔 0.3 秒，避免對政府網站造成負擔），'
+        + '這個視窗會自動收起來，你可以繼續打電話；進度在畫面下方，隨時可以按停止。\n\n'
         + '查到跟登記不一致的欄位（統編、資本額、負責人、登記地址、成立年）會直接更新，'
         + '記成「已修改」，每一筆都可以在詳細頁還原。')) return;
-      cancelled = false;
-      tryOne.disabled = true; runAll.disabled = true; stop.hidden = false;
-      result.textContent = '';
-      const progress = el('p', { className: 'rule-verdict is-ok', textContent: '準備中…' });
-      result.append(progress);
-
-      const { diffs, failures, checked } = await registryBatch(all, {
-        useMirror: mirror.checked,
-        onProgress: (i, n, r) => { progress.textContent = `查詢中 ${i} / ${n}：${r.company}`; },
-        isCancelled: () => cancelled,
-      });
-      // 查到的結果記成「變更登記」分類，差異直接更新到欄位；兩件事做完再重繪一次。
-      // 全部都失敗是來源掛了，不把每一家都記成「查不到」
-      const sourceDown = !checked.length && failures.length === all.length && all.length && !failures.some((f) => lookedUpButMissing(f.reason));
-      if (!sourceDown && (checked.length || failures.length)) await recordRegistryChecks(checked, failures);
-      if (diffs.length) await applyRegistryDiffs(diffs);
-      if (!sourceDown && (checked.length || failures.length)) { await reload(); render(); scheduleSync(); }
-
-      stop.hidden = true; stop.textContent = '停止'; tryOne.disabled = false;
-      result.textContent = '';
-      // 全部都失敗，幾乎可以確定是被擋掉，而不是資料真的都查不到
-      if (!diffs.length && failures.length === all.length && all.length) {
-        note('全部查詢都失敗，代表來源被擋住了，不是資料的問題。', 'rule-verdict is-fail');
-        note(failures[0].reason);
-        return;
-      }
-      note(`查完 ${all.length} 筆：${diffs.length} 筆跟登記不一致、已直接更新，`
-        + `${failures.length} 筆查不到或失敗。`,
-        'rule-verdict is-ok');
-      if (!diffs.length) {
-        note('登記資料跟名單一致，沒有要更新的。');
-        return;
-      }
-
-      diffs.slice(0, 20).forEach((d) => {
-        const dl = el('dl');
-        Object.entries(d.changes).forEach(([key, ch]) => {
-          const label = (REGISTRY_FIELDS.find(([k]) => k === key) || [, key])[1];
-          dl.append(el('dt', { textContent: label }),
-            el('dd', { textContent: `${ch.from || '（空）'}　→　${ch.to}` }));
-        });
-        result.append(el('div', { className: 'import-preview' },
-          [el('strong', { textContent: d.company || d.r.company }), dl]));
-      });
-      if (diffs.length > 20) note(`※ 另外還有 ${diffs.length - 20} 筆有差異，這裡只列前 20 筆。`);
-      note('以上都已更新到客戶欄位並記成「已修改」，每一筆都可以在詳細頁按「還原成名單原始內容」退回。'
-        + '篩選區的「變更登記」也已依此分類。');
-      toast(`已依登記資料更新 ${diffs.length} 筆`);
+      $('#editor').hidden = true;
+      toast('已在背景開始更新，可以繼續用名單');
+      runRegistryJob({ targets: all, useMirror: mirror.checked })
+        .then((res) => { if (res) renderRegistryRunResult(result); })
+        .catch((err) => { console.error('商工登記更新失敗', err); toast('商工登記更新失敗，請看主控台訊息'); });
     };
+
+    // 設定視窗重新打開時，把正在跑的進度或上一次的結果接回來
+    renderRegistryRunResult(result);
+    if (registryJob.running) { tryOne.disabled = true; runAll.disabled = true; stop.hidden = false; }
 
     $('#editor').hidden = false;
   }
@@ -3701,6 +3771,21 @@ export default {
     }
   }
 
+  /*
+   * 徵信資料功能移除後，瀏覽器裡還留著它的資料庫（crm-db）。名單完全用不到，
+   * 留著只是佔空間又沒有介面可以看，所以每台裝置第一次開到新版時清掉一次。
+   * 其他分頁還開著舊版徵信頁時瀏覽器會擋住刪除，那就不記旗標，下次開再試。
+   */
+  function dropOldDossierDb() {
+    try {
+      if (localStorage.getItem('crm-db-dropped') === '1' || !window.indexedDB) return;
+      const req = indexedDB.deleteDatabase('crm-db');
+      req.onsuccess = () => {
+        try { localStorage.setItem('crm-db-dropped', '1'); } catch (e) { /* 無痕模式 */ }
+      };
+    } catch (e) { /* 無痕模式或瀏覽器不給刪，下次再試 */ }
+  }
+
   /* ---------------- 啟動 ---------------- */
 
   async function reload() {
@@ -3931,6 +4016,7 @@ export default {
     }
     prebuildRules();
     checkForUpdate(false);
+    dropOldDossierDb();
     maybeAutoRegistry().catch((err) => console.error('自動更新商工登記失敗', err));
     checkReminders();
     setInterval(checkReminders, 30000);
