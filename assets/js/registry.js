@@ -219,6 +219,8 @@
       '資本總額(元)', '資本總額', '資本額'],
     paidIn: ['Paid_In_Capital_Amount', 'Paid_In_Capital_Total_Amount', '實收資本額(元)', '實收資本額'],
     setupDate: ['Company_Setup_Date', 'Business_Setup_Date', 'Setup_Date', '核准設立日期', '設立日期'],
+    changeDate: ['Change_Of_Approval_Data', 'Change_Of_Approval_Date', 'Last_Change_Date',
+      '最後核准變更日期', '最近核准變更日期'],
   };
 
   // g0v 鏡像的「核准設立日期」是 {year, month, day} 物件、「公司名稱」偶爾是陣列，
@@ -257,7 +259,15 @@
 
   function mapRow(row) {
     if (!row || typeof row !== 'object') return null;
-    const capital = pick(row, FIELD_CANDIDATES.capital) || pick(row, FIELD_CANDIDATES.paidIn);
+    /*
+     * 資本總額與實收資本額是兩個數字，中租的微企／一般組／大企部是看「資本總額」分。
+     * 以前只收一個值（總額沒有就拿實收頂），名單上那一格到底是哪一種說不準——
+     * 名單本來帶的是實收（491,600），查完被總額（1,200,000）蓋過去，就變成假的增資。
+     * 現在兩個分開收，總額缺的時候才用實收頂著。
+     */
+    const total = pick(row, FIELD_CANDIDATES.capital);
+    const paid = pick(row, FIELD_CANDIDATES.paidIn);
+    const capital = total || paid;
     return {
       taxId: pick(row, FIELD_CANDIDATES.taxId),
       name: pick(row, FIELD_CANDIDATES.name),
@@ -266,6 +276,9 @@
       address: pick(row, FIELD_CANDIDATES.address),
       capital: toThousands(capital),
       capitalRaw: capital,
+      capitalPaid: toThousands(paid),
+      capitalPaidRaw: paid,
+      regChanged: tidyDate(pick(row, FIELD_CANDIDATES.changeDate)),
       founded: tidyDate(pick(row, FIELD_CANDIDATES.setupDate)),
       unmappedKeys: Object.keys(row).filter((k) => !Object.values(FIELD_CANDIDATES).flat().includes(k)),
     };
@@ -356,8 +369,20 @@
       err.body = describe();
       throw err;
     }
-    // 政府這支 API 查無資料時回的是空白（Content-Type 仍是 JSON），那是「有收到、查無資料」
-    if (!text.trim()) return [];
+    /*
+     * 政府這支 API 查無資料時回的是空白，而且 Content-Type 仍是 JSON，那是
+     * 「有收到、查無資料」。但空白配上 text/html 這種型別就不是查無資料，是中間
+     * 有人（代理、入口網、防火牆）把回應吃掉了——那種要當失敗報出來，連 Content-Type
+     * 一起講，不然畫面只會寫「查無資料」，查半天以為是統編打錯。
+     */
+    if (!text.trim()) {
+      if (!/json|^\(沒有/i.test(type)) {
+        const err = new Error('空白回應');
+        err.body = describe();
+        throw err;
+      }
+      return [];
+    }
     try {
       return unwrap(JSON.parse(text));
     } catch (e) {

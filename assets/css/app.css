@@ -563,6 +563,11 @@ button, input, select { font: inherit; color: inherit; }
 /* 兩條都出現時，更新提示讓到上面 */
 body.has-registry-bar .update-bar { bottom: 60px; }
 
+.badge-chance-yes { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+.badge-chance-no { border-color: var(--muted); color: var(--muted); }
+/* 有機會／無機會：標起來的那顆填色，一眼看得出現在是哪一種 */
+.chance-btn.is-on.chance-yes { border-color: var(--ok); color: #fff; background: var(--ok); }
+.chance-btn.is-on.chance-no { border-color: var(--muted); color: #fff; background: var(--muted); }
 .badge-priority { border-color: var(--ok); color: var(--ok); font-weight: 600; }
 .badge-outside { border-color: var(--danger); color: var(--danger); }
 

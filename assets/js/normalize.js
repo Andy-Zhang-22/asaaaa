@@ -941,12 +941,18 @@
     none: '沒有跟中租往來',
   };
 
-  /** 取最新一期訪談：有日期的取最晚那筆，全都沒日期就取最後一段。 */
+  /**
+   * 取最新一期訪談：有日期的取最晚那筆，全都沒日期就取最後一段。
+   *
+   * 同一天記兩則時要取「寫在上面」的那則：訪談內容的慣例是新的在最前面，
+   * 所以日期一樣的話，越上面越新。以前用 `>=` 比較，同日的下一則（比較舊的那則）
+   * 會蓋過上面那則——今天先記「解約」、再記「又有新本餘」，往來情形卻還停在解約。
+   */
   function latestNote(notesRaw) {
     const entries = parseNotes(notesRaw);
     if (!entries.length) return null;
     const dated = entries.filter((e) => e.date);
-    if (dated.length) return dated.reduce((a, b) => (b.date >= a.date ? b : a));
+    if (dated.length) return dated.reduce((a, b) => (b.date > a.date ? b : a));
     return entries[entries.length - 1];
   }
 
@@ -1283,6 +1289,7 @@
     ['owner', /^(代表人姓名|代表人|負責人姓名|負責人)$/],
     ['address', /^(公司所在地|商業所在地|地址|登記地址|營業地址)$/],
     ['founded', /^(核准設立日期|設立日期|成立日期|核准設立)$/],
+    ['changed', /^(最後核准變更日期|最近核准變更日期|最後變更日期)$/],
     ['phone', /^(電話|聯絡電話|公司電話)$/],
     ['industry', /^(產業別|營業項目|行業)$/],
   ];
@@ -1309,18 +1316,33 @@
     if (got.address) out.address = got.address;
     if (got.phone) out.phoneRaw = got.phone;
     if (got.industry) out.industry = got.industry;
-    // 資本額：優先資本總額，其次實收資本額；登記資料是「元」，網站用「仟元」
-    const capRaw = got.capitalTotal || got.capitalPaid || got.capitalPlain || '';
-    const capNum = Number(capRaw.replace(/[^\d.]/g, ''));
-    if (capRaw && capNum > 0) {
-      const isYuan = got.capitalTotal || got.capitalPaid || /元/.test(capRaw) || capNum >= 1000000;
-      out.capital = Math.round(isYuan ? capNum / 1000 : capNum).toLocaleString('en-US');
-    }
+    /*
+     * 資本額：名單上的「資本總額」用來分微企／一般組／大企部，實收資本額另外存一格。
+     * 登記資料是「元」，網站用「仟元」。資本總額沒有就拿實收頂著（分級總比空白好）。
+     */
+    const toThousands = (raw) => {
+      const n = Number(String(raw || '').replace(/[^\d.]/g, ''));
+      if (!raw || !(n > 0)) return '';
+      const isYuan = /元/.test(raw) || n >= 1000000;
+      return Math.round(isYuan ? n / 1000 : n).toLocaleString('en-US');
+    };
+    const total = toThousands(got.capitalTotal || got.capitalPlain || '');
+    const paid = toThousands(got.capitalPaid || '');
+    if (total || paid) out.capital = total || paid;
+    if (paid) out.capitalPaid = paid;
     if (got.founded) {
       const y = got.founded.match(/(\d{4})\s*年?/);
       const roc = got.founded.match(/^(\d{2,3})[\/年]/);
       if (y) out.founded = y[1];
       else if (roc) out.founded = String(+roc[1] + 1911);
+    }
+    // 最後核准變更日期：登記頁寫民國（114年07月16日），存成跟其他日期一樣的西元格式
+    if (got.changed) {
+      const roc = got.changed.match(/^(\d{2,3})[\/年-](\d{1,2})[\/月-](\d{1,2})/);
+      const ad = got.changed.match(/^(\d{4})[\/年-](\d{1,2})[\/月-](\d{1,2})/);
+      const pad = (v) => String(v).padStart(2, '0');
+      if (ad) out.regChanged = `${ad[1]}/${pad(ad[2])}/${pad(ad[3])}`;
+      else if (roc) out.regChanged = `${+roc[1] + 1911}/${pad(roc[2])}/${pad(roc[3])}`;
     }
     return out;
   }

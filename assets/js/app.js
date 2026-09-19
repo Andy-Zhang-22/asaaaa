@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-107';
+  const APP_VERSION = '20260919-108';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -18,6 +18,15 @@
     other: '其他', none: '無變更', unchecked: '未查核',
   };
   const REG_KIND_ORDER = ['capitalUp', 'capitalDown', 'address', 'owner', 'other', 'none', 'unchecked'];
+  /*
+   * 有沒有機會：業務自己判斷的，不是從訪談內容猜的。
+   *
+   * 「有意願給資料評估」這種判斷只有打過電話的人知道，任何自動判讀都會猜錯；
+   * 猜錯的後果是業務照著錯的名單打，比沒有這個欄位還糟。所以只收手動標記，
+   * 沒標的一律算「未判斷」，不預設成無機會。
+   */
+  const CHANCE_ORDER = ['yes', 'no', 'none'];
+  const CHANCE_LABEL = { yes: '有機會', no: '無機會', none: '未判斷' };
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
@@ -35,7 +44,7 @@
     sort: 'next',
     limit: PAGE_SIZE,
     hideBlocked: true,
-    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), taxKind: new Set(), phoneKind: new Set(), regChange: new Set(), branch: new Set(), added: new Set(), industry: '' },
+    filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), chance: new Set(), taxKind: new Set(), phoneKind: new Set(), regChange: new Set(), branch: new Set(), added: new Set(), industry: '' },
   };
 
   /* ---------------- 工具 ---------------- */
@@ -340,6 +349,7 @@
       // 客戶也生效，不能只對之後匯入的有效。使用者自己記的結果照樣優先。
       outcome: window.Normalize.normalizeOutcome((mine && mine.outcome) || (lastLog && lastLog.outcome) || window.Normalize.guessOutcome(base.notesRaw || '')),
       starred: !!(mine && mine.starred),
+      chance: (mine && mine.chance) || '',
       edited: !!edits,
       group: groupMap().get(record.id) || '',
     };
@@ -842,7 +852,11 @@
     return SERVICE_CITIES.has(city) ? '服務範圍' : '範圍外';
   }
 
-  /** 資本額（仟元）≤ 10,000 者屬微型企業營業處客戶範疇，見規則頁。 */
+  /**
+   * 客戶規模看的是「資本總額」（仟元），不是實收資本額——中租的微企／一般組／
+   * 大企部是照資本總額分的。名單上的 capital 就是資本總額（查商工登記時，
+   * 總額查不到才會拿實收頂著）。見規則頁。
+   */
   function capitalScale(record) {
     const value = Number(String(record.capital || '').replace(/[^\d.]/g, ''));
     if (!value) return '';
@@ -1024,6 +1038,7 @@
     scale: (r) => r.scale || '未填資本額',
     relation: (r) => r.dealingKind,
     visit: (r) => r.visitKind,
+    chance: (r) => r.chance || 'none',
     taxKind: (r) => r.taxKind,
     phoneKind: (r) => r.phoneKind,
     regChange: (r) => r.regKinds,   // 一家可能屬多類
@@ -1135,7 +1150,7 @@
    * 使用者收合過的記在這台裝置上。
    */
   const GROUPS_KEY = 'filter-groups-open';
-  const MOBILE_DEFAULT_OPEN = new Set(['due', 'outcome', 'branch', 'sort']);
+  const MOBILE_DEFAULT_OPEN = new Set(['due', 'outcome', 'chance', 'branch', 'sort']);
   function initFilterGroups() {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(GROUPS_KEY) || '{}') || {}; } catch (e) { saved = {}; }
@@ -1245,6 +1260,11 @@
     const visitCounts = [['yes', 0], ['no', 0]];
     all.forEach((r) => { visitCounts[r.visitKind === 'yes' ? 0 : 1][1] += 1; });
     chips($('#fltVisit'), 'visit', visitCounts, state.filters.visit, (v) => window.Normalize.VISIT_LABEL[v]);
+
+    // 有沒有機會：固定「有機會 → 無機會 → 未判斷」，含 0 筆
+    const chanceCounts = new Map(CHANCE_ORDER.map((k) => [k, 0]));
+    all.forEach((r) => { const k = r.chance || 'none'; chanceCounts.set(k, (chanceCounts.get(k) || 0) + 1); });
+    chips($('#fltChance'), 'chance', CHANCE_ORDER.map((k) => [k, chanceCounts.get(k)]), state.filters.chance, (v) => CHANCE_LABEL[v]);
 
     // 統編：固定「有統編 → 無統編」兩顆，含 0 筆
     const taxCounts = [['yes', 0], ['no', 0]];
@@ -1356,6 +1376,8 @@
     const top = el('div', { className: 'card-top' }, [
       el('span', { className: 'card-name', textContent: r.company }),
       outcomeBadge(r),
+      r.chance === 'yes' ? el('span', { className: 'badge badge-chance-yes', textContent: '有機會' }) : '',
+      r.chance === 'no' ? el('span', { className: 'badge badge-chance-no', textContent: '無機會' }) : '',
       (r.scale || capitalScale(r)) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
       (r.scale || capitalScale(r)) === '大企部範疇' ? el('span', { className: 'badge badge-large', textContent: '大企部範疇' }) : '',
       r.regChange && r.regKinds[0] !== 'none' && r.regKinds[0] !== 'unchecked'
@@ -1578,12 +1600,35 @@
       const ok = await copyText(r.company);
       toast(ok ? `已複製：${r.company}` : '這個瀏覽器不讓網頁複製，請長按公司名稱手動複製');
     };
+    /*
+     * 有機會／無機會：再按一次同一顆就取消，回到「未判斷」。
+     * 判斷會變（今天說要資料、下週說不用了），沒有取消的路就只能在兩個錯的之間選。
+     */
+    const chanceBtn = (value) => {
+      const on = r.chance === value;
+      const b = el('button', {
+        className: `btn btn-tiny chance-btn${on ? ` is-on chance-${value}` : ''}`,
+        type: 'button',
+        textContent: CHANCE_LABEL[value],
+        title: on ? `再按一次取消，回到未判斷` : `標記為${CHANCE_LABEL[value]}`,
+      });
+      b.onclick = async () => {
+        await saveState(r.id, { chance: on ? '' : value, chanceAt: Date.now() });
+        scheduleSync();
+        render();
+        openDetail(r.id);
+        toast(on ? '已取消，回到未判斷' : `已標記為${CHANCE_LABEL[value]}`);
+      };
+      return b;
+    };
     body.append(el('div', { className: 'detail-head' }, [
       el('div', { className: 'detail-title' }, [el('h2', { textContent: r.company }), copyName]),
       r.aliases.length ? el('p', { className: 'detail-alias', textContent: `關係企業：${r.aliases.join('、')}` }) : '',
       el('div', { className: 'detail-badges' }, [
         outcomeBadge(r),
         r.edited ? el('span', { className: 'badge badge-edited', textContent: '已修改' }) : '',
+        chanceBtn('yes'),
+        chanceBtn('no'),
         editBtn,
         dealBtn,
         deleteBtn(r),
@@ -1644,7 +1689,9 @@
       ['統一編號', r.taxId], ['負責人', r.owner],
       ['KEYMAN', r.keyman ? `${r.keyman}${r.keymanFrom === 'notes' ? `　（${r.keymanInfo.reason}：「${r.keymanInfo.snippet}」）` : r.keymanFrom === 'owner' ? '　（訪談看不出 KEYMAN，先填負責人）' : ''}` : ''],
       ['產業別', r.industry], ['成立年', r.founded],
-      ['資本額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
+      ['資本總額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
+      ['實收資本額', r.capitalPaid ? `${r.capitalPaid} 仟元` : ''],
+      ['最近核准變更', r.regChanged || ''],
       ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) : ''],
       ['最近聯絡', r.lastDate ? dateLabel(r.lastDate) : ''],
       ['名單新增', r.addedDate ? dateLabel(r.addedDate) : ''],
@@ -1689,7 +1736,7 @@
       dl.append(el('dt', { textContent: '變更登記' }));
       const dd = el('dd');
       if (r.regChange) {
-        dd.append(document.createTextNode(`${r.regKinds.map((k) => REG_KIND_LABEL[k]).join('、')}（${dateLabel(r.regChange.date)} 查到）`));
+        dd.append(document.createTextNode(`${r.regKinds.map((k) => REG_KIND_LABEL[k]).join('、')}（${dateLabel(r.regChange.date)} 查到，已套用）`));
         Object.entries(r.regChange.changes || {}).forEach(([key, ch]) => {
           const label = (REGISTRY_FIELDS.find(([k]) => k === key) || [, key])[1];
           dd.append(el('div', { className: 'muted', textContent: `${label}：${ch.from || '（空）'} → ${ch.to}` }));
@@ -1702,10 +1749,24 @@
           dd.append(document.createTextNode('無變更'));
         } else {
           dd.append(document.createTextNode('未查核'));
-          dd.append(el('div', { className: 'muted', textContent: '還沒查過商工登記：每天第一次打開網站會自動查一次，之後新增的客戶要等明天，或用選單「從商工登記更新公司資料」馬上查。' }));
+          dd.append(el('div', { className: 'muted', textContent: '還沒查過商工登記：跨過 0:00 會自動查一次全部名單，之後新增的客戶要等明天，或用選單「從商工登記更新公司資料」馬上查。' }));
         }
       }
-      if (r.regAt) dd.append(el('div', { className: 'muted', textContent: `最近查核 ${dateLabel(new Date(r.regAt).toISOString().slice(0, 10))}` }));
+      /*
+       * 兩個日期常常不一樣，被問過「是不是沒同步更新」：異動日是最後一次真的有變動
+       * 的那天（那天就套用進名單了），查核日是最後一次去對登記的那天。後者比較新
+       * 就等於「後來再查過，沒有新的變動」，講白比較不會被誤會。
+       */
+      if (r.regAt) {
+        const checkedOn = new Date(r.regAt).toISOString().slice(0, 10);
+        const stale = r.regChange && r.regChange.date && r.regChange.date < checkedOn;
+        dd.append(el('div', {
+          className: 'muted',
+          textContent: stale
+            ? `最近查核 ${dateLabel(checkedOn)}：這天再對過一次，跟登記一樣，沒有新的變動`
+            : `最近查核 ${dateLabel(checkedOn)}`,
+        }));
+      }
       dl.append(dd);
     }
     // 名單來源不在詳細頁列出（使用者說看起來亂），卡片上仍有、篩選也有
@@ -1960,7 +2021,9 @@
     ['taxId', '統一編號', 'text'],
     ['grade', '分級', 'text'],
     ['founded', '成立年', 'text'],
-    ['capital', '資本額（仟元）', 'text'],
+    ['capital', '資本總額（仟元）', 'text'],
+    ['capitalPaid', '實收資本額（仟元）', 'text'],
+    ['regChanged', '最近核准變更日期', 'text'],
     ['phoneRaw', '電話', 'textarea'],
     ['owner', '負責人', 'text'],
     ['keyman', 'KEYMAN', 'text'],
@@ -2252,7 +2315,7 @@
      */
     const kvBox = el('textarea', {
       className: 'paste-box', rows: 4, id: 'kvPaste',
-      placeholder: '可直接貼上商工登記的公司資料，例如：\n統一編號\t28443147\n公司名稱\t三貝德數位文創股份有限公司\n資本總額(元)\t1,100,000,000\n代表人姓名\t余明珊\n公司所在地\t新北市三重區重新路5段609巷2號5樓',
+      placeholder: '可直接貼上商工登記的公司資料，例如：\n統一編號\t28443147\n公司名稱\t三貝德數位文創股份有限公司\n資本總額(元)\t1,100,000,000\n實收資本額(元)\t491,600,000\n代表人姓名\t余明珊\n公司所在地\t新北市三重區重新路5段609巷2號5樓\n最後核准變更日期\t114年07月16日',
     });
     const kvNote = el('p', { className: 'rule-note' });
     const kvRun = () => {
@@ -2368,12 +2431,22 @@ export default {
   },
 };`;
 
+  /*
+   * 「只查欄位有空白的客戶」只看這五個核心欄位。
+   *
+   * 實收資本額與最近核准變更日期是後來才加的，舊名單一定是空的；把它們算進去，
+   * 這個範圍就等於「全部」，那這個選項就沒用了。這兩個欄位靠每天的自動更新（查
+   * 全部）補，不需要讓快速範圍跟著變慢。
+   */
+  const REGISTRY_BLANK_FIELDS = ['taxId', 'capital', 'owner', 'address', 'founded'];
   const REGISTRY_FIELDS = [
     ['taxId', '統一編號'],
-    ['capital', '資本額（仟元）'],
+    ['capital', '資本總額（仟元）'],
+    ['capitalPaid', '實收資本額（仟元）'],
     ['owner', '負責人'],
     ['address', '登記地址'],
     ['founded', '成立年'],
+    ['regChanged', '最近核准變更日期'],
   ];
   // 登記給的是完整日期（2016/03/01），名單上只記年份：比對與寫入都只用年
   const registryValue = (key, data) => {
@@ -2450,13 +2523,23 @@ export default {
    * 增資／減資看資本額數字、登記地址不同、負責人不同、其他欄位（統編、成立年）算其他。
    * 原本空白後來補上的不算變更——那是名單缺資料，不是公司變更登記。
    */
-  function classifyRegistryChanges(changes) {
+  function classifyRegistryChanges(changes, r) {
     const kinds = new Set();
     const num = (v) => Number(String(v || '').replace(/[^\d.]/g, '')) || 0;
+    /*
+     * 名單原本那一格是實收資本額（公司給的檔案多半填實收），查到的是資本總額，
+     * 兩個本來就不一樣——不擋的話第一次查完整份名單都會冒出假的增資。
+     * 舊值剛好等於這次查到的實收，就當成「欄位對齊」，不是公司真的增資。
+     */
+    const paidNow = num((changes && changes.capitalPaid && changes.capitalPaid.to) || (r && r.capitalPaid));
     Object.entries(changes || {}).forEach(([key, ch]) => {
       if (!String(ch.from || '').trim()) return;
-      if (key === 'capital') {
+      // 核准變更日期本身不是一種變更：公司只要動任何登記它就會變，
+      // 真正變了什麼看上面那幾個欄位就夠了
+      if (key === 'regChanged') return;
+      if (key === 'capital' || key === 'capitalPaid') {
         const a = num(ch.from); const b = num(ch.to);
+        if (key === 'capital' && paidNow && a === paidNow) return;
         if (b > a) kinds.add('capitalUp'); else if (b < a) kinds.add('capitalDown');
       } else if (key === 'address') kinds.add('address');
       else if (key === 'owner') kinds.add('owner');
@@ -2479,7 +2562,7 @@ export default {
       await saveState(f.rec.id, { regAt: now, regError: String(f.reason || '查不到').split('\n')[0].slice(0, 120) });
     }
     for (const c of checked) {
-      const kinds = classifyRegistryChanges(c.changes);
+      const kinds = classifyRegistryChanges(c.changes, c.r);
       const patch = { regAt: now, regError: undefined };
       if (kinds.length) {
         const kept = {};
@@ -2837,11 +2920,11 @@ export default {
       el('span', { textContent: '範圍' }), scope,
     ]));
 
-    // 「有空白」看五個欄位（統編、資本額、負責人、登記地址、成立年）任一個空著
+    // 「有空白」看五個核心欄位（統編、資本總額、負責人、登記地址、成立年）任一個空著
     const scopeTargets = () => state.records
       .map((rec) => ({ rec, r: view(rec) }))
       .filter(({ r }) => (scope.value === 'blank'
-        ? REGISTRY_FIELDS.some(([key]) => !String(r[key] || '').trim())
+        ? REGISTRY_BLANK_FIELDS.some((key) => !String(r[key] || '').trim())
         : true));
 
     const summary = el('p', { className: 'muted registry-summary' });
@@ -2860,7 +2943,7 @@ export default {
     scope.onchange = refreshSummary;
     // 沒有缺地址的客戶時，預設停在「只補地址」會讓人一按就撞到「沒有東西可以查」。
     // 這種時候直接預設成全部校正。
-    if (!state.records.map(view).some((r) => REGISTRY_FIELDS.some(([k]) => !String(r[k] || '').trim()))) {
+    if (!state.records.map(view).some((r) => REGISTRY_BLANK_FIELDS.some((k) => !String(r[k] || '').trim()))) {
       scope.value = 'all';
     }
     refreshSummary();
@@ -3003,7 +3086,7 @@ export default {
       if (!confirm(`要查 ${all.length} 筆嗎？\n\n`
         + '會在背景一筆一筆送出（每筆間隔 0.3 秒，避免對政府網站造成負擔），'
         + '這個視窗會自動收起來，你可以繼續打電話；進度在畫面下方，隨時可以按停止。\n\n'
-        + '查到跟登記不一致的欄位（統編、資本額、負責人、登記地址、成立年）會直接更新，'
+        + '查到跟登記不一致的欄位（統編、資本總額、實收資本額、負責人、登記地址、成立年、最近核准變更日期）會直接更新，'
         + '記成「已修改」，每一筆都可以在詳細頁還原。')) return;
       $('#editor').hidden = true;
       toast('已在背景開始更新，可以繼續用名單');
