@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-108';
+  const APP_VERSION = '20260919-109';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1202,6 +1202,13 @@
       return [...m.entries()].sort((a, b) => b[1] - a[1]);
     };
 
+    /*
+     * 這幾組改成單選：同一組裡選兩顆等於沒篩（「有拜訪＋無拜訪」就是全部），
+     * 看起來卻像有在篩，很容易誤會名單為什麼是這些。按已經選的那顆＝取消。
+     * 縣市、客戶規模、洽談狀態、變更登記維持複選——那幾組疊起來是有意義的
+     * （台北＋新北、微企＋一般組、增資＋減資）。
+     */
+    const SINGLE_PICK = new Set(['taxKind', 'phoneKind', 'visit', 'relation', 'chance', 'added']);
     const chips = (host, filter, items, setRef, labelOf) => {
       host.textContent = '';
       items.forEach(([value, count]) => {
@@ -1211,7 +1218,9 @@
         btn.append(el('small', { textContent: String(count) }),
           document.createTextNode(' ' + (labelOf ? labelOf(value) : value)));
         btn.onclick = () => {
-          setRef.has(value) ? setRef.delete(value) : setRef.add(value);
+          const on = setRef.has(value);
+          if (SINGLE_PICK.has(filter)) setRef.clear();
+          if (on) setRef.delete(value); else setRef.add(value);
           state.limit = PAGE_SIZE;
           render();
         };
@@ -2439,6 +2448,15 @@ export default {
    * 全部）補，不需要讓快速範圍跟著變慢。
    */
   const REGISTRY_BLANK_FIELDS = ['taxId', 'capital', 'owner', 'address', 'founded'];
+  /*
+   * 查核欄位改版時換這個字串。
+   *
+   * 「每天只跑一次」是靠記下當天日期擋的，所以改版當天加的新欄位（實收資本額、
+   * 最近核准變更日期）會整天都是空的——今天的自動更新在改版前就跑完了，得等到
+   * 隔天 0:00 才補得到。使用者看到的是「你說有這兩欄，我這裡沒有」。
+   * 換了字串就把當天那個記號清掉，下次打開網站立刻重查一次全部。
+   */
+  const REGISTRY_FIELDS_REV = '2026-09-19-capital';
   const REGISTRY_FIELDS = [
     ['taxId', '統一編號'],
     ['capital', '資本總額（仟元）'],
@@ -2462,7 +2480,9 @@ export default {
 
   // 這幾個設定要跟著雲端同步：在電腦上設定好，手機打開也要能用
   const SYNCED_PREFS = new Set(['registry-proxy-url', 'registry-dataset-url', 'registry-dataset-taxid-url',
-    'registry-mirror', 'registry-auto', 'registry-auto-last', 'registry-auto-summary', 'my-branch', 'my-unit']);
+    'registry-mirror', 'registry-auto', 'registry-auto-last', 'registry-auto-summary',
+    // 欄位改版的記號也同步：某台已經重查完、資料也同步過來了，另一台就不用再查一次
+    'registry-fields-rev', 'my-branch', 'my-unit']);
   /** 每天自動對商工登記：預設開，使用者關掉才存 '0'。 */
   const registryAutoOn = () => registryPref('registry-auto') !== '0';
   const registryPref = (key, value) => {
@@ -4111,6 +4131,11 @@ export default {
     prebuildRules();
     checkForUpdate(false);
     dropOldDossierDb();
+    // 查核欄位改版了：把「今天已經跑過」的記號清掉，馬上重查一次補上新欄位
+    if (registryPref('registry-fields-rev') !== REGISTRY_FIELDS_REV) {
+      registryPref('registry-fields-rev', REGISTRY_FIELDS_REV);
+      registryPref('registry-auto-last', '');
+    }
     autoRegistryTick();
     /*
      * 每分鐘看一次日期跳了沒，跨過 0:00 就自己開跑。
