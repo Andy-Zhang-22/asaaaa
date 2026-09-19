@@ -277,6 +277,6 @@
     num, DEBT_TYPES, DEBT_COLUMNS, SALES_COLUMNS, PURCHASE_COLUMNS, ESTATE_COLUMNS,
     BS_ITEMS, IS_ITEMS, FIN_ITEMS, PERIODS, SECTIONS, IMPORT_TARGETS, tabOf,
     VAT_PERIODS, VAT_YEARS, VAT_KINDS, blankVat, defaultVatYears, vatTotal, vatFilled,
-    computeFin, isInput, lienTotalOf, residualOf, blankDossier, defaultPeriods, sectionFilled,
+    computeFin, isInput, hasAnyInput, lienTotalOf, residualOf, blankDossier, defaultPeriods, sectionFilled,
   };
 })(window);

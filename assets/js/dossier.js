@@ -759,6 +759,14 @@
       wrap.append(table);
       if (keys.length > 8) wrap.append(el('div', { className: 'more', textContent: `…還有 ${keys.length - 8} 個科目` }));
       if (!fin.periods) wrap.append(el('div', { className: 'more', textContent: '檔案裡沒認出期別標題，會照目前的四期順序填入（最新一期在最左邊）。' }));
+      if (fin.finOne) {
+        const f = fin.finOne;
+        const notes = [];
+        notes.push(f.period ? `會放到「${f.period}」那一欄（已有同期別就覆蓋，否則放最新或空的欄）` : '沒讀到期別，會放到最新一欄');
+        if (f.surplusTarget != null) notes.push(`公積及盈餘照報表 ${fmt(f.surplusTarget)}，差額自動記在「調整項目」`);
+        if (f.missing && f.missing.length) notes.push(`讀不到：${f.missing.join('、')}，請自己補`);
+        wrap.append(el('div', { className: 'more', textContent: notes.join('；') }));
+      }
       return wrap;
     }
     if (preview.vat) {

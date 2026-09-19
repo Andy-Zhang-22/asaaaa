@@ -460,6 +460,13 @@
 
   /** 把一塊資料對到指定段落，回傳預覽用的結果。 */
   function mapBlock(block, section) {
+    if (block.finOne) {
+      if (section !== 'fin') return section === 'vat' ? { section, vat: { rows: [], summary: '', count: 0 } } : { section, rows: [], columns: [] };
+      const f = block.finOne;
+      const values = {};
+      Object.entries(f.values).forEach(([k, v]) => { if (v !== '') values[k] = [v]; });
+      return { section, fin: { periods: [f.period || '？'], values, count: Object.keys(values).length, keys: Object.keys(values).length, finOne: f } };
+    }
     if (block.vat401) {
       // 401 申報書只能變成 401表（銷項／進項一期）；硬指到別段就當作沒資料
       if (section !== 'vat') return section === 'fin' ? { section, fin: { periods: null, values: {}, count: 0, keys: 0 } } : { section, rows: [], columns: [] };
@@ -736,6 +743,259 @@
     return canvas;
   }
 
+  /* ---------------- 財務報表（資產負債表／損益表／營所稅申報書）→ 乙表 ---------------- */
+  /*
+   * 乙表一欄就是一期。三種來源：
+   *   會計師／記帳系統印的「資產負債表」「損益表」（文字 PDF，左右兩欄：資產｜負債及權益）
+   *   營所稅結算申報書（第 1 頁「損益及稅額計算表」、第 3 頁「資產負債表」，欄位有代號 04、05、1111…）
+   * 對到乙表的規則（跟使用者手填 BOU 一致）：
+   *   現金＝現金＋銀行存款；其他流動資產＝流動資產總額－現金－應收票據－應收帳款－存貨
+   *   固定資產各項用「原值－累計折舊」；其他＝固定資產總額－土地－建築物－機器設備
+   *   其他資產＝資產總額－流動資產－長期投資－固定資產
+   *   其他流動負債＝流動負債總額－短期借款－應付票據及帳款－股東往來；其他負債＝負債總額－流動負債－長期負債
+   *   公積及盈餘＝權益總額－股本；乙表裡它＝前期公積及盈餘＋本期損益＋調整項目，所以套用後把「調整項目」
+   *   算成讓公積及盈餘剛好等於報表的數（分紅、盈餘分配都落在這裡）。最舊一期的「前期公積及盈餘」＝公積及盈餘－本期損益。
+   * 金額是元，乙表填仟元（四捨五入）。
+   */
+  const K = (n) => (n == null || !Number.isFinite(n) ? '' : String(Math.round(n / 1000)));
+  /** 「(290,782)」「-1,234」是負數；OCR 常把逗號讀成點或空格，也一併收。 */
+  function amountOf(text) {
+    const t = String(text == null ? '' : text).replace(/\s/g, '');
+    const m = t.match(/\(?-?\d[\d,.]*\)?/);
+    if (!m) return null;
+    const neg = /^\(/.test(m[0]) || /^-/.test(m[0]);
+    const digits = m[0].replace(/[(),.\-]/g, '');
+    if (!/^\d+$/.test(digits)) return null;
+    return neg ? -Number(digits) : Number(digits);
+  }
+  const rocPeriod = (y, mo) => {
+    let year = Number(y);
+    if (year < 1911) year += 1911;
+    const m = Number(mo);
+    return m === 12 ? `${year}年` : `${year}/${String(m).padStart(2, '0')}`;
+  };
+
+  /** 一行裡的文字項目 → 標籤（非數字部分）與金額（最後一個數字）。 */
+  function labelAndAmount(items) {
+    const labelParts = [];
+    let amount = null;
+    items.forEach((it) => {
+      const s = it.s.trim();
+      if (!s || s === '＄' || s === '$') return;
+      const a = amountOf(s);
+      if (a !== null && /^[\(\-]?[\d,.]+\)?$/.test(s)) { amount = a; return; }
+      labelParts.push(s);
+    });
+    return { label: labelParts.join('').replace(/[\s：:]/g, ''), amount };
+  }
+
+  const sumWhere = (rows, re, exclude) => rows.filter((r) => re.test(r.label) && !(exclude && exclude.test(r.label))).reduce((s, r) => s + (r.amount || 0), 0);
+  const firstWhere = (rows, re, exclude) => { const hit = rows.find((r) => re.test(r.label) && r.amount !== null && !(exclude && exclude.test(r.label))); return hit ? hit.amount : null; };
+
+  /** 記帳系統的資產負債表：左欄資產、右欄負債及權益。 */
+  function parseBalanceSheet(lines) {
+    const header = lines.find((l) => l.items.some((it) => /負債及權益|負債及股東權益|負債/.test(it.s)) && l.items.some((it) => /資產/.test(it.s)));
+    const rightX = header ? Math.min(...header.items.filter((it) => /負債/.test(it.s)).map((it) => it.x)) - 10 : 290;
+    const left = [];
+    const right = [];
+    lines.forEach((l) => {
+      const li = l.items.filter((it) => it.x < rightX);
+      const ri = l.items.filter((it) => it.x >= rightX);
+      if (li.length) left.push(labelAndAmount(li));
+      if (ri.length) right.push(labelAndAmount(ri));
+    });
+    // 「減：累計折舊-機器」的金額跟在同一行；把它跟前一個資產配對
+    const netOf = (re) => {
+      const gross = firstWhere(left, re, /累計|折舊|總額/);
+      if (gross === null) return null;
+      const dep = left.filter((r) => /累計折舊|累計減損/.test(r.label) && re.test(r.label)).reduce((s, r) => s + (r.amount || 0), 0);
+      return gross + dep;   // 折舊在括號裡已是負數
+    };
+    const cash = sumWhere(left, /^(現金|銀行存款|零用金|約當現金|定期存款|庫存現金)/, /總額/);
+    const notesRecv = sumWhere(left, /^應收票據/, /總額|備抵/);
+    const ar = sumWhere(left, /^應收帳款/, /總額|備抵/);
+    const rawMat = sumWhere(left, /^(原料|物料|原物料)/, /總額/);
+    const wip = sumWhere(left, /^在製品/, /總額/);
+    const finished = sumWhere(left, /^(製成品|商品|存貨)$|^(製成品|商品|存貨)存貨/, /總額|跌價/);
+    const caTotal = firstWhere(left, /^流動資產總額|^流動資產合計/);
+    const land = firstWhere(left, /^土地/, /累計|總額/) || 0;
+    const building = netOf(/房屋|建築/) || 0;
+    const machine = netOf(/機器/) || 0;
+    let faTotal = firstWhere(left, /^(不動產、?廠房及設備總額?|固定資產總額|固定資產合計|不動產廠房及設備總額?)/);
+    if (faTotal === null) faTotal = firstWhere(left, /^不動產、廠房及設備總/);   // 標題被折成兩行時「額」在下一行
+    const lti = firstWhere(left, /^(長期投資總額|長期股權投資|基金及投資總額|長期投資)$/) || 0;
+    const totalAssets = firstWhere(left, /^資產總額|^資產總計|^資產合計/);
+    const stLoan = sumWhere(right, /^(短期借款|銀行借款|銀行透支|應付短期票券)/, /總額/);
+    const ap = sumWhere(right, /^(應付票據|應付帳款)/, /總額/);
+    const shareholder = sumWhere(right, /^(股東往來|業主往來|業主\(股東\)往來)/, /總額/);
+    const clTotal = firstWhere(right, /^流動負債總額|^流動負債合計/);
+    let ltl = firstWhere(right, /^長期負債總額|^長期負債合計|^非流動負債總額/);
+    if (ltl === null) ltl = sumWhere(right, /^長期借款/, /總額/);
+    const totalL = firstWhere(right, /^負債總額|^負債合計/);
+    const capital = firstWhere(right, /^(資本總額|股本總額|資本合計)/) ?? firstWhere(right, /^(資本|股本)$/);
+    const equity = firstWhere(right, /^(權益總額|股東權益總額|淨值總額|權益合計)/);
+    const netIncome = firstWhere(right, /^本期損益|^本期淨利/);
+    const values = {
+      cash: K(cash), notesRecv: K(notesRecv), ar: K(ar), rawMat: K(rawMat), wip: K(wip), finished: K(finished),
+      otherCa: caTotal === null ? '' : K(caTotal - cash - notesRecv - ar - rawMat - wip - finished),
+      lti: K(lti), land: K(land), building: K(building), machine: K(machine),
+      otherFa: faTotal === null ? '' : K(faTotal - land - building - machine),
+      otherAssets: totalAssets === null || caTotal === null || faTotal === null ? '' : K(totalAssets - caTotal - lti - faTotal),
+      stLoan: K(stLoan), ap: K(ap), shareholder: K(shareholder),
+      otherCl: clTotal === null ? '' : K(clTotal - stLoan - ap - shareholder),
+      ltl: K(ltl),
+      otherL: totalL === null || clTotal === null ? '' : K(totalL - clTotal - ltl),
+      capital: K(capital),
+    };
+    Object.keys(values).forEach((k) => { if (values[k] === '0') values[k] = ''; });
+    const surplusTarget = equity !== null && capital !== null ? equity - capital : null;
+    let period = '';
+    const dateLine = lines.map((l) => l.items.map((i) => i.s).join('')).find((t) => /民國\s*\d{2,3}\s*年\s*\d{1,2}\s*月/.test(t));
+    const dm = dateLine && dateLine.replace(/\s/g, '').match(/民國(\d{2,3})年(\d{1,2})月/);
+    if (dm) period = rocPeriod(dm[1], dm[2]);
+    const ok = totalAssets !== null || caTotal !== null;
+    return ok ? { kind: 'bs', period, values, surplusTarget: surplusTarget === null ? null : Math.round(surplusTarget / 1000), netIncome: netIncome === null ? null : Math.round(netIncome / 1000), check: { totalAssets: K(totalAssets), equity: K(equity) } } : null;
+  }
+
+  /** 記帳系統的損益表（可能好幾頁）：每行最後一個數字就是金額。 */
+  function parseIncomeStatement(pages) {
+    const rows = [];
+    pages.forEach((pl) => pl.forEach((l) => rows.push(labelAndAmount(l.items))));
+    const sales = firstWhere(rows, /^(營業收入淨額|銷貨淨額|營業收入合計)/) ?? firstWhere(rows, /^(銷貨收入|營業收入)$/);
+    const cogs = firstWhere(rows, /^營業成本$/) ?? firstWhere(rows, /^(銷貨總成本|銷貨成本)/, /率/);
+    const opex = firstWhere(rows, /^(營業費用總額|營業費用合計|營業費用)$/);
+    const otherIncome = firstWhere(rows, /^(非營業收益總額|非營業收入總額|營業外收入總額|營業外收入合計|非營業收益|營業外收入)$/) || 0;
+    const interest = firstWhere(rows, /^利息支出/) || 0;
+    const nonOpTotal = firstWhere(rows, /^(非營業損失及費用總|非營業損失總額|營業外支出總額|營業外費用總額|營業外支出合計)/);
+    const tax = firstWhere(rows, /^(所得稅費用|所得稅|營利事業所得稅)$/);
+    const net = firstWhere(rows, /^(本期損益|稅後淨利|本期淨利)/);
+    if (sales === null) return null;
+    const values = {
+      sales: K(sales), cogs: K(cogs), opex: K(opex), otherIncome: K(otherIncome), interest: K(interest),
+      otherExp: nonOpTotal === null ? '' : K(nonOpTotal - interest), tax: K(tax),
+    };
+    Object.keys(values).forEach((k) => { if (values[k] === '0') values[k] = ''; });
+    let period = '';
+    const t = pages[0] ? pages[0].map((l) => l.items.map((i) => i.s).join('')).join('\n').replace(/\s/g, '') : '';
+    const dm = t.match(/至(\d{2,3})年(\d{1,2})月\d{1,2}日/) || t.match(/(\d{2,3})年度/);
+    if (dm) period = dm[2] ? rocPeriod(dm[1], dm[2]) : rocPeriod(dm[1], 12);
+    return { kind: 'is', period, values, netIncome: net === null ? null : Math.round(net / 1000) };
+  }
+
+  /** 營所稅結算申報書：用欄位代號找數字。OCR 讀壞的（例如 11,39,3）就留白，不亂填。 */
+  function parseTaxReturn(pageTexts) {
+    const clean = (s) => { const t = String(s || '').replace(/[|｜]/g, '').replace(/\s+/g, ''); return /^\d{1,3}([,.]\d{3})+$|^\d{1,6}$/.test(t) ? Number(t.replace(/[,.]/g, '')) : null; };
+    // 兩位數代號（損益表）一定要有標籤才算；四位數代號（資產負債表）本身夠獨特，沒標籤也可以
+    const grab = (text, code, label) => {
+      const flat = text.replace(/[\u3000]/g, ' ');
+      // 只認千分位完整的大數字（12,345 或 12.345.678）；OCR 讀壞的 11,39,3 這種就當沒讀到
+      const BIG = '(\\d{1,3}(?:[,.] ?\\d{3})+|\\d{4,9})';
+      const res = [new RegExp(`(?:^|[^0-9])${code}\\s*${label}.{0,60}?${BIG}`)];
+      if (code.length >= 4) res.push(new RegExp(`(?:^|[^0-9])${code}\\s*[|｜]?\\s*${BIG}`));
+      for (const re of res) { const m = flat.match(re); if (m) { const v = clean(m[1]); if (v !== null) return v; } }
+      return null;
+    };
+    const missing = [];
+    const need = (v, name) => { if (v === null) missing.push(name); return v; };
+    const flatOf = (t) => t.replace(/\s/g, '');
+    const isPage = pageTexts.find((t) => /損益及稅額計算表/.test(flatOf(t)) && /營業收入/.test(flatOf(t)));
+    const bsPage = pageTexts.find((t) => /資產負債表|資產總額|負債及權益總額|權益總額/.test(flatOf(t)) && /1111|1112|流動資產/.test(t) && /2110|2112|短期借款/.test(t));
+    if (!isPage && !bsPage) return null;
+    const values = {};
+    let period = '';
+    let surplusTarget = null;
+    let netIncome = null;
+    let prevSurplusHint = null;
+    const all = pageTexts.join('\n').replace(/\s/g, '');
+    const ym = all.match(/(\d{2,3})年度損益及稅額計算表/) || all.match(/(\d{2,3})年度營利事業所得稅/);
+    if (ym) period = rocPeriod(ym[1], 12);
+    if (isPage) {
+      const t = isPage;
+      const sales = need(grab(t, '04', '營業收入淨'), '營業收入淨額(04)');
+      const cogs = need(grab(t, '05', '營業成本'), '營業成本(05)');
+      const opex = need(grab(t, '08', '營業費用'), '營業費用(08)');
+      const otherIncome = grab(t, '34', '非營業收入');
+      const interest = grab(t, '46', '利息支出');
+      const nonOp = grab(t, '45', '非營業損失');
+      const tax = grab(t, '122', '所得稅費用') ?? grab(t, '60', '本年度應納稅額');
+      Object.assign(values, { sales: K(sales), cogs: K(cogs), opex: K(opex), otherIncome: K(otherIncome), interest: K(interest), otherExp: nonOp === null ? '' : K(nonOp - (interest || 0)), tax: K(tax) });
+    }
+    if (bsPage) {
+      const t = bsPage;
+      const cash = (grab(t, '1111', '現金') || 0) + (grab(t, '1112', '銀行存款') || 0) + (grab(t, '1113', '約當現金') || 0);
+      const notesRecv = grab(t, '1121', '應收票據') || 0;
+      const ar = grab(t, '1123', '應收帳款') || 0;
+      const inv = grab(t, '1130', '存貨');
+      const rawMat = grab(t, '1134', '原料');
+      const caTotal = need(grab(t, '1100', '流動資產'), '流動資產(1100)');
+      const lti = grab(t, '1300', '長期性之投資') || 0;
+      const faTotal = need(grab(t, '1400', '不動產、廠房及設備'), '固定資產(1400)');
+      const land = grab(t, '1410', '土地') || 0;
+      const building = (grab(t, '1431', '房屋及建築') || 0) - (grab(t, '1432', '累計折舊') || 0);
+      const machine = (grab(t, '1441', '機器設備') || 0) - (grab(t, '1442', '累計折舊') || 0);
+      const totalAssets = need(grab(t, '1000', '資產總額'), '資產總額(1000)');
+      const stLoan = grab(t, '2110', '短期借款') ?? ((grab(t, '2112', '銀行借款') || 0) + (grab(t, '2111', '銀行透支') || 0));
+      const ap = (grab(t, '2120', '應付票據') || 0) + (grab(t, '2121', '應付帳款') || 0);
+      const shareholder = grab(t, '2192', '業主') || 0;
+      const clTotal = need(grab(t, '2100', '流動負債'), '流動負債(2100)');
+      const ltl = (grab(t, '2220', '長期借款') || 0) + (grab(t, '2210', '應付公司債') || 0);
+      const totalL = need(grab(t, '2000', '負債總額'), '負債總額(2000)');
+      const capital = need(grab(t, '3100', '資本'), '資本(3100)');
+      const equity = need(grab(t, '3000', '權益總額'), '權益總額(3000)');
+      netIncome = grab(t, '3440', '本期損益');
+      const surplus = grab(t, '3400', '保留盈餘');
+      const inventory = inv === null ? 0 : inv;
+      Object.assign(values, {
+        cash: K(cash), notesRecv: K(notesRecv), ar: K(ar),
+        rawMat: rawMat !== null ? K(rawMat) : '', finished: rawMat === null && inv !== null ? K(inv) : '',
+        otherCa: caTotal === null ? '' : K(caTotal - cash - notesRecv - ar - inventory),
+        lti: K(lti), land: K(land), building: K(building), machine: K(machine),
+        otherFa: faTotal === null ? '' : K(faTotal - land - building - machine),
+        otherAssets: totalAssets === null || caTotal === null || faTotal === null ? '' : K(totalAssets - caTotal - lti - faTotal),
+        stLoan: K(stLoan), ap: K(ap), shareholder: K(shareholder),
+        otherCl: clTotal === null ? '' : K(clTotal - (stLoan || 0) - ap - shareholder),
+        ltl: K(ltl), otherL: totalL === null || clTotal === null ? '' : K(totalL - clTotal - ltl),
+        capital: K(capital),
+      });
+      if (equity !== null && capital !== null) surplusTarget = Math.round((equity - capital) / 1000);
+      if (surplus !== null && netIncome !== null) prevSurplusHint = Math.round((surplus - netIncome) / 1000);
+    }
+    Object.keys(values).forEach((k) => { if (values[k] === '0' || values[k] === '-0') values[k] = ''; });
+    return { kind: 'tax', period, values, surplusTarget, netIncome: netIncome === null ? null : Math.round(netIncome / 1000), prevSurplusHint, missing };
+  }
+
+  /** 這一期要放乙表哪一欄：先找同名期別；再找還沒填數字的欄；年中報表放最左（最新），年度放年份相同或最後一欄。 */
+  function slotForPeriod(fin, label) {
+    const labels = fin.periods || [];
+    const exact = labels.findIndex((p) => String(p || '').replace(/\s/g, '') === String(label || '').replace(/\s/g, ''));
+    if (exact >= 0) return exact;
+    const yearOf = (p) => { const m = String(p || '').match(/(\d{4})/); return m ? Number(m[1]) : 0; };
+    const y = yearOf(label);
+    const isMid = /\//.test(label);
+    const raw = fin.values || {};
+    const empty = [0, 1, 2, 3].filter((i) => !M.hasAnyInput(raw, i));
+    if (isMid) return empty.includes(0) ? 0 : 0;
+    const sameYear = labels.findIndex((p, i) => yearOf(p) === y && !/\//.test(p) && (empty.includes(i) || true));
+    if (sameYear >= 0) return sameYear;
+    // 年度：照年份由新到舊排；找第一個「年份比它舊或空著」的欄
+    for (let i = 1; i < M.PERIODS; i++) { if (empty.includes(i) || yearOf(labels[i]) < y) return i; }
+    return M.PERIODS - 1;
+  }
+
+  /** 套用完一期後，把每一欄的「調整項目」算成讓公積及盈餘等於報表的數。 */
+  function settleSurplus(fin) {
+    const targets = (fin.meta && fin.meta.surplusTarget) || [];
+    if (!targets.some((t) => t !== '' && t != null)) return;
+    if (!fin.values.adjust) fin.values.adjust = ['', '', '', ''];
+    for (let i = M.PERIODS - 1; i >= 0; i--) {
+      if (targets[i] === '' || targets[i] == null) continue;
+      fin.values.adjust[i] = '';
+      const { values } = M.computeFin(fin);
+      const adj = Math.round(Number(targets[i]) - values.prevSurplus[i] - values.netIncomeBs[i]);
+      fin.values.adjust[i] = adj ? String(adj) : '';
+    }
+  }
+
   /* ---------------- 讀檔 ---------------- */
 
   function parseCsv(text) {
@@ -797,6 +1057,21 @@
         const jcic = parseJcic(all.pages, name, opts && opts.owner);
         return [{ name, rows: [], jcic }];
       }
+      // 記帳系統的資產負債表／損益表、營所稅申報書（文字版）
+      if (/資產負債表/.test(firstText) && /(資產項目|流動資產)/.test(firstText) && !/損益及稅額計算表/.test(firstText)) {
+        const bs = parseBalanceSheet(peek.pages[0]);
+        if (bs) return [{ name, rows: [], finOne: bs }];
+      }
+      if (/損益表/.test(firstText) && /營業收入/.test(firstText) && !/損益及稅額計算表/.test(firstText)) {
+        const all = await pdfTextLines(buffer.slice(0));
+        const is = parseIncomeStatement(all.pages);
+        if (is) return [{ name, rows: [], finOne: is }];
+      }
+      if (/營利事業所得稅/.test(firstText) && /結算申報/.test(firstText)) {
+        const all = await pdfTextLines(buffer.slice(0));
+        const tax = parseTaxReturn(all.pages.map((pl) => pl.map(lineText).join('\n')));
+        if (tax) return [{ name, rows: [], finOne: tax }];
+      }
       let text401 = is401Text(firstText) ? firstText : '';
       if (!text401 && firstText.replace(/\s/g, '').length < 40 && global.Ocr && global.Tesseract) {
         // 沒有文字層（掃描圖）：辨識第一頁看看是不是 401
@@ -811,6 +1086,19 @@
             if (is401Text(again) && parse401Text(again, name)) ocr = again;
           }
           if (is401Text(ocr) || /401|營業稅/.test(name)) text401 = ocr;
+          else if (/營利事業所得稅|結算申報|申報書/.test(ocr) || /營所稅|結算申報/.test(name)) {
+            // 掃描的營所稅申報書：逐頁辨識到找到「損益及稅額計算表」和「資產負債表」為止（最多 6 頁）
+            const texts = [ocr];
+            const total = peek.total || 1;
+            for (let pno = 2; pno <= Math.min(total, 6); pno++) {
+              say(`⏳ 辨識 ${name} 第 ${pno}/${Math.min(total, 6)} 頁…`);
+              const cv = await renderPdfPage(buffer.slice(0), pno, 3);
+              texts.push(await global.Ocr.recognizeText(cv, null, { tessedit_pageseg_mode: '4' }));
+              if (texts.some((t) => /損益及稅額計算表/.test(t.replace(/\s/g, ''))) && texts.some((t) => /資產負債表|資產總額|權益總額/.test(t.replace(/\s/g, '')) && /2110|2112|短期借款/.test(t))) break;
+            }
+            const tax = parseTaxReturn(texts);
+            if (tax) return [{ name, rows: [], finOne: tax }];
+          }
         } catch (err) { console.warn('OCR 失敗', err); }
       }
       if (text401) {
@@ -835,6 +1123,13 @@
     const tables = await readFile(file, onProgress, opts);
     const found = [];
     tables.forEach((t) => {
+      if (t.finOne) {
+        const f = t.finOne;
+        const kindName = { bs: '資產負債表', is: '損益表', tax: '營所稅申報書' }[f.kind];
+        const block = { section: 'fin', finOne: f, header: null, rows: [], sheet: kindName };
+        found.push({ id: `${found.length + 1}`, source: `${kindName} ${f.period || '（期別未知）'}${f.missing && f.missing.length ? `，讀不到：${f.missing.join('、')}` : ''}`, section: 'fin', block, preview: mapBlock(block, 'fin') });
+        return;
+      }
       if (t.vat401) {
         const v = t.vat401;
         const block = { section: 'vat', vat401: v, header: null, rows: [], sheet: '401 申報書' };
@@ -863,9 +1158,36 @@
    */
   function apply(dossier, picks) {
     const added = {};
+    let settled = false;
     picks.forEach((p) => {
       if (!p.section || p.section === 'skip') return;
       const r = mapBlock(p.block, p.section);
+      if (p.section === 'fin' && p.block.finOne) {
+        const fin = dossier.fin;
+        const f = p.block.finOne;
+        if (p.replace) { fin.values = {}; fin.meta = {}; }
+        if (!fin.meta) fin.meta = {};
+        if (!fin.meta.surplusTarget) fin.meta.surplusTarget = ['', '', '', ''];
+        const idx = slotForPeriod(fin, f.period);
+        if (f.period) fin.periods[idx] = f.period;
+        Object.entries(f.values).forEach(([key, v]) => {
+          if (v === '') return;
+          if (!fin.values[key]) fin.values[key] = ['', '', '', ''];
+          if (String(fin.values[key][idx] || '') === v) return;
+          fin.values[key][idx] = v;
+          added.fin = (added.fin || 0) + 1;
+        });
+        if (f.surplusTarget !== null && f.surplusTarget !== undefined) fin.meta.surplusTarget[idx] = String(f.surplusTarget);
+        if (idx === M.PERIODS - 1 && f.prevSurplusHint != null) {
+          if (!fin.values.prevSurplus) fin.values.prevSurplus = ['', '', '', ''];
+          fin.values.prevSurplus[idx] = String(f.prevSurplusHint);
+        } else if (idx === M.PERIODS - 1 && f.surplusTarget != null && f.netIncome != null) {
+          if (!fin.values.prevSurplus) fin.values.prevSurplus = ['', '', '', ''];
+          fin.values.prevSurplus[idx] = String(f.surplusTarget - f.netIncome);
+        }
+        settled = true;
+        return;
+      }
       if (p.section === 'fin') {
         const fin = dossier.fin;
         if (p.replace) fin.values = {};
@@ -920,8 +1242,9 @@
       r.rows.forEach((row) => { if (!seen.has(sig(row))) { sec.rows.push(row); seen.add(sig(row)); added[p.section] = (added[p.section] || 0) + 1; } });
       if (r.summary && (p.replace || !sec.summary)) sec.summary = r.summary;
     });
+    if (settled) settleSurplus(dossier.fin);
     return added;
   }
 
-  global.DossierImport = { analyze, apply, mapBlock, splitBlocks, readFile, parseCsv, finKeyOf, matchHeader, norm, parseJcic, shortBank, pdfTextLines, parse401Text };
+  global.DossierImport = { analyze, apply, mapBlock, splitBlocks, readFile, parseCsv, finKeyOf, matchHeader, norm, parseJcic, shortBank, pdfTextLines, parse401Text, parseBalanceSheet, parseIncomeStatement, parseTaxReturn, slotForPeriod, settleSurplus };
 })(window);
