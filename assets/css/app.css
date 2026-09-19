@@ -81,6 +81,7 @@ button, input, select { font: inherit; color: inherit; }
 .btn:hover { border-color: var(--primary); }
 .btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); font-weight: 600; }
 .btn-ghost { background: transparent; }
+.nav-link { text-decoration: none; display: inline-flex; align-items: center; }
 .btn-tiny { padding: 3px 9px; font-size: 12px; }
 .btn-block { display: block; width: 100%; margin: 14px 0 40px; }
 .btn:disabled { opacity: .5; cursor: progress; }
