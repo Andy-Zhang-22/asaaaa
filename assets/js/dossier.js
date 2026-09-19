@@ -612,13 +612,27 @@
       if (!state.current) showList();
       return;
     }
-    if (params.get('customer')) {
-      // 從客戶管理頁過來：已有就開啟，沒有就用客戶資料建一份
-      const cid = params.get('customer');
-      const existing = state.dossiers.filter((d) => d.customerId === cid).sort((a, b) => b.updatedAt - a.updatedAt)[0];
-      if (existing) { await openDossier(existing.id); return; }
-      const c = state.customers.find((x) => x.id === cid);
-      await createDossier(c ? { customerId: c.id, company: c.company, taxId: c.taxId, owner: c.owner } : {});
+    if (params.get('lead') || params.get('company')) {
+      /*
+       * 從名單的客戶詳細頁過來：帶名單這筆的 id、公司名、統編、負責人。
+       * 已有這家的徵信資料（同名單 id、同統編、或同公司名）就直接打開，沒有就建一份填好基本資料。
+       */
+      const lead = params.get('lead') || '';
+      const company = (params.get('company') || '').trim();
+      const taxId = (params.get('taxId') || '').replace(/\D/g, '');
+      const owner = (params.get('owner') || '').trim();
+      const byTime = (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0);
+      const existing = state.dossiers.filter((d) => (lead && d.leadId === lead)
+        || (taxId.length === 8 && String(d.taxId || '').replace(/\D/g, '') === taxId)
+        || (company && String(d.company || '').trim() === company)).sort(byTime)[0];
+      history.replaceState(null, '', location.pathname);   // 網址上的參數用過就拿掉，重新整理不會再建一份
+      if (existing) {
+        if (lead && !existing.leadId) { existing.leadId = lead; await Store.saveDossier(existing); }
+        await openDossier(existing.id);
+        return;
+      }
+      await createDossier({ leadId: lead, company, taxId, owner });
+      toast(`已用名單資料建立「${company || '未命名'}」的徵信資料`);
       return;
     }
     showList();

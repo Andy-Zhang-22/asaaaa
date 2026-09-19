@@ -201,6 +201,7 @@
     return {
       id: '',
       customerId: (seed && seed.customerId) || '',
+      leadId: (seed && seed.leadId) || '',   // 名單那筆的 id，從詳細頁按「徵信資料」過來就記住
       company: (seed && seed.company) || '',
       taxId: (seed && seed.taxId) || '',
       owner: (seed && seed.owner) || '',
