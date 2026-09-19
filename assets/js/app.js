@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-96';
+  const APP_VERSION = '20260919-97';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -2397,6 +2397,8 @@ export default {
   // 這幾個設定要跟著雲端同步：在電腦上設定好，手機打開也要能用
   const SYNCED_PREFS = new Set(['registry-proxy-url', 'registry-dataset-url', 'registry-dataset-taxid-url',
     'registry-mirror', 'registry-auto', 'registry-auto-last', 'registry-auto-summary', 'my-branch', 'my-unit']);
+  /** 每天自動對商工登記：預設開，使用者關掉才存 '0'。 */
+  const registryAutoOn = () => registryPref('registry-auto') !== '0';
   const registryPref = (key, value) => {
     try {
       if (value === undefined) return localStorage.getItem(key) || '';
@@ -2500,7 +2502,7 @@ export default {
   const lookedUpButMissing = (reason) => /查無資料|沒有一筆的統編是|只回了部分欄位|不是 8 碼/.test(String(reason || ''));
 
   async function checkNewRecords(ids) {
-    if (registryPref('registry-auto') !== '1' || !ids.length) return;
+    if (!registryAutoOn() || !ids.length) return;
     const targets = state.records.filter((r) => ids.includes(r.id)).map((rec) => ({ rec, r: view(rec) }));
     if (!targets.length) return;
     try {
@@ -2545,7 +2547,7 @@ export default {
    * 當天不再重試，把原因記在設定視窗裡。
    */
   async function maybeAutoRegistry() {
-    if (registryPref('registry-auto') !== '1') return;
+    if (!registryAutoOn()) return;
     if (!state.records.length) return;
     const today = todayISO();
     if (registryPref('registry-auto-last') === today) return;
@@ -2595,8 +2597,8 @@ export default {
      * 詳細頁隨時可以還原。
      */
     const auto = el('input', { type: 'checkbox', id: 'autoRegistry' });
-    auto.checked = registryPref('registry-auto') === '1';
-    auto.onchange = () => registryPref('registry-auto', auto.checked ? '1' : '');
+    auto.checked = registryAutoOn();
+    auto.onchange = () => registryPref('registry-auto', auto.checked ? '1' : '0');
     const autoInfo = el('p', { className: 'muted', textContent: autoRegistrySummary() });
     host.append(el('label', { className: 'rule-field' }, [
       auto,

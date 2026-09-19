@@ -7,6 +7,7 @@
   const Store = window.CrmStore;
   const M = window.DossierModel;
   const SCRIPT_SRC = (document.currentScript && document.currentScript.src) || '';   // 之後非同步時 currentScript 會是 null，先記下來
+  const PAGE_VERSION = (SCRIPT_SRC.match(/[?&]v=([^&]+)/) || [])[1] || '';           // 跟 index.html 一樣，用網址上的 ?v= 當版本號
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
     const node = Object.assign(document.createElement(tag), props || {});
@@ -630,6 +631,31 @@
     }
   }
 
+  /* ---------------- 版本與更新 ---------------- */
+
+  /**
+   * 跟首頁一樣：抓永不快取的 version.json 比對，不一致就提示更新，
+   * 按「立即更新」用帶新版號的網址重新載入，瀏覽器才不會拿快取的舊檔。
+   */
+  async function checkForUpdate(loud) {
+    try {
+      const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) { if (loud) toast('連不到伺服器，無法檢查更新'); return; }
+      const data = await res.json();
+      if (!data || !data.version || data.version === PAGE_VERSION) {
+        if (loud) toast(`已經是最新版（${PAGE_VERSION || '未知'}）`);
+        return;
+      }
+      const bar = $('#updateBar');
+      bar.hidden = false;
+      if (loud) toast(`有新版本 ${data.version}，目前是 ${PAGE_VERSION || '未知'}`);
+      $('#btnUpdate').onclick = () => { location.replace(`${location.pathname}?v=${encodeURIComponent(data.version)}`); };
+      $('#btnUpdateLater').onclick = () => { bar.hidden = true; };
+    } catch (err) {
+      // file:// 或離線時抓不到，忽略
+    }
+  }
+
   /* ---------------- 匯入 PDF／Excel ---------------- */
 
   const importState = { found: [], picks: {} };
@@ -646,8 +672,8 @@
     try {
       const found = [];
       for (const file of list) {
-        const res = await window.DossierImport.analyze(file, (m) => { saveState.textContent = m; });
-        res.found.forEach((f) => found.push({ ...f, file: file.name, source: list.length > 1 || res.tables.length > 1 ? `${file.name}${res.tables.length > 1 ? `／${f.source}` : ''}` : file.name }));
+        const res = await window.DossierImport.analyze(file, (m) => { saveState.textContent = m; }, { owner: $('#fOwner').value.trim() });
+        res.found.forEach((f) => found.push({ ...f, file: file.name, source: res.tables.length > 1 || f.source !== file.name ? `${file.name}／${f.source}` : file.name }));
       }
       saveState.textContent = prevText;
       if (!found.length) {
@@ -751,6 +777,8 @@
     const picks = importState.found.map((f) => ({ block: f.block, section: importState.picks[f.id], replace }));
     const added = window.DossierImport.apply(d, picks);
     $('#importDlg').hidden = true;
+    if (d.baseDate) $('#fBaseDate').value = d.baseDate;
+    if (d.owner && !$('#fOwner').value.trim()) $('#fOwner').value = d.owner;
     const parts = Object.entries(added).map(([k, n]) => `${SECTION_LABEL[k].replace(/^[①-⑩]\s*/, '')} ${n}${k === 'fin' || k === 'vat' ? ' 個數字' : ' 列'}`);
     const first = M.SECTIONS.find((s) => added[s.key]);
     if (first) state.tab = first.key;
@@ -838,6 +866,7 @@
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
       if (act === 'import-json') $('#jsonPick').click();
+      if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'theme') {
         const next = document.body.dataset.theme === 'dark' ? 'light' : 'dark';
         document.body.dataset.theme = next;
@@ -879,6 +908,8 @@
     }
     wireEvents();
     wireImport();
+    $('#menuVersion').textContent = PAGE_VERSION ? `版本 ${PAGE_VERSION}` : '';
+    checkForUpdate(false);
     await reload();
     const params = new URLSearchParams(location.search);
     if (params.get('id')) {

@@ -20,6 +20,9 @@
 
   const has = (v) => v !== '' && v != null;
   const lineCount = (s) => String(s || '').split('\n').length;
+  /** 估一段文字在 width（字元寬）的欄位裡會折成幾行；中文一個字約佔兩個字元寬。 */
+  const wrappedLines = (s, width) => String(s || '').split('\n')
+    .reduce((n, line) => n + Math.max(1, Math.ceil([...line].reduce((w, ch) => w + (ch.charCodeAt(0) > 255 ? 2 : 1), 0) / Math.max(4, width - 1))), 0);
   const colLetter = (n) => {
     let s = '';
     while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
@@ -129,7 +132,7 @@
     ws.mergeCells(`B2:${last}2`);
     setCell(ws, 'B2', section.summary || '', { font: { name: KAI, size: 11 }, alignment: { vertical: 'top', wrapText: true }, border });
     for (let i = 3; i <= n; i++) ws.getCell(`${colLetter(i)}2`).border = border;
-    ws.getRow(2).height = Math.max(42, lineCount(section.summary) * 15 + 8);
+    ws.getRow(2).height = Math.max(42, wrappedLines(section.summary, columns.reduce((w, c) => w + (widths[c.key] || 12), 0) - 16) * 15 + 8);
 
     columns.forEach((c, i) => setCell(ws, `${colLetter(i + 1)}3`, c.label.replace(/（/g, ' (').replace(/）/g, ')'), {
       font: { name: KAI, size: 11 }, fill: fill('FFCCCCFF'), border,
@@ -142,6 +145,7 @@
     for (let k = 0; k < total; k++) {
       const x = rows[k] || {};
       const r = 4 + k;
+      let lines = 1;
       columns.forEach((c, i) => {
         const v = x[c.key];
         const cell = setCell(ws, `${colLetter(i + 1)}${r}`, has(v) ? (c.type === 'number' ? num(v) : v) : null, {
@@ -149,8 +153,10 @@
           alignment: { horizontal: c.type === 'number' ? 'right' : 'left', vertical: 'middle', wrapText: true },
         });
         if (c.type === 'number') cell.numFmt = c.key === 'ratio' ? '0.0' : AMOUNT;
+        // 長文字會自動換行，列高要跟著長，不然印出來會被切掉
+        else if (has(v)) lines = Math.max(lines, wrappedLines(v, widths[c.key] || 12));
       });
-      ws.getRow(r).height = 20;
+      ws.getRow(r).height = Math.max(20, lines * 14 + 4);
     }
     return ws;
   }
@@ -177,7 +183,7 @@
     ws.mergeCells(`B2:${last}2`);
     setCell(ws, 'B2', vat.summary || '', { font: { name: KAI, size: 11 }, alignment: { vertical: 'top', wrapText: true }, border });
     for (let i = 3; i <= nCols; i++) ws.getCell(`${colLetter(i)}2`).border = border;
-    ws.getRow(2).height = Math.max(24, lineCount(vat.summary) * 15 + 8);
+    ws.getRow(2).height = Math.max(24, wrappedLines(vat.summary, M.VAT_PERIODS.length * 11 + 11) * 15 + 8);
 
     const headers = ['年份\n(YYYY)', '項目/月'].concat(M.VAT_PERIODS, ['合計']);
     headers.forEach((h, i) => setCell(ws, `${colLetter(i + 1)}3`, h, {
