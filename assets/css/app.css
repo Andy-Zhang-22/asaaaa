@@ -610,6 +610,8 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 /* 日期輸入框旁的 yyyy/mm/dd 提示：瀏覽器把日期顯示成 mm/dd/yyyy，這裡補上名單慣用的寫法 */
 .date-with-hint { display: inline-flex; align-items: center; gap: 6px; }
 .date-hint { font-size: 13px; color: var(--muted); white-space: nowrap; }
+/* 選到國定假日或週末：提示變色，不擋人選，但要看得見 */
+.date-hint.is-holiday { color: var(--warn); font-weight: 600; white-space: normal; }
 .date-hint:empty { display: none; }
 /* 聯絡時程的自選區間：兩個日期框並排，塞不下就換行 */
 .due-range { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
