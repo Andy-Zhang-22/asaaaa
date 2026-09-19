@@ -7,9 +7,9 @@
 <meta name="description" content="把客戶的金融負債、銷貨／進貨廠商、不動產、財務報表填進五個標題，一鍵產出送銀行用的 Excel。資料只存在本機瀏覽器。">
 <meta name="theme-color" content="#0f172a">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📑</text></svg>">
-<link rel="stylesheet" href="assets/css/app.css?v=20260919-94">
-<link rel="stylesheet" href="assets/css/crm.css?v=20260919-94">
-<link rel="stylesheet" href="assets/css/dossier.css?v=20260919-94">
+<link rel="stylesheet" href="assets/css/app.css?v=20260919-95">
+<link rel="stylesheet" href="assets/css/crm.css?v=20260919-95">
+<link rel="stylesheet" href="assets/css/dossier.css?v=20260919-95">
 </head>
 <body data-theme="auto">
 
@@ -66,6 +66,7 @@
       </div>
       <div class="head-actions">
         <span id="saveState" class="muted">尚未儲存</span>
+        <button id="btnImportFile" class="btn" type="button" title="把 PDF、Excel 或 CSV 丟進來，自動認出五張表的內容">📥 匯入 PDF／Excel</button>
         <button id="btnExcel" class="btn btn-primary" type="button">⬇ 下載 Excel</button>
         <button id="btnDelete" class="btn btn-ghost danger-text" type="button" title="刪除這份資料">🗑</button>
       </div>
@@ -74,7 +75,8 @@
     <nav class="tabs section-tabs" id="sectionTabs"></nav>
 
     <div class="paste-tip muted">
-      小技巧：從 Excel 複製好幾格再貼到表格的任一格，會自動往右、往下填滿；多行文字的欄位可以按 Shift+Enter 換行。
+      小技巧：按「匯入 PDF／Excel」或直接把檔案拖到這一頁，會自動認出金融負債、銷貨／進貨廠商、不動產、財務報表；
+      也可以從 Excel 複製好幾格再貼到表格的任一格，會自動往右、往下填滿；多行文字的欄位可以按 Shift+Enter 換行。
     </div>
 
     <div id="sectionHost"></div>
@@ -82,12 +84,35 @@
 </main>
 
 <input id="jsonPick" type="file" accept="application/json,.json" hidden>
+<input id="importPick" type="file" accept="application/pdf,.pdf,.xlsx,.xls,.xlsm,text/csv,.csv" multiple hidden>
+
+<!-- 匯入預覽 -->
+<div id="importDlg" class="drawer" hidden>
+  <div class="drawer-backdrop" data-close></div>
+  <div class="modal import-modal" role="dialog" aria-modal="true" aria-label="匯入預覽">
+    <button class="drawer-close" data-close aria-label="關閉">✕</button>
+    <h2>匯入預覽</h2>
+    <p class="muted" id="importIntro">認出下面這些表格，確認要放到哪個段落後按「匯入」。數字照原檔的單位帶入，請留意是「元」還是「仟元」。</p>
+    <div id="importFound"></div>
+    <div class="import-actions">
+      <label class="import-replace"><input id="importReplace" type="checkbox"> 先清空該段落原有的資料再匯入（不勾＝附加在後面）</label>
+      <div>
+        <button class="btn btn-ghost" type="button" data-close>取消</button>
+        <button id="btnImportApply" class="btn btn-primary" type="button">匯入</button>
+      </div>
+    </div>
+  </div>
+</div>
 <div id="toast" class="toast" hidden></div>
 
-<script src="assets/vendor/exceljs/exceljs.min.js?v=20260919-94"></script>
-<script src="assets/js/crm-store.js?v=20260919-94"></script>
-<script src="assets/js/dossier-model.js?v=20260919-94"></script>
-<script src="assets/js/dossier-excel.js?v=20260919-94"></script>
-<script src="assets/js/dossier.js?v=20260919-94"></script>
+<script src="assets/vendor/exceljs/exceljs.min.js?v=20260919-95"></script>
+<script src="assets/vendor/xlsx/xlsx.min.js?v=20260919-95"></script>
+<script src="assets/vendor/pdfjs/pdf.min.js?v=20260919-95"></script>
+<script src="assets/js/pdf-table.js?v=20260919-95"></script>
+<script src="assets/js/crm-store.js?v=20260919-95"></script>
+<script src="assets/js/dossier-model.js?v=20260919-95"></script>
+<script src="assets/js/dossier-excel.js?v=20260919-95"></script>
+<script src="assets/js/dossier-import.js?v=20260919-95"></script>
+<script src="assets/js/dossier.js?v=20260919-95"></script>
 </body>
 </html>

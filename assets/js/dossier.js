@@ -6,6 +6,7 @@
 
   const Store = window.CrmStore;
   const M = window.DossierModel;
+  const SCRIPT_SRC = (document.currentScript && document.currentScript.src) || '';   // 之後非同步時 currentScript 會是 null，先記下來
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
     const node = Object.assign(document.createElement(tag), props || {});
@@ -515,6 +516,150 @@
     }
   }
 
+  /* ---------------- 匯入 PDF／Excel ---------------- */
+
+  const importState = { found: [], picks: {} };
+
+  /** 讀進來的檔案 → 認出區塊 → 開預覽。 */
+  async function importFiles(files) {
+    if (!state.current) { toast('請先打開一份徵信資料'); return; }
+    const list = Array.from(files || []).filter((f) => /\.(pdf|xlsx|xlsm|xls|csv|txt)$/i.test(f.name));
+    if (!list.length) { toast('請選 PDF、Excel 或 CSV 檔'); return; }
+    const btn = $('#btnImportFile');
+    btn.disabled = true;
+    const saveState = $('#saveState');
+    const prevText = saveState.textContent;
+    try {
+      const found = [];
+      for (const file of list) {
+        const res = await window.DossierImport.analyze(file, (m) => { saveState.textContent = m; });
+        res.found.forEach((f) => found.push({ ...f, file: file.name, source: list.length > 1 || res.tables.length > 1 ? `${file.name}${res.tables.length > 1 ? `／${f.source}` : ''}` : file.name }));
+      }
+      saveState.textContent = prevText;
+      if (!found.length) {
+        toast('沒有認出可以匯入的表格：請確認檔案裡有「銀行／科目／餘額」「統編／月平均」「地號／建號」或財務科目這類標題');
+        return;
+      }
+      importState.found = found;
+      importState.picks = {};
+      found.forEach((f) => { importState.picks[f.id] = f.section; });
+      renderImportPreview();
+      $('#importDlg').hidden = false;
+    } catch (err) {
+      console.error(err);
+      saveState.textContent = prevText;
+      toast(`讀取失敗：${err.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  const SECTION_LABEL = Object.fromEntries(M.SECTIONS.map((s) => [s.key, s.short]));
+
+  function renderImportPreview() {
+    const host = $('#importFound');
+    host.textContent = '';
+    importState.found.forEach((f) => {
+      const section = importState.picks[f.id];
+      const box = el('div', { className: `import-block${section === 'skip' ? ' is-skip' : ''}` });
+      const head = el('div', { className: 'import-block-head' });
+      const sel = el('select');
+      M.SECTIONS.forEach((s) => sel.append(el('option', { value: s.key, textContent: `放到 ${s.short}` })));
+      sel.append(el('option', { value: 'skip', textContent: '略過這一塊' }));
+      sel.value = section;
+      sel.onchange = () => { importState.picks[f.id] = sel.value; renderImportPreview(); };
+      const preview = section === 'skip' ? null : window.DossierImport.mapBlock(f.block, section);
+      const count = !preview ? '' : preview.fin ? `${preview.fin.keys} 個科目、${preview.fin.count} 個數字` : `${preview.rows.length} 列`;
+      head.append(el('strong', { textContent: `表格 ${f.id}` }), el('span', { className: 'src', textContent: `${f.source}${count ? ` · ${count}` : ''}` }), sel);
+      box.append(head);
+      if (preview) box.append(previewTable(preview, section));
+      host.append(box);
+    });
+    const active = Object.values(importState.picks).filter((v) => v !== 'skip').length;
+    $('#btnImportApply').disabled = !active;
+    $('#btnImportApply').textContent = active ? `匯入 ${active} 塊` : '匯入';
+  }
+
+  function previewTable(preview, section) {
+    const wrap = el('div', { className: 'import-preview' });
+    const table = el('table');
+    if (preview.fin) {
+      const fin = preview.fin;
+      const periods = fin.periods || state.current.fin.periods;
+      table.append(el('thead', {}, [el('tr', {}, [el('th', { textContent: '科目' })].concat(periods.map((p, i) => el('th', { textContent: p || `第 ${i + 1} 期` }))))]));
+      const tbody = el('tbody');
+      const keys = M.FIN_ITEMS.filter((it) => fin.values[it.key]);
+      keys.slice(0, 8).forEach((it) => {
+        tbody.append(el('tr', {}, [el('td', { textContent: it.label })].concat(fin.values[it.key].map((v) => el('td', { className: 'num', textContent: fmt(v) })))));
+      });
+      table.append(tbody);
+      wrap.append(table);
+      if (keys.length > 8) wrap.append(el('div', { className: 'more', textContent: `…還有 ${keys.length - 8} 個科目` }));
+      if (!fin.periods) wrap.append(el('div', { className: 'more', textContent: '檔案裡沒認出期別標題，會照目前的四期順序填入（最新一期在最左邊）。' }));
+      return wrap;
+    }
+    const columns = ({ debts: M.DEBT_COLUMNS, sales: M.SALES_COLUMNS, purchases: M.PURCHASE_COLUMNS, estates: M.ESTATE_COLUMNS })[section]
+      .filter((c) => !c.computed && (preview.columns.includes(c.key) || c.key === 'type'));
+    table.append(el('thead', {}, [el('tr', {}, columns.map((c) => el('th', { textContent: c.label })))]));
+    const tbody = el('tbody');
+    preview.rows.slice(0, 5).forEach((row) => {
+      tbody.append(el('tr', {}, columns.map((c) => {
+        let v = row[c.key];
+        if (c.key === 'type') v = (M.DEBT_TYPES.find((t) => t[0] === v) || [])[1] || v;
+        return el('td', { className: c.type === 'number' ? 'num' : '', textContent: c.type === 'number' ? fmt(v) : String(v || '').replace(/\n/g, ' ／ ') });
+      })));
+    });
+    table.append(tbody);
+    wrap.append(table);
+    if (preview.rows.length > 5) wrap.append(el('div', { className: 'more', textContent: `…還有 ${preview.rows.length - 5} 列` }));
+    if (preview.summary) wrap.append(el('div', { className: 'more', textContent: `綜合說明：${preview.summary.slice(0, 80)}` }));
+    return wrap;
+  }
+
+  async function applyImport() {
+    const d = state.current;
+    if (!d) return;
+    const replace = $('#importReplace').checked;
+    const picks = importState.found.map((f) => ({ block: f.block, section: importState.picks[f.id], replace }));
+    const added = window.DossierImport.apply(d, picks);
+    $('#importDlg').hidden = true;
+    const parts = Object.entries(added).map(([k, n]) => `${SECTION_LABEL[k].replace(/^[①-⑤]\s*/, '')} ${n}${k === 'fin' ? ' 個數字' : ' 列'}`);
+    const first = M.SECTIONS.find((s) => added[s.key]);
+    if (first) state.tab = first.key;
+    await saveNow();
+    renderTabs();
+    renderSection();
+    toast(parts.length ? `已匯入：${parts.join('、')}` : '沒有新增任何資料（可能都已經存在）');
+  }
+
+  function wireImport() {
+    $('#btnImportFile').onclick = () => $('#importPick').click();
+    $('#importPick').onchange = async (e) => {
+      const files = Array.from(e.target.files || []);
+      e.target.value = '';
+      await importFiles(files);
+    };
+    $('#btnImportApply').onclick = applyImport;
+    $('#importDlg').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) $('#importDlg').hidden = true; });
+    // 直接把檔案拖到編輯頁
+    const view = $('#editView');
+    let depth = 0;
+    view.addEventListener('dragenter', (e) => { if (!state.current) return; e.preventDefault(); depth++; view.classList.add('is-dragover'); });
+    view.addEventListener('dragover', (e) => { if (!state.current) return; e.preventDefault(); });
+    view.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) view.classList.remove('is-dragover'); });
+    view.addEventListener('drop', (e) => {
+      if (!state.current) return;
+      e.preventDefault();
+      depth = 0;
+      view.classList.remove('is-dragover');
+      importFiles(e.dataTransfer.files);
+    });
+    if (window.pdfjsLib) {
+      const v = (SCRIPT_SRC.match(/[?&]v=([^&]+)/) || [])[1];
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = `assets/vendor/pdfjs/pdf.worker.min.js${v ? `?v=${v}` : ''}`;
+    }
+  }
+
   /* ---------------- 啟動 ---------------- */
 
   async function reload() {
@@ -605,6 +750,7 @@
       document.documentElement.dataset.theme = saved;
     }
     wireEvents();
+    wireImport();
     await reload();
     const params = new URLSearchParams(location.search);
     if (params.get('id')) {
