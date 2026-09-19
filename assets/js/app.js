@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-112';
+  const APP_VERSION = '20260919-113';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -292,6 +292,21 @@
     });
     bar.append(list);
   }
+  /**
+   * 「最近核准變更」那一列後面的一句話摘要：查到哪幾種變更、哪些欄位前後值。
+   * 完整清單還是在下面的「變更登記」，這裡只求一眼看完。
+   */
+  function regChangeBrief(r) {
+    if (!r.regChange || !r.regKinds || !r.regKinds.length) return '';
+    if (r.regKinds[0] === 'none' || r.regKinds[0] === 'unchecked') return '';
+    const kinds = r.regKinds.map((k) => REG_KIND_LABEL[k]).join('、');
+    const bits = Object.entries(r.regChange.changes || {}).map(([key, ch]) => {
+      const label = (REGISTRY_FIELDS.find(([k]) => k === key) || [, key])[1];
+      return `${label} ${ch.from || '（空）'} → ${ch.to}`;
+    });
+    return bits.length ? `查到${kinds}：${bits.join('、')}` : `查到${kinds}`;
+  }
+
   /** 詳細頁的「回撥提醒」區塊 */
   function reminderSection(r) {
     const sec = el('div', { className: 'detail-section remind-section' });
@@ -1787,8 +1802,15 @@
       /*
        * 這一列一律顯示，即使登記上沒有變更紀錄（那種會是「1911年0月0日」，
        * 跟自己去查登記看到的一樣）。整列藏起來的話，看到的人只會以為是網站漏掉了。
+       *
+       * 日期後面接上「查到什麼」：只有一個日期，看的人還是得往下捲到變更登記
+       * 才知道公司到底動了什麼。用「查到」而不是直接寫在日期上，是因為那個日期
+       * 是政府登記的核准日，跟網站查到差異的那天未必是同一天。
        */
-      ['最近核准變更', r.regChanged || (r.regAt ? '—' : '—　還沒查過商工登記')],
+      ['最近核准變更', [
+        r.regChanged || (r.regAt ? '—' : '—　還沒查過商工登記'),
+        regChangeBrief(r),
+      ].filter(Boolean).join('　')],
       ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) : ''],
       ['最近聯絡', r.lastDate ? dateLabel(r.lastDate) : ''],
       ['名單新增', r.addedDate ? dateLabel(r.addedDate) : ''],
