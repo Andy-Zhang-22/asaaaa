@@ -245,7 +245,7 @@
   /** 匯入時可以放的段落（銷貨、進貨分開），跟編輯頁的分頁不同。 */
   const IMPORT_TARGETS = [
     { key: 'debts', label: '① 金融負債' }, { key: 'sales', label: '② 銷貨廠商' }, { key: 'purchases', label: '② 進貨廠商' },
-    { key: 'vat', label: '③ 進銷貨比較' }, { key: 'estates', label: '④ 不動產' }, { key: 'fin', label: '⑤ 財務分析' },
+    { key: 'vat', label: '③ 401表' }, { key: 'estates', label: '④ 不動產' }, { key: 'fin', label: '⑤ 財務分析' },
   ];
   /** 某個匯入段落屬於編輯頁的哪個分頁。 */
   const tabOf = (section) => (section === 'sales' || section === 'purchases' ? 'vendors' : section);
@@ -253,7 +253,7 @@
   const SECTIONS = [
     { key: 'debts', title: '金融負債表明細', short: '① 金融負債' },
     { key: 'vendors', title: '進銷貨廠商明細', short: '② 進銷貨廠商', parts: ['sales', 'purchases'] },   // 客戶多半一起給，編輯頁放同一頁；Excel 仍是兩張工作表
-    { key: 'vat', title: '同期進銷貨比較表', short: '③ 進銷貨比較' },
+    { key: 'vat', title: '401表（同期進銷貨比較表）', short: '③ 401表' },
     { key: 'estates', title: '不動產資料', short: '④ 不動產' },
     { key: 'fin', title: '乙表 財務分析', short: '⑤ 財務分析' },
   ];
