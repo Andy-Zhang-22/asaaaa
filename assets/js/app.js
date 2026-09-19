@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-113';
+  const APP_VERSION = '20260919-114';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1092,18 +1092,9 @@
     const got = quick ? quick[2](todayISO()) : { from: '', to: '' };
     state.filters.due = key;
     state.filters.dueNone = !!got.none;
+    // 區間本身留著：今天、本週、下週這些快速鍵就是換算成一段日期去篩的
     state.filters.dueFrom = got.from || '';
     state.filters.dueTo = got.to || '';
-    syncDueInputs();
-  }
-
-  function syncDueInputs() {
-    const from = $('#dueFrom');
-    const to = $('#dueTo');
-    if (!from || !to) return;
-    from.value = state.filters.dueFrom;
-    to.value = state.filters.dueTo;
-    from.disabled = to.disabled = state.filters.dueNone;
   }
 
   function dueBucket(iso) {
@@ -4053,23 +4044,6 @@ export default {
     $('#hideBlocked').onchange = (e) => { state.hideBlocked = e.target.checked; render(); };
     $('#btnMore').onclick = () => { state.limit += PAGE_SIZE; renderList(); };
     $('#fltIndustry').oninput = (e) => { state.filters.industry = e.target.value.trim(); state.limit = PAGE_SIZE; render(); };
-    // 聯絡時程的兩個日期框：手動改了就不再對應任何快速鍵
-    const dueFrom = el('input', { type: 'date', id: 'dueFrom' });
-    const dueTo = el('input', { type: 'date', id: 'dueTo' });
-    $('#fltDueRange').append(
-      el('label', {}, [el('span', { className: 'muted', textContent: '從' }), dueFrom]),
-      el('label', {}, [el('span', { className: 'muted', textContent: '到' }), dueTo])
-    );
-    const onDueInput = () => {
-      state.filters.due = 'custom';
-      state.filters.dueNone = false;
-      state.filters.dueFrom = dueFrom.value || '';
-      state.filters.dueTo = dueTo.value || '';
-      state.limit = PAGE_SIZE;
-      render();
-    };
-    dueFrom.oninput = onDueInput;
-    dueTo.oninput = onDueInput;
     $('#btnResetFilters').onclick = () => {
       // 就地清空，不要換掉整個 state.filters 物件：chip 的 onclick 抓的是 Set 的參照，
       // 一旦換成新物件，按鈕改到的就是被丟掉的舊 Set，按下去完全沒反應。
