@@ -229,7 +229,10 @@
     if (v === undefined || v === null) return '';
     if (Array.isArray(v)) return flat(v.find((x) => x !== undefined && x !== null && String(x).trim()));
     if (typeof v === 'object') {
-      if (v.year) return `${v.year}${String(v.month || 1).padStart(2, '0')}${String(v.day || 1).padStart(2, '0')}`;
+      // 0 年 0 月 0 日是「設立後沒核准過變更」，不是空值，要原樣帶下去
+      if (v.year !== undefined && v.year !== null && v.year !== '') {
+        return `${String(v.year).padStart(3, '0')}${String(v.month ?? 0).padStart(2, '0')}${String(v.day ?? 0).padStart(2, '0')}`;
+      }
       return '';
     }
     return String(v).trim();
@@ -249,12 +252,22 @@
     return Math.round(n / 1000).toLocaleString('en-US');
   }
 
-  /** 民國或西元的 yyyymmdd → 顯示用字串。 */
+  /**
+   * 民國或西元的 yyyymmdd → 顯示用字串。
+   *
+   * 「最後核准變更日期」在沒核准過變更的公司是民國 0 年 0 月 0 日，登記查詢頁就是
+   * 寫「1911年0月0日」。那不是壞掉的資料，是登記上真的沒有變更紀錄，所以照原樣
+   * 顯示成「1911年0月0日」——業務看到的跟自己去查登記看到的一模一樣，不用懷疑
+   * 是不是網站漏了什麼。
+   */
+  const ZERO_DATE = '1911年0月0日';
   function tidyDate(raw) {
     const s = String(raw || '').replace(/\D/g, '');
-    if (s.length === 8) return `${s.slice(0, 4)}/${s.slice(4, 6)}/${s.slice(6, 8)}`;
-    if (s.length === 7) return `${+s.slice(0, 3) + 1911}/${s.slice(3, 5)}/${s.slice(5, 7)}`;
-    return String(raw || '').trim();
+    const out = (y, m, d) => ((+y <= 1911 || +m < 1 || +d < 1) ? ZERO_DATE : `${y}/${m}/${d}`);
+    if (s.length === 8) return out(s.slice(0, 4), s.slice(4, 6), s.slice(6, 8));
+    if (s.length === 7) return out(String(+s.slice(0, 3) + 1911), s.slice(3, 5), s.slice(5, 7));
+    if (!s) return '';
+    return /^0+$/.test(s) ? ZERO_DATE : String(raw || '').trim();
   }
 
   function mapRow(row) {
