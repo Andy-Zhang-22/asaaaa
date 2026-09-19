@@ -7,7 +7,7 @@
 <meta name="description" content="把電話推廣名單 PDF 轉成可搜尋、可撥號、可追蹤的工作台。資料只存在本機瀏覽器。">
 <meta name="theme-color" content="#0f172a">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>">
-<link rel="stylesheet" href="assets/css/app.css">
+<link rel="stylesheet" href="assets/css/app.css?v=20260919-90">
 </head>
 <body data-theme="auto">
 
@@ -26,24 +26,38 @@
   </div>
 
   <div class="topbar-actions">
-    <button id="btnImport" class="btn btn-primary">匯入名單</button>
+    <a class="btn btn-ghost nav-link" href="customers.html" title="客戶管理：案件進度、跟進紀錄">🗂️ 客戶</a>
+    <a class="btn btn-ghost nav-link" href="dossier.html" title="徵信資料：五張表產出 Excel">📑 徵信</a>
+    <button id="btnSync" class="btn btn-ghost" title="與雲端硬碟同步" hidden>⟳</button>
+    <button id="btnImport" class="btn btn-primary">新增客戶</button>
     <button id="btnMenu" class="btn btn-ghost" aria-haspopup="true" title="更多">⋯</button>
     <div id="menu" class="menu" hidden>
-      <button data-act="export-csv">匯出 CSV（含通話紀錄）</button>
+      <hr>
+      <button data-act="export-xlsx">匯出 Excel（含通話紀錄）</button>
       <button data-act="export-json">下載備份 JSON</button>
-      <button data-act="import-json">還原備份 JSON</button>
+      <button data-act="import-json">還原備份 JSON（合併）</button>
+      <hr>
+      <button data-act="sync-now">立即同步雲端硬碟</button>
+      <button data-act="sync-setup">雲端同步設定</button>
       <hr>
       <button data-act="theme">切換深色／淺色</button>
+      <button data-act="registry">從商工登記更新公司資料</button>
+      <button data-act="check-names">檢查公司名稱</button>
       <button data-act="manage">管理已匯入名單</button>
       <button data-act="wipe" class="danger">清除所有資料</button>
+      <hr>
+      <button data-act="check-update">檢查更新</button>
+      <div class="menu-version" id="menuVersion"></div>
     </div>
   </div>
 </header>
 
 <nav class="tabs" id="tabs">
-  <button class="tab is-active" data-tab="today">今日待打 <span class="pill" id="countToday">0</span></button>
-  <button class="tab" data-tab="all">全部名單 <span class="pill" id="countAll">0</span></button>
+  <button class="tab is-active" data-tab="all">全部名單 <span class="pill" id="countAll">0</span></button>
   <button class="tab" data-tab="stats">統計</button>
+  <button class="tab" data-tab="rules">規則</button>
+  <a class="tab tab-link" href="customers.html">🗂️ 客戶管理</a>
+  <a class="tab tab-link" href="dossier.html">📑 徵信資料</a>
   <button id="btnFilters" class="tab tab-filters" aria-expanded="false">篩選 ▾</button>
 </nav>
 
@@ -53,45 +67,72 @@
       <h2>篩選</h2>
       <button id="btnResetFilters" class="btn btn-tiny">清除</button>
     </div>
-    <div class="filter-group">
-      <label>聯絡時程</label>
+    <div class="filter-group" data-group="due">
+      <label>聯絡時程（下次聯絡日）</label>
       <div class="chips" id="fltDue"></div>
+      <div class="due-range" id="fltDueRange"></div>
     </div>
-    <div class="filter-group">
-      <label>名單來源</label>
-      <div class="chips" id="fltSource"></div>
+    <div class="filter-group" data-group="added">
+      <label>名單新增</label>
+      <div class="chips" id="fltAdded"></div>
     </div>
-    <div class="filter-group">
-      <label>分級</label>
-      <div class="chips" id="fltGrade"></div>
-    </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="outcome">
       <label>洽談狀態</label>
       <div class="chips" id="fltOutcome"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="city">
       <label>縣市</label>
       <div class="chips" id="fltCity"></div>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="scale">
+      <label>客戶規模（依資本額）</label>
+      <div class="chips" id="fltScale"></div>
+    </div>
+    <div class="filter-group" data-group="relation">
+      <label>往來情形</label>
+      <div class="chips" id="fltRelation"></div>
+    </div>
+    <div class="filter-group" data-group="visit">
+      <label>拜訪</label>
+      <div class="chips" id="fltVisit"></div>
+    </div>
+    <div class="filter-group" data-group="tax">
+      <label>資料完整度</label>
+      <div class="chips" id="fltTax"></div>
+      <div class="chips chips-row2" id="fltPhone"></div>
+    </div>
+    <div class="filter-group" data-group="regchange">
+      <label>變更登記</label>
+      <div class="chips" id="fltRegChange"></div>
+    </div>
+    <div class="filter-group" data-group="branch">
+      <label>歸屬分公司（依登記地址）</label>
+      <select id="fltBranch"></select>
+    </div>
+    <div class="filter-group" data-group="industry">
       <label>產業別</label>
       <input id="fltIndustry" type="search" list="industryList" placeholder="輸入產業關鍵字">
       <datalist id="industryList"></datalist>
     </div>
-    <div class="filter-group">
+    <div class="filter-group" data-group="source">
+      <label>名單來源</label>
+      <div class="chips" id="fltSource"></div>
+    </div>
+    <div class="filter-group" data-group="sort">
       <label>排序</label>
       <select id="sortBy">
         <option value="next">依下次聯絡日</option>
         <option value="last">依最近聯絡日（新到舊）</option>
-        <option value="grade">依分級</option>
         <option value="capital">依資本額（高到低）</option>
         <option value="company">依公司名稱</option>
+        <option value="territory">依服務區域（優先區域在前）</option>
       </select>
     </div>
   </aside>
 
   <section class="content">
     <div id="paneList">
+      <div id="remindBar" class="remind-bar" hidden></div>
       <div class="list-head">
         <span id="listSummary">—</span>
         <label class="only-open"><input type="checkbox" id="hideBlocked" checked> 隱藏「禁止推廣」</label>
@@ -102,6 +143,7 @@
     </div>
 
     <div id="paneStats" class="stats" hidden></div>
+    <div id="paneRules" class="rules" hidden></div>
   </section>
 </main>
 
@@ -119,25 +161,107 @@
   <div class="drawer-backdrop" data-close></div>
   <div class="modal" role="dialog" aria-modal="true" aria-label="匯入名單">
     <button class="drawer-close" data-close aria-label="關閉">✕</button>
-    <h2>匯入電話推廣名單</h2>
-    <p class="muted">選擇 Google 雲端硬碟「電話推廣名單」資料夾裡的 PDF（可一次多選）。系統會自動還原表格欄位，資料只留在這台裝置。也可以改丟試算表匯出的 CSV。</p>
-    <div id="dropzone" class="dropzone">
-      <strong>把 PDF 拖進來</strong>
-      <span>或</span>
-      <button id="btnPick" class="btn btn-primary">選擇檔案</button>
-      <input id="filePick" type="file" accept="application/pdf,.pdf,text/csv,.csv" multiple hidden>
+    <h2>新增客戶名單</h2>
+    <p class="muted">四種方式都從這裡進來。資料只留在這台裝置，開了雲端同步才會複製到你自己的雲端硬碟。</p>
+    <div class="import-ways">
+      <button id="btnPick" class="way" type="button">
+        <strong>📄 檔案：PDF、Excel、CSV</strong>
+        <small>公司名單匯出檔、經濟部設立登記清冊，可一次多選</small>
+      </button>
+      <button id="btnShotPick" class="way" type="button">
+        <strong>📷 104 截圖</strong>
+        <small>手機相簿或電腦裡的「公司簡介」頁截圖，在本機辨識後可查商工登記補資料</small>
+      </button>
+      <button class="way" type="button" data-act="paste-customer">
+        <strong>📋 貼上試算表整列</strong>
+        <small>從 Excel 或 Google 試算表複製一列或多列直接貼上</small>
+      </button>
+      <button class="way" type="button" data-act="new-customer">
+        <strong>✍️ 手動輸入一筆</strong>
+        <small>名片或轉介的客戶；可貼上商工登記資料自動填表</small>
+      </button>
     </div>
+    <div id="dropzone" class="dropzone">
+      <strong>也可以直接把檔案或截圖拖到這裡</strong>
+    </div>
+    <input id="filePick" type="file" accept="application/pdf,.pdf,text/csv,.csv,.xlsx,.xls,image/*,.png,.jpg,.jpeg" multiple hidden>
+    <input id="shotPick" type="file" accept="image/*" multiple hidden>
     <div id="importLog" class="import-log"></div>
   </div>
 </div>
 
+<!-- 雲端同步設定 -->
+<div id="syncSetup" class="drawer" hidden>
+  <div class="drawer-backdrop" data-close></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="雲端同步設定">
+    <button class="drawer-close" data-close aria-label="關閉">✕</button>
+    <h2>雲端同步設定</h2>
+    <p class="muted">
+      同步檔會存在<strong>你自己的 Google 雲端硬碟</strong>，檔名「電話推廣名單-同步資料.json」。
+      資料不會經過任何第三方伺服器。每台裝置登入同一個 Google 帳號就會互相同步，
+      通話紀錄是<strong>合併</strong>的，不會互相覆蓋。
+    </p>
+    <div class="filter-group">
+      <label for="clientId">Google 用戶端 ID（OAuth Client ID）</label>
+      <input id="clientId" type="text" placeholder="例如 1234567890-abcdef.apps.googleusercontent.com" autocomplete="off">
+    </div>
+    <div class="card-actions">
+      <button id="btnSaveClientId" class="btn btn-primary">儲存並立即同步</button>
+      <button id="btnSyncSignOut" class="btn">登出 Google</button>
+    </div>
+    <p id="syncStatus" class="muted"></p>
+    <details class="sync-help">
+      <summary>還沒有用戶端 ID？點這裡看設定步驟</summary>
+      <ol>
+        <li>到 <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud 主控台</a> 建一個專案（名稱隨意）。</li>
+        <li>左側「API 和服務 → 程式庫」，搜尋 <strong>Google Drive API</strong>，按啟用。</li>
+        <li>左側「OAuth 同意畫面」：User Type 選 <strong>外部</strong>，填應用程式名稱與你的信箱。</li>
+        <li><strong>最容易漏掉的一步</strong>：在同一區找到「測試使用者」，
+            把<strong>你要用來登入的那個 Gmail</strong> 加進去。沒加的話登入會出現
+            「403 access_denied：只有測試人員可以存取」。</li>
+        <li>左側「憑證 → 建立憑證 → OAuth 用戶端 ID」，應用程式類型選 <strong>網頁應用程式</strong>。</li>
+        <li>「已授權的 JavaScript 來源」加入這個網站的網址，<strong>只到網域為止</strong>
+            （例如 <code>https://你的帳號.github.io</code>，後面的路徑不要加）。</li>
+        <li>建立後把「用戶端 ID」複製貼到上面的欄位。</li>
+      </ol>
+      <p class="muted">
+        同意畫面停在「測試」狀態就夠自己用，只是登入時會出現「這個應用程式未經驗證」的提醒，選「繼續」即可；
+        但<strong>每個要用的 Google 帳號都必須列在測試使用者裡</strong>。
+        不想維護名單的話，也可以在同意畫面按「發布應用程式」——這個網站只要
+        <code>drive.file</code> 權限（僅能存取自己建立的檔案），屬於不需送審的範圍。
+      </p>
+    </details>
+  </div>
+</div>
+
+<!-- 編輯／新增客戶 -->
+<div id="editor" class="drawer" hidden>
+  <div class="drawer-backdrop" data-close></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="編輯客戶資料">
+    <button class="drawer-close" data-close aria-label="關閉">✕</button>
+    <div id="editorBody"></div>
+  </div>
+</div>
+
 <input id="jsonPick" type="file" accept="application/json,.json" hidden>
+<div id="updateBar" class="update-bar" hidden>
+  <span>網站有新版本可用</span>
+  <button id="btnUpdate" class="btn btn-primary">立即更新</button>
+  <button id="btnUpdateLater" class="btn btn-ghost">稍後</button>
+</div>
+
 <div id="toast" class="toast" hidden></div>
 
-<script src="assets/vendor/pdfjs/pdf.min.js"></script>
-<script src="assets/js/pdf-table.js"></script>
-<script src="assets/js/normalize.js"></script>
-<script src="assets/js/store.js"></script>
-<script src="assets/js/app.js"></script>
+<script src="assets/vendor/pdfjs/pdf.min.js?v=20260919-90"></script>
+<script src="assets/vendor/xlsx/xlsx.min.js?v=20260919-90"></script>
+<script src="assets/vendor/tesseract/tesseract.min.js"></script>
+<script src="assets/js/pdf-table.js?v=20260919-90"></script>
+<script src="assets/js/normalize.js?v=20260919-90"></script>
+<script src="assets/js/registry.js?v=20260919-90"></script>
+<script src="assets/js/ocr.js?v=20260919-90"></script>
+<script src="assets/js/rules.js?v=20260919-90"></script>
+<script src="assets/js/store.js?v=20260919-90"></script>
+<script src="assets/js/sync.js?v=20260919-90"></script>
+<script src="assets/js/app.js?v=20260919-90"></script>
 </body>
 </html>

@@ -32,6 +32,12 @@
 }
 
 * { box-sizing: border-box; }
+/*
+ * [hidden] 是瀏覽器預設樣式，任何作者端的 display 都會蓋過它。
+ * .stats 與 .rules 都設了 display:grid，於是「隱藏」的分頁其實還在排版，
+ * 寬表格把手機版面撐爆。統一用 !important 讓 hidden 永遠有效。
+ */
+[hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
@@ -75,6 +81,9 @@ button, input, select { font: inherit; color: inherit; }
 .btn:hover { border-color: var(--primary); }
 .btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); font-weight: 600; }
 .btn-ghost { background: transparent; }
+.nav-link { text-decoration: none; display: inline-flex; align-items: center; }
+.tab-link { text-decoration: none; color: var(--muted); }
+.tab-link:hover { color: var(--text); }
 .btn-tiny { padding: 3px 9px; font-size: 12px; }
 .btn-block { display: block; width: 100%; margin: 14px 0 40px; }
 .btn:disabled { opacity: .5; cursor: progress; }
@@ -106,6 +115,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 .tab.is-active { color: var(--text); border-bottom-color: var(--primary); font-weight: 600; }
 .tab-filters { display: none; margin-left: auto; }
+.tab-filters[hidden] { display: none !important; }
 .pill {
   display: inline-block; min-width: 20px; padding: 0 6px; margin-right: 4px;
   border-radius: 999px; background: var(--surface-2); font-size: 12px; text-align: center;
@@ -113,6 +123,8 @@ button, input, select { font: inherit; color: inherit; }
 
 /* ---------- 版面 ---------- */
 .layout { display: grid; grid-template-columns: 250px 1fr; gap: 20px; padding: 16px; align-items: start; }
+.layout.is-wide { grid-template-columns: 1fr; }
+.rules { max-width: 900px; }
 .filters {
   position: sticky; top: 108px; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 14px; max-height: calc(100vh - 128px); overflow: auto;
@@ -120,12 +132,25 @@ button, input, select { font: inherit; color: inherit; }
 .filter-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .filter-head h2 { font-size: 14px; }
 .filter-group { margin-bottom: 14px; }
+/* 每一組可收合：標題列點一下展開／收起，收起時只留標題與已選數量，篩選區才不會一長串 */
 .filter-group > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+#filters .filter-group[data-group] > label {
+  display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+}
+#filters .filter-group[data-group] > label::before { content: '▾'; font-size: 10px; opacity: .7; }
+#filters .filter-group.is-closed > label::before { content: '▸'; }
+#filters .filter-group.is-closed > label { margin-bottom: 0; }
+#filters .filter-group.is-closed > :not(label) { display: none; }
+.filter-count {
+  margin-left: auto; font-size: 11px; background: var(--primary); color: var(--primary-ink);
+  border-radius: 999px; padding: 0 7px; line-height: 16px;
+}
 .filter-group input, .filter-group select {
   width: 100%; padding: 7px 10px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--surface-2);
 }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips-row2 { margin-top: 6px; }
 .chip {
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
   border-radius: 999px; padding: 4px 10px; font-size: 12.5px; cursor: pointer;
@@ -160,9 +185,6 @@ button, input, select { font: inherit; color: inherit; }
   display: inline-block; padding: 1px 8px; border-radius: 999px;
   font-size: 12px; border: 1px solid var(--border); background: var(--surface-2);
 }
-.badge-grade { font-weight: 700; }
-.badge-S, .badge-A { background: color-mix(in srgb, var(--ok) 18%, transparent); border-color: var(--ok); color: var(--ok); }
-.badge-B { background: color-mix(in srgb, var(--warn) 18%, transparent); border-color: var(--warn); color: var(--warn); }
 .out-blocked { background: color-mix(in srgb, var(--danger) 16%, transparent); border-color: var(--danger); color: var(--danger); }
 .out-declined { color: var(--muted); }
 .out-meeting, .out-interested { background: color-mix(in srgb, var(--ok) 16%, transparent); border-color: var(--ok); color: var(--ok); }
@@ -197,6 +219,8 @@ button, input, select { font: inherit; color: inherit; }
   border: 1px solid var(--border); border-radius: 8px; width: 32px; height: 32px; cursor: pointer;
 }
 .detail-head h2 { font-size: 19px; margin-bottom: 4px; }
+.detail-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.detail-title h2 { margin-bottom: 0; }
 .detail-alias { font-size: 13px; color: var(--muted); }
 .detail-grid {
   display: grid; grid-template-columns: 84px 1fr; gap: 6px 12px;
@@ -270,3 +294,303 @@ button, input, select { font: inherit; color: inherit; }
   .tabs { top: 104px; }
   .drawer-panel { width: 100%; }
 }
+
+.import-preview { margin: 12px 0; font-size: 13px; }
+.import-preview h3 { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.import-preview dl {
+  display: grid; grid-template-columns: 72px 1fr; gap: 2px 10px; margin: 0 0 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px;
+}
+.import-preview dt { color: var(--muted); }
+.import-preview dd { margin: 0; overflow-wrap: anywhere; }
+.import-preview dd.is-blank { color: var(--muted); opacity: .55; }
+
+.sync-help { margin-top: 16px; font-size: 13px; }
+.sync-help summary { cursor: pointer; color: var(--primary); }
+.sync-help ol { padding-right: 20px; margin: 10px 0; }
+.sync-help li { margin-bottom: 6px; }
+.sync-help a { color: var(--primary); }
+#btnSync.is-busy { opacity: .6; }
+#btnSync.is-error { color: var(--danger); border-color: var(--danger); }
+
+/* ---------- 規則頁 ---------- */
+.rules { display: grid; gap: 16px; }
+.rule-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px;
+}
+.rule-card h2 { font-size: 17px; margin-bottom: 6px; }
+.rule-summary { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+.rule-article { margin-bottom: 14px; padding-right: 12px; border-right: 3px solid var(--border); }
+.rule-article h3 { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.rule-article p { margin: 0; line-height: 1.8; }
+.rule-clarify { border-right-color: var(--primary); }
+.rule-clarify ol { margin: 0; padding-right: 20px; }
+.rule-clarify li { margin-bottom: 6px; line-height: 1.8; }
+
+.rule-checker {
+  margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border);
+}
+.rule-checker h3 { font-size: 15px; margin-bottom: 12px; }
+.rule-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.rule-field { display: block; margin-bottom: 14px; }
+.rule-field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.rule-field small { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
+.rule-field input, .rule-field select, .rule-field textarea {
+  width: 100%; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+}
+.rule-field textarea { min-height: 96px; resize: vertical; font-variant-numeric: tabular-nums; }
+.rule-field-wide { margin-top: 4px; }
+
+.rule-result { margin-top: 16px; }
+.rule-verdict {
+  margin: 0 0 10px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface-2); line-height: 1.7;
+}
+.rule-verdict.is-ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.rule-verdict.is-controlled { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.rule-verdict.is-warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.rule-verdict.is-fail { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.rule-result a, .rule-result .muted { word-break: break-all; }
+.rule-note { margin: 0 0 8px; font-size: 13px; color: var(--warn); line-height: 1.7; }
+
+.rule-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13.5px; }
+/* 規則裡的表格欄位多，窄螢幕改成可橫向捲動，不要把整頁撐寬 */
+@media (max-width: 760px) {
+  .rule-table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .rule-table thead, .rule-table tbody { display: table; width: max-content; min-width: 100%; }
+}
+.rule-table th, .rule-table td {
+  padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.rule-table th { color: var(--muted); font-weight: 500; font-size: 12px; }
+.rule-table td:first-child, .rule-table th:first-child { text-align: right; }
+.rule-table td:first-child { white-space: nowrap; }
+.rule-table .row-short td { color: var(--danger); }
+.rule-table .row-waived td { color: var(--muted); }
+
+/* ---------- 規則頁：多規章與分析 ---------- */
+.rule-source { margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.rule-subhead { font-size: 14px; margin: 22px 0 10px; }
+.rule-note-plain { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+.rule-article ul, .rule-article ol { margin: 0; padding-right: 20px; }
+.rule-article li { margin-bottom: 8px; line-height: 1.85; }
+
+.rule-analysis { border-color: var(--primary); }
+.rule-flow { list-style: none; counter-reset: flow; margin: 0 0 8px; padding: 0; }
+.rule-flow li {
+  counter-increment: flow; position: relative;
+  padding: 0 40px 14px 0; border-right: 2px solid var(--border); margin-right: 13px;
+}
+.rule-flow li:last-child { border-right-color: transparent; }
+.rule-flow li::before {
+  content: counter(flow); position: absolute; right: -14px; top: 0;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--primary); color: var(--primary-ink);
+  font-size: 13px; font-weight: 700; display: grid; place-items: center;
+}
+.rule-flow strong { display: block; margin-bottom: 2px; }
+.rule-flow p { margin: 0; color: var(--muted); line-height: 1.8; }
+
+.rule-finding {
+  border-right: 3px solid var(--border); padding: 2px 12px 2px 0; margin-bottom: 14px;
+}
+.rule-finding strong { display: block; margin-bottom: 3px; }
+.rule-finding p { margin: 0; color: var(--muted); line-height: 1.8; }
+.rule-finding.level-key { border-right-color: var(--primary); }
+.rule-finding.level-warn { border-right-color: var(--warn); }
+.rule-finding.level-note { border-right-color: var(--border); }
+
+.rule-table-share th[scope="row"], .rule-table-thresholds th[scope="row"] { font-weight: 600; }
+.rule-table-share td, .rule-table-share th { text-align: center; }
+.rule-table-share th[scope="row"] { text-align: right; white-space: nowrap; }
+.rule-table-thresholds td, .rule-table-thresholds th { text-align: right; }
+.rule-table-thresholds th[scope="row"] { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rule-table td { white-space: normal; }
+.badge-micro { border-color: var(--primary); color: var(--primary); }
+.badge-large { border-color: #7c3aed; color: #7c3aed; }
+.badge-regchange { border-color: #d97706; color: #b45309; }
+.branch-common { color: #b45309; }
+.badge-branch { border-color: #0f766e; color: #0f766e; }
+/* 回撥提醒 */
+.remind-bar { border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 10px; }
+.remind-bar.is-due { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--surface)); }
+.remind-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13.5px; }
+.remind-toggle { background: none; border: 0; padding: 4px 0; font: inherit; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.remind-caret { font-size: 11px; opacity: .7; }
+.remind-tools { display: flex; gap: 6px; flex-shrink: 0; }
+.remind-list { margin-top: 4px; }
+.remind-row { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px dashed var(--border); font-size: 13.5px; }
+.remind-time { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; }
+.remind-row.is-due .remind-time { color: var(--danger); }
+.remind-row.is-today .remind-time { color: var(--primary); }
+.remind-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.remind-open { background: none; border: 0; padding: 0; color: var(--text); cursor: pointer; text-align: left; font: inherit; min-width: 0; }
+.remind-name { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remind-meta { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remind-meta:empty { display: none; }
+.remind-tel { font-size: 12.5px; color: var(--primary); text-decoration: none; white-space: nowrap; }
+.remind-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.remind-actions .btn-tiny { padding: 3px 8px; }
+@media (max-width: 520px) { .remind-row { grid-template-columns: 44px 1fr auto; } .remind-actions { flex-direction: column; } }
+.badge-remind { border-color: var(--warn); color: var(--warn); }
+.badge-remind.is-due { border-color: var(--danger); color: var(--danger); font-weight: 600; }
+.draft-note { font-size: 12px; margin: 4px 0 6px; }
+.remind-note { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); margin: 6px 0; }
+.remind-custom { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); }
+/* 承作檢核 */
+.deal-result h3 { font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+.deal-facts { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 13px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.deal-facts dt { color: var(--muted); }
+.deal-facts dd { margin: 0; overflow-wrap: anywhere; }
+.deal-suggestions { padding-left: 20px; font-size: 13.5px; line-height: 1.6; }
+.deal-suggestions li { margin-bottom: 6px; }
+.deal-rule { font-size: 12px; }
+.deal-summary { font-weight: 600; }
+.badge-branch-common { border-color: #b45309; color: #b45309; }
+
+/* ---------- 長列表的繪製成本 ---------- */
+/*
+ * 名單一次可能有幾百筆，規則頁也很長。content-visibility 讓瀏覽器跳過
+ * 畫面外元素的排版與繪製，切換分頁時就不必為看不到的內容付出成本。
+ * contain-intrinsic-size 給一個概略高度，捲軸才不會亂跳。
+ */
+.card { content-visibility: auto; contain-intrinsic-size: auto 150px; }
+/*
+ * 規則頁只有 6 張卡，實測加 content-visibility 並沒有比較快（成本只是從
+ * 繪製移到排版），所以只在幾百筆的名單卡片上使用。
+ */
+.bars { content-visibility: auto; contain-intrinsic-size: auto 260px; }
+
+/* ---------- 編輯客戶資料 ---------- */
+.detail-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+.badge-edited { border-color: var(--warn); color: var(--warn); }
+/* 同一老闆的公司 */
+.badge-group { border-color: var(--primary); color: var(--primary); }
+.badge-visited { border-color: var(--ok); color: var(--ok); }
+.group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.group-head h3 { margin: 0; }
+.group-members { margin: 6px 0 0; padding-left: 18px; }
+.group-members li { margin: 2px 0; }
+.group-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 50vh; overflow: auto; }
+.group-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.group-row span { display: flex; flex-direction: column; }
+.apply-group { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
+/* 104 截圖預覽：每家一張卡，欄位兩欄排 */
+.import-ways { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0; }
+.way {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
+  color: inherit; font: inherit; cursor: pointer;
+}
+.way:hover, .way:focus-visible { border-color: var(--primary); outline: none; }
+.way strong { font-size: 15px; }
+.way small { color: var(--muted); font-size: 12px; line-height: 1.4; }
+@media (max-width: 600px) { .import-ways { grid-template-columns: 1fr; } }
+.shot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin: 6px 0; }
+.shot-grid .rule-field:last-child { grid-column: 1 / -1; }
+@media (max-width: 600px) { .shot-grid { grid-template-columns: 1fr; } }
+.edit-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 12px; margin: 16px 0; }
+@media (max-width: 520px) { .edit-form { grid-template-columns: 1fr; } }
+.phone-field { grid-column: 1 / -1; }
+.phone-field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.phone-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.phone-row { display: grid; grid-template-columns: minmax(130px, 1.4fr) 70px minmax(100px, 1fr) auto; gap: 6px; align-items: center; }
+.edit-form .phone-row input { width: 100%; }
+@media (max-width: 520px) { .phone-row { grid-template-columns: 1fr 64px; } .phone-row input:nth-child(3) { grid-column: 1; } }
+.edit-form textarea { min-height: 52px; resize: vertical; }
+.edit-form .rule-field input, .edit-form .rule-field textarea {
+  width: 100%; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+}
+
+/* 工具表單延後建立，先留一塊位置避免捲軸亂跳 */
+.rule-tool-holder { min-height: 120px; }
+.rule-tool-holder.is-ready { min-height: 0; }
+
+/* 門檻表在畫面外時不必排版 */
+.rule-defer { content-visibility: auto; contain-intrinsic-size: auto 560px; }
+
+.menu-version { margin: 4px 12px 2px; font-size: 11px; color: var(--muted); text-align: right; }
+
+.paste-box {
+  width: 100%; min-height: 130px; resize: vertical; margin: 14px 0 4px;
+  padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6;
+}
+
+/* ---------- 電話：撥號 + 複製 ---------- */
+.tel-group { display: inline-flex; align-items: stretch; }
+.tel-group .tel { border-radius: 999px 0 0 999px; border-right: 0; }
+.tel-copy {
+  border: 1px solid var(--border);
+  border-radius: 0 999px 999px 0;
+  background: var(--surface-2); color: var(--muted);
+  padding: 5px 12px; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.tel-copy:hover { color: var(--primary); border-color: var(--primary); background: var(--surface); }
+.tel-copy:active { background: var(--primary); color: var(--primary-ink); }
+
+/* ---------- 有新版本時的提示列 ---------- */
+.update-bar {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 95;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
+  max-width: calc(100% - 32px);
+  padding: 10px 14px; border-radius: 14px;
+  background: var(--surface); border: 1px solid var(--primary); box-shadow: var(--shadow);
+  font-size: 14px;
+}
+.update-bar .btn { padding: 6px 12px; font-size: 13px; }
+
+.badge-priority { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+.badge-outside { border-color: var(--danger); color: var(--danger); }
+
+/* ---------- 往來對象 ---------- */
+.badge-dealing { border-color: var(--warn); color: var(--warn); }
+.dealing-verdict { margin: 0 0 8px; }
+.dealing-verdict .muted { margin-left: 6px; font-size: 13px; }
+.dealing-verdict.dealing-active strong { color: var(--warn); }
+.badge-internal { border-color: var(--warn); color: var(--warn); }
+.badge-peer { border-color: var(--muted); color: var(--muted); }
+.relation-group { margin-bottom: 12px; padding-right: 12px; border-right: 3px solid var(--border); }
+.relation-group.relation-internal { border-right-color: var(--warn); }
+.relation-group.relation-peer { border-right-color: var(--muted); }
+.relation-group.relation-bank { border-right-color: var(--primary); }
+.relation-snippet { margin: 4px 0 0; font-size: 13px; color: var(--muted); line-height: 1.7; }
+
+/* 自架代理的設定說明 */
+.proxy-guide { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.proxy-guide summary { cursor: pointer; font-weight: 600; }
+.proxy-guide ol { margin: 10px 0; padding-right: 20px; line-height: 1.9; }
+.proxy-code {
+  max-height: 260px; overflow: auto; padding: 10px; border-radius: 6px;
+  background: var(--code-bg, rgba(127, 127, 127, 0.12));
+  font-size: 12px; line-height: 1.6; white-space: pre; direction: ltr; text-align: left;
+}
+
+/* 刪除鈕：在詳細頁的動作列裡要一眼看得出是危險操作 */
+.btn.danger { border-color: var(--danger); color: var(--danger); }
+
+/* 禁止推廣：唯一絕對不能看漏的標記 */
+.badge-blocked { border-color: var(--danger); color: var(--danger); font-weight: 700; }
+.blocked-warning {
+  margin: 10px 0; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--danger); border-right-width: 4px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.blocked-warning strong { color: var(--danger); }
+.blocked-warning p { margin: 6px 0 0; font-size: 13px; color: var(--muted); line-height: 1.7; }
+
+/* 日期輸入框旁的 yyyy/mm/dd 提示：瀏覽器把日期顯示成 mm/dd/yyyy，這裡補上名單慣用的寫法 */
+.date-with-hint { display: inline-flex; align-items: center; gap: 6px; }
+.date-hint { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.date-hint:empty { display: none; }
+/* 聯絡時程的自選區間：兩個日期框並排，塞不下就換行 */
+.due-range { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.due-range label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.due-range input[type="date"] { font-size: 13px; padding: 4px 6px; flex: 1; min-width: 0; }
