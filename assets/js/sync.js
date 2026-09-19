@@ -61,6 +61,12 @@
       out.regError = older.regError;
     }
     if (!out.regChange) delete out.regChange;
+    // 有機會／無機會：取標記時間比較新的那份（取消標記也算一次）
+    if ((older.chanceAt || 0) > (newer.chanceAt || 0)) {
+      out.chance = older.chance;
+      out.chanceAt = older.chanceAt;
+    }
+    if (!out.chance) delete out.chance;
     // 回撥提醒：取設定時間比較新的那份（取消提醒也算一次設定）
     if ((older.remindSetAt || 0) > (newer.remindSetAt || 0)) {
       out.remindAt = older.remindAt;
