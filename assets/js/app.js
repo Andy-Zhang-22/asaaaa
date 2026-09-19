@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-109';
+  const APP_VERSION = '20260919-110';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1072,6 +1072,8 @@
       next: (a, b) => (a.nextDate || '9999').localeCompare(b.nextDate || '9999'),
       last: (a, b) => (b.lastDate || '').localeCompare(a.lastDate || ''),
       capital: (a, b) => num(b.capital) - num(a.capital),
+      // 最近核准變更：新到舊。沒查到日期的排最後（空字串當成最舊，不是最新）
+      regchanged: (a, b) => (b.regChanged || '').localeCompare(a.regChanged || ''),
       company: (a, b) => a.company.localeCompare(b.company, 'zh-Hant'),
       territory: (a, b) => {
         const rank = { 優先區域: 0, 服務範圍: 1, '': 2, 範圍外: 3 };
@@ -1700,7 +1702,11 @@
       ['產業別', r.industry], ['成立年', r.founded],
       ['資本總額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
       ['實收資本額', r.capitalPaid ? `${r.capitalPaid} 仟元` : ''],
-      ['最近核准變更', r.regChanged || ''],
+      /*
+       * 這一列一律顯示，即使登記上沒有變更紀錄（那種會是「1911年0月0日」，
+       * 跟自己去查登記看到的一樣）。整列藏起來的話，看到的人只會以為是網站漏掉了。
+       */
+      ['最近核准變更', r.regChanged || (r.regAt ? '—' : '—　還沒查過商工登記')],
       ['下次聯絡', r.nextDate ? dateLabel(r.nextDate) : ''],
       ['最近聯絡', r.lastDate ? dateLabel(r.lastDate) : ''],
       ['名單新增', r.addedDate ? dateLabel(r.addedDate) : ''],
@@ -2456,7 +2462,7 @@ export default {
    * 隔天 0:00 才補得到。使用者看到的是「你說有這兩欄，我這裡沒有」。
    * 換了字串就把當天那個記號清掉，下次打開網站立刻重查一次全部。
    */
-  const REGISTRY_FIELDS_REV = '2026-09-19-capital';
+  const REGISTRY_FIELDS_REV = '2026-09-19-capital-2';
   const REGISTRY_FIELDS = [
     ['taxId', '統一編號'],
     ['capital', '資本總額（仟元）'],
