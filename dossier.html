@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>徵信資料｜中小企業貸款</title>
+<meta name="description" content="把客戶的金融負債、銷貨／進貨廠商、不動產、財務報表填進五個標題，一鍵產出送銀行用的 Excel。資料只存在本機瀏覽器。">
+<meta name="theme-color" content="#0f172a">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📑</text></svg>">
+<link rel="stylesheet" href="assets/css/app.css?v=20260919-90">
+<link rel="stylesheet" href="assets/css/crm.css?v=20260919-90">
+<link rel="stylesheet" href="assets/css/dossier.css?v=20260919-90">
+</head>
+<body data-theme="auto">
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">📑</span>
+    <div>
+      <h1>徵信資料</h1>
+      <p class="brand-sub" id="brandSub">五張表 → 一份 Excel</p>
+    </div>
+  </div>
+
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="搜尋公司、統編、負責人…" autocomplete="off">
+    <kbd>/</kbd>
+  </div>
+
+  <div class="topbar-actions">
+    <a class="btn btn-ghost nav-link" href="customers.html" title="客戶管理">🗂️ 客戶</a>
+    <a class="btn btn-ghost nav-link" href="index.html" title="電話推廣名單">📞 名單</a>
+    <button id="btnNew" class="btn btn-primary">＋ 新增一份</button>
+    <button id="btnMenu" class="btn btn-ghost" aria-haspopup="true" title="更多">⋯</button>
+    <div id="menu" class="menu" hidden>
+      <button data-act="export-json">下載備份 JSON（含客戶管理）</button>
+      <button data-act="import-json">還原備份 JSON</button>
+      <hr>
+      <button data-act="theme">切換深色／淺色</button>
+    </div>
+  </div>
+</header>
+
+<main class="dossier-main">
+  <!-- 列表 -->
+  <section id="listView">
+    <div class="list-head">
+      <span id="listSummary">—</span>
+    </div>
+    <div id="cards" class="cards"></div>
+    <div id="emptyState" class="empty" hidden>
+      <strong>還沒有任何徵信資料</strong>
+      <p>按右上角「新增一份」，輸入公司名稱後，把資料填進五個標題，就能下載跟範例一樣的 Excel。</p>
+    </div>
+  </section>
+
+  <!-- 編輯 -->
+  <section id="editView" hidden>
+    <div class="edit-head">
+      <button id="btnBack" class="btn btn-ghost" type="button">← 返回列表</button>
+      <div class="head-fields">
+        <label>公司名稱 <input id="fCompany" list="customerList" placeholder="公司全名（會印在乙表上）"></label>
+        <datalist id="customerList"></datalist>
+        <label>統一編號 <input id="fTaxId" placeholder="8 碼"></label>
+        <label>負責人 <input id="fOwner"></label>
+        <label>基準日 <input id="fBaseDate" placeholder="202608" title="年月，例如 202608"></label>
+      </div>
+      <div class="head-actions">
+        <span id="saveState" class="muted">尚未儲存</span>
+        <button id="btnExcel" class="btn btn-primary" type="button">⬇ 下載 Excel</button>
+        <button id="btnDelete" class="btn btn-ghost danger-text" type="button" title="刪除這份資料">🗑</button>
+      </div>
+    </div>
+
+    <nav class="tabs section-tabs" id="sectionTabs"></nav>
+
+    <div class="paste-tip muted">
+      小技巧：從 Excel 複製好幾格再貼到表格的任一格，會自動往右、往下填滿；多行文字的欄位可以按 Shift+Enter 換行。
+    </div>
+
+    <div id="sectionHost"></div>
+  </section>
+</main>
+
+<input id="jsonPick" type="file" accept="application/json,.json" hidden>
+<div id="toast" class="toast" hidden></div>
+
+<script src="assets/vendor/exceljs/exceljs.min.js?v=20260919-90"></script>
+<script src="assets/js/crm-store.js?v=20260919-90"></script>
+<script src="assets/js/dossier-model.js?v=20260919-90"></script>
+<script src="assets/js/dossier-excel.js?v=20260919-90"></script>
+<script src="assets/js/dossier.js?v=20260919-90"></script>
+</body>
+</html>

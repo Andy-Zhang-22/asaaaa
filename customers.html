@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>客戶管理｜中小企業貸款</title>
+<meta name="description" content="中小企業貸款業務的客戶管理：客戶建檔、貸款案件進度、文件清單、跟進紀錄與待辦。資料只存在本機瀏覽器。">
+<meta name="theme-color" content="#0f172a">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>">
+<link rel="stylesheet" href="assets/css/app.css?v=20260919-90">
+<link rel="stylesheet" href="assets/css/crm.css?v=20260919-90">
+</head>
+<body data-theme="auto">
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">🗂️</span>
+    <div>
+      <h1>客戶管理</h1>
+      <p class="brand-sub" id="brandSub">尚未建立客戶</p>
+    </div>
+  </div>
+
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="搜尋公司、統編、負責人、聯絡人、電話、銀行、備註…" autocomplete="off">
+    <kbd>/</kbd>
+  </div>
+
+  <div class="topbar-actions">
+    <a class="btn btn-ghost nav-link" href="dossier.html" title="徵信資料">📑 徵信</a>
+    <a class="btn btn-ghost nav-link" href="index.html" title="切換到電話推廣名單">📞 名單</a>
+    <button id="btnNew" class="btn btn-primary">＋ 新增客戶</button>
+    <button id="btnMenu" class="btn btn-ghost" aria-haspopup="true" title="更多">⋯</button>
+    <div id="menu" class="menu" hidden>
+      <button data-act="import-csv">匯入客戶 CSV／Excel 匯出檔</button>
+      <button data-act="export-customers">匯出客戶 CSV</button>
+      <button data-act="export-cases">匯出案件 CSV</button>
+      <hr>
+      <button data-act="export-json">下載備份 JSON</button>
+      <button data-act="import-json">還原備份 JSON</button>
+      <hr>
+      <button data-act="theme">切換深色／淺色</button>
+      <button data-act="wipe" class="danger">清除所有客戶資料</button>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab is-active" data-tab="overview">總覽</button>
+  <button class="tab" data-tab="customers">客戶 <span class="pill" id="countCustomers">0</span></button>
+  <button class="tab" data-tab="cases">案件 <span class="pill" id="countCases">0</span></button>
+  <button class="tab" data-tab="todo">待跟進 <span class="pill" id="countTodo">0</span></button>
+  <button id="btnFilters" class="tab tab-filters" aria-expanded="false">篩選 ▾</button>
+</nav>
+
+<main class="layout">
+  <aside class="filters" id="filters">
+    <div class="filter-head">
+      <h2>篩選</h2>
+      <button id="btnResetFilters" class="btn btn-tiny">清除</button>
+    </div>
+    <div class="filter-group">
+      <label>跟進時程</label>
+      <div class="chips" id="fltDue"></div>
+    </div>
+    <div class="filter-group">
+      <label>客戶階段</label>
+      <div class="chips" id="fltStage"></div>
+    </div>
+    <div class="filter-group">
+      <label>案件狀態</label>
+      <div class="chips" id="fltCaseStatus"></div>
+    </div>
+    <div class="filter-group">
+      <label>銀行</label>
+      <div class="chips" id="fltBank"></div>
+    </div>
+    <div class="filter-group">
+      <label>客戶來源</label>
+      <div class="chips" id="fltSource"></div>
+    </div>
+    <div class="filter-group">
+      <label>標籤</label>
+      <div class="chips" id="fltTag"></div>
+    </div>
+    <div class="filter-group">
+      <label>縣市</label>
+      <div class="chips" id="fltCity"></div>
+    </div>
+    <div class="filter-group">
+      <label>產業別</label>
+      <input id="fltIndustry" type="search" list="industryList" placeholder="輸入產業關鍵字">
+      <datalist id="industryList"></datalist>
+    </div>
+    <div class="filter-group">
+      <label>排序</label>
+      <select id="sortBy">
+        <option value="next">依下次跟進日</option>
+        <option value="updated">依最近更新（新到舊）</option>
+        <option value="amount">依申請金額（高到低）</option>
+        <option value="company">依公司名稱</option>
+        <option value="created">依建檔時間（新到舊）</option>
+      </select>
+    </div>
+  </aside>
+
+  <section class="content">
+    <div id="paneOverview" class="overview" hidden></div>
+
+    <div id="paneCustomers" hidden>
+      <div class="list-head">
+        <span id="listSummary">—</span>
+      </div>
+      <div id="cards" class="cards"></div>
+      <div id="emptyCustomers" class="empty" hidden></div>
+      <button id="btnMore" class="btn btn-block" hidden>載入更多</button>
+    </div>
+
+    <div id="paneCases" hidden>
+      <div class="list-head">
+        <span id="caseSummary">—</span>
+        <label class="only-open"><input type="checkbox" id="hideClosed" checked> 隱藏已撥款／婉拒／取消</label>
+      </div>
+      <div id="board" class="board"></div>
+    </div>
+
+    <div id="paneTodo" class="todo" hidden></div>
+  </section>
+</main>
+
+<!-- 客戶詳細資料抽屜 -->
+<div id="drawer" class="drawer" hidden>
+  <div class="drawer-backdrop" data-close></div>
+  <div class="drawer-panel" role="dialog" aria-modal="true" aria-label="客戶詳細資料">
+    <button class="drawer-close" data-close aria-label="關閉">✕</button>
+    <div id="drawerBody"></div>
+  </div>
+</div>
+
+<!-- 通用表單對話框 -->
+<div id="formDialog" class="drawer" hidden>
+  <div class="drawer-backdrop" data-form-cancel></div>
+  <form class="modal form-modal" id="formBox" autocomplete="off">
+    <button type="button" class="drawer-close" data-form-cancel aria-label="關閉">✕</button>
+    <h2 id="formTitle">表單</h2>
+    <div id="formFields" class="form-grid"></div>
+    <div class="form-actions">
+      <button type="button" class="btn" data-form-cancel>取消</button>
+      <button type="submit" class="btn btn-primary" id="formSubmit">儲存</button>
+    </div>
+  </form>
+</div>
+
+<!-- 匯入 CSV -->
+<div id="importer" class="drawer" hidden>
+  <div class="drawer-backdrop" data-close></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="匯入客戶">
+    <button class="drawer-close" data-close aria-label="關閉">✕</button>
+    <h2>匯入客戶 CSV</h2>
+    <p class="muted">把你現有的 Excel 客戶清單「另存新檔」成 CSV（UTF-8）再丟進來。第一列要是欄位標題，
+      系統會自動辨認：公司名稱、統編、負責人、聯絡人、電話、手機、Email、地址、產業、資本額、來源、標籤、備註。
+      統編或公司名稱相同的客戶會視為同一筆並更新。</p>
+    <div id="dropzone" class="dropzone">
+      <strong>把 CSV 拖進來</strong>
+      <span>或</span>
+      <button id="btnPick" class="btn btn-primary">選擇檔案</button>
+      <input id="filePick" type="file" accept="text/csv,.csv" multiple hidden>
+    </div>
+    <div id="importLog" class="import-log"></div>
+  </div>
+</div>
+
+<input id="jsonPick" type="file" accept="application/json,.json" hidden>
+<div id="toast" class="toast" hidden></div>
+
+<script src="assets/js/normalize.js?v=20260919-90"></script>
+<script src="assets/js/crm-store.js?v=20260919-90"></script>
+<script src="assets/js/crm.js?v=20260919-90"></script>
+</body>
+</html>
