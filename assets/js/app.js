@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-110';
+  const APP_VERSION = '20260919-112';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -41,7 +41,13 @@
     userStates: new Map(),
     tab: 'all',
     search: '',
-    sort: 'next',
+    /*
+     * 預設照「最近核准變更」由新到舊排。
+     *
+     * 使用者要的是追蹤客戶：剛增資、剛換負責人、剛搬家的公司排在最前面，那是
+     * 最值得打的一批。下次聯絡日那條線有提醒列在顧，不需要靠排序。
+     */
+    sort: 'regchanged',
     limit: PAGE_SIZE,
     hideBlocked: true,
     filters: { due: '', dueFrom: '', dueTo: '', dueNone: false, source: new Set(), outcome: new Set(), city: new Set(), scale: new Set(), territory: new Set(), relation: new Set(), visit: new Set(), chance: new Set(), taxKind: new Set(), phoneKind: new Set(), regChange: new Set(), branch: new Set(), added: new Set(), industry: '' },
@@ -83,9 +89,28 @@
    * 網頁改不了。選擇器本身很好用（有月曆、有快速鍵），不想換掉，
    * 所以在旁邊補一個跟名單同格式的標示，選了什麼一眼就對得上。
    */
-  function withDateHint(input) {
+  /**
+   * 日期框旁邊的民國日期提示。
+   * @param {HTMLInputElement} input
+   * @param {boolean} [warnHoliday] 排未來的日期才要提醒放假；紀錄「哪天打的」不用，
+   *   那是已經發生的事，週六打過電話也很正常，標上去只是噪音。
+   */
+  function withDateHint(input, warnHoliday) {
     const hint = el('span', { className: 'date-hint' });
-    const sync = () => { hint.textContent = input.value ? dateLabel(input.value) : ''; };
+    /*
+     * 自己選的日期照舊尊重，不會偷偷改掉——但如果那天是國定假日或週末，
+     * 這裡要講出來。快捷鍵（明天、一週後…）才會自動順延。
+     */
+    const sync = () => {
+      if (!input.value) { hint.textContent = ''; hint.classList.remove('is-holiday'); return; }
+      const H = warnHoliday ? window.Holidays : null;
+      const why = H ? H.holidayName(input.value) : '';
+      // 那一年的行事曆還沒補進來時要講明，不然使用者會以為網站已經幫他避開國定假日了
+      const gap = H && why && !H.covered(input.value) ? `（${String(input.value).slice(0, 4)} 年行事曆還沒更新，只避得開週末）` : '';
+      const label = why ? `${dateLabel(input.value)}　⚠ ${/^週/.test(why) ? `${why}，放假` : `${why}（放假）`}` : dateLabel(input.value);
+      hint.textContent = label + gap;
+      hint.classList.toggle('is-holiday', !!why);
+    };
     input.addEventListener('input', sync);
     input.addEventListener('change', sync);
     sync();
@@ -306,7 +331,18 @@
     customBtn.onclick = async () => {
       const ts = custom.value ? new Date(custom.value).getTime() : NaN;
       if (!ts) { toast('請先選日期時間'); return; }
-      await at(ts)();
+      /*
+       * 撞到國定假日或週末就順延到下一個上班日，時間點（幾點幾分）照留。
+       * 連假整串會一起跳過，因為是一天一天往後找的。
+       */
+      const d = new Date(ts);
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const got = window.Holidays ? window.Holidays.nextWorkday(iso) : { iso, moved: false };
+      if (!got.moved) { await at(ts)(); return; }
+      const [y, m, day] = got.iso.split('-').map(Number);
+      const moved = new Date(y, m - 1, day, d.getHours(), d.getMinutes(), 0, 0).getTime();
+      await at(moved)();
+      toast(`${dateLabel(got.from)} 是${got.reason}，提醒順延到 ${whenLabel(moved)}`);
     };
     sec.append(note, quick, el('div', { className: 'card-actions' }, [custom, customBtn]));
     return sec;
@@ -350,6 +386,7 @@
       outcome: window.Normalize.normalizeOutcome((mine && mine.outcome) || (lastLog && lastLog.outcome) || window.Normalize.guessOutcome(base.notesRaw || '')),
       starred: !!(mine && mine.starred),
       chance: (mine && mine.chance) || '',
+      chanceAt: (mine && mine.chanceAt) || 0,
       edited: !!edits,
       group: groupMap().get(record.id) || '',
     };
@@ -901,11 +938,15 @@
   }
 
   /*
-   * 關係企業（手動連結的同老闆公司）的下次聯絡日、最近聯絡日連動。
+   * 關係企業（手動連結的同老闆公司）的連動：日期、狀態、電話、有沒有機會。
    *
    * 打給老闆談的是整組，但通話可能只記在其中一家。整組以「最近聯絡日最晚的那家」
    * 為準：它的最近聯絡日與下次聯絡日套到每一家；它沒填下次聯絡日就取整組最晚的。
-   * 只影響顯示、篩選與排序，不改任何一家存起來的資料。
+   *
+   * 電話與「有沒有機會」也一起共享：同一個老闆，號碼常常只填在其中一家，
+   * 談出來的意願也是整個老闆的事，不是某一家公司的事。
+   *
+   * 只影響顯示、篩選與排序，不改任何一家存起來的資料——解除連結就各自回到原樣。
    */
   function linkGroupDates(views) {
     const byGroup = new Map();
@@ -916,6 +957,40 @@
     });
     byGroup.forEach((members) => {
       if (members.length < 2) return;
+
+      /*
+       * 電話共享：自己沒號碼的，借同組有號碼的那家來用。
+       *
+       * 自己有號碼的一律用自己的——那才是這家公司的總機。借來的會標明來自哪一家，
+       * 免得業務打過去說錯公司名。有號碼可打就不算「無電話」，資料完整度那組跟著改，
+       * 不然會一直被列進「要補電話」的名單裡，可是根本補不到也不需要補。
+       */
+      const lender = members.find((m) => m.phones && m.phones.length);
+      if (lender) {
+        members.forEach((m) => {
+          if (m.phones && m.phones.length) return;
+          m.phones = lender.phones;
+          m.phonesFrom = lender.company;
+          m.phoneKind = 'yes';
+        });
+      }
+
+      /*
+       * 有沒有機會共享：整組取最後標的那一次。
+       *
+       * 老闆說「有意願給資料評估」講的是他自己，不是某一家公司；在哪一家標的
+       * 不該影響結果。改過主意的話以最新的為準（chanceAt），跟雲端合併同一套規則。
+       */
+      const marked = members.filter((m) => m.chance);
+      if (marked.length) {
+        const lead = marked.reduce((a, b) => ((b.chanceAt || 0) > (a.chanceAt || 0) ? b : a));
+        members.forEach((m) => {
+          if (m.id === lead.id) return;
+          if (m.chance === lead.chance) return;
+          m.chance = lead.chance;
+          m.chanceFrom = lead.company;
+        });
+      }
       const lead = members.reduce((a, b) => ((b.lastDate || '') > (a.lastDate || '') ? b : a));
       const lastDate = lead.lastDate || null;
       const nextDate = lead.nextDate || members.map((m) => m.nextDate).filter(Boolean).sort().pop() || null;
@@ -1616,7 +1691,9 @@
      * 判斷會變（今天說要資料、下週說不用了），沒有取消的路就只能在兩個錯的之間選。
      */
     const chanceBtn = (value) => {
-      const on = r.chance === value;
+      // 亮不亮看自己這家標了沒：跟著同老闆帶過來的值不算自己標的，按了才是
+      const own = r.chanceFrom ? '' : r.chance;
+      const on = own === value;
       const b = el('button', {
         className: `btn btn-tiny chance-btn${on ? ` is-on chance-${value}` : ''}`,
         type: 'button',
@@ -1644,6 +1721,7 @@
         dealBtn,
         deleteBtn(r),
       ].filter(Boolean)),
+      r.chanceFrom ? el('p', { className: 'muted', textContent: `${r.chance === 'yes' ? '有機會' : '無機會'} 是跟著同老闆的「${r.chanceFrom}」，整組一起算。在這裡按也可以，會以最後按的為準。` }) : '',
     ].filter(Boolean)));
 
     /*
@@ -1667,6 +1745,10 @@
       const box = el('div', { className: 'card-actions' });
       telLinks(r).forEach((a) => box.append(a));
       body.append(box);
+      // 借來的號碼要標明是哪一家的，不然打過去會說錯公司名
+      if (r.phonesFrom) {
+        body.append(el('p', { className: 'muted', textContent: `這家自己沒有電話，上面的號碼是同老闆的「${r.phonesFrom}」的。` }));
+      }
     } else if (r.phoneRaw) {
       body.append(el('p', { className: 'muted', textContent: `電話：${r.phoneRaw}` }));
     }
@@ -1832,9 +1914,13 @@
     [['今天', 0], ['明天', 1], ['3 天後', 3], ['一週後', 7], ['兩週後', 14], ['一個月後', 30], ['三個月後', 90]].forEach(([label, days]) => {
       const b = el('button', { className: 'btn btn-tiny', type: 'button', textContent: label });
       b.onclick = () => {
-        nextInput.value = addDays(todayISO(), days);
+        const want = addDays(todayISO(), days);
+        // 「今天」不順延：人是在今天按的，今天放假也是他自己知道
+        const got = days && window.Holidays ? window.Holidays.nextWorkday(want) : { iso: want, moved: false };
+        nextInput.value = got.iso;
         // 直接改 value 不會觸發事件，旁邊的日期提示要靠這個才會跟著換
         nextInput.dispatchEvent(new Event('change'));
+        if (got.moved) toast(`${dateLabel(got.from)} 是${got.reason}，順延到 ${dateLabel(got.iso)}（${window.Holidays.weekLabel(got.iso)}）`);
       };
       quick.append(b);
     });
@@ -1857,7 +1943,12 @@
       let auto = null;
       if (!picked) {
         auto = window.Normalize.findFollowUp(text, today);
-        if (auto) picked = auto.iso;
+        // 內容裡寫的日期是隨口約的，撞到連假一樣要順延；自己填在日期欄的才照原樣
+        if (auto) {
+          const got = window.Holidays ? window.Holidays.nextWorkday(auto.iso) : { iso: auto.iso, moved: false };
+          auto = { ...auto, iso: got.iso, movedFrom: got.moved ? got.from : '', reason: got.reason };
+          picked = auto.iso;
+        }
       }
       // 只寫這一家：同組其他家靠訪談互通與日期、狀態連動看得到同一通電話，不用各寫一則
       await window.Store.addLog({
@@ -1871,14 +1962,18 @@
       state.logs = await window.Store.allLogs();
       clearDraft();
       const extra = members.length ? `（同老闆的 ${members.length} 家一起看得到）` : '';
-      toast(blocking && !text ? `已標記禁止推廣${extra}` : auto ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}` : `已儲存通話紀錄${extra}`);
+      const autoNote = auto
+        ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}`
+          + (auto.movedFrom ? `（${dateLabel(auto.movedFrom)} 是${auto.reason}，順延了）` : '')
+        : '';
+      toast(blocking && !text ? `已標記禁止推廣${extra}` : auto ? autoNote : `已儲存通話紀錄${extra}`);
       render();
       openDetail(r.id);
       scheduleSync();
     };
     form.append(memo, draftNote, el('div', { className: 'row' }, [
       el('span', { className: 'muted', textContent: '結果' }), outcomeSel,
-      el('span', { className: 'muted', textContent: '下次聯絡' }), withDateHint(nextInput), save,
+      el('span', { className: 'muted', textContent: '下次聯絡' }), withDateHint(nextInput, true), save,
     ]));
     form.append(quick);
     if (members.length) {
@@ -1973,7 +2068,7 @@
             const editor = el('div', {}, [box,
               el('div', { className: 'row' }, [
                 el('span', { className: 'muted', textContent: '紀錄日期' }), withDateHint(when),
-                el('span', { className: 'muted', textContent: '下次聯絡' }), withDateHint(nextEdit),
+                el('span', { className: 'muted', textContent: '下次聯絡' }), withDateHint(nextEdit, true),
                 ok, cancel]),
             ]);
             li.replaceChild(editor, actions);
@@ -2106,7 +2201,7 @@
     const nextDate = el('input', { type: 'date', value: values.nextDate || '' });
     inputs.nextDate = nextDate;
     node.append(el('label', { className: 'rule-field' }, [
-      el('span', { textContent: '下次聯絡日' }), withDateHint(nextDate),
+      el('span', { textContent: '下次聯絡日' }), withDateHint(nextDate, true),
     ]));
     return {
       node,
@@ -3930,6 +4025,8 @@ export default {
         render();
       }, 120);
     };
+    // 下拉的預設值跟 state 對齊，不然畫面顯示第一個選項、實際卻是另一種排序
+    $('#sortBy').value = state.sort;
     $('#sortBy').onchange = (e) => { state.sort = e.target.value; render(); };
     $('#hideBlocked').onchange = (e) => { state.hideBlocked = e.target.checked; render(); };
     $('#btnMore').onclick = () => { state.limit += PAGE_SIZE; renderList(); };
