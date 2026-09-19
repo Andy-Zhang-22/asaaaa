@@ -65,6 +65,19 @@
     return text;
   }
 
+  /** 只辨識、回傳文字（給 401 申報書這種掃描 PDF 用；source 可以是 File、Blob 或 canvas）。 */
+  async function recognizeText(source, onProgress, params) {
+    const worker = await getWorker(onProgress);
+    // 例如表格型的申報書用 tessedit_pageseg_mode '11'（散落文字）比較抓得到數字；用完還原
+    if (params) await worker.setParameters(params);
+    try {
+      const { data } = await worker.recognize(source);
+      return data.text || '';
+    } finally {
+      if (params) await worker.setParameters(Object.fromEntries(Object.keys(params).map((k) => [k, k === 'tessedit_pageseg_mode' ? '3' : ''])));
+    }
+  }
+
   /* ------------------------------------------------------------------
    * 解析 104 公司頁文字
    * ------------------------------------------------------------------ */
@@ -191,5 +204,5 @@
     return bits.join('');
   }
 
-  global.Ocr = { recognize, parse104, describe, parsePhone, capitalToThousands };
+  global.Ocr = { recognize, parse104, describe, parsePhone, capitalToThousands, recognizeText };
 })(window);

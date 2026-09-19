@@ -460,6 +460,16 @@
 
   /** 把一塊資料對到指定段落，回傳預覽用的結果。 */
   function mapBlock(block, section) {
+    if (block.vat401) {
+      // 401 申報書只能變成 401表（銷項／進項一期）；硬指到別段就當作沒資料
+      if (section !== 'vat') return section === 'fin' ? { section, fin: { periods: null, values: {}, count: 0, keys: 0 } } : { section, rows: [], columns: [] };
+      const v = block.vat401;
+      const six = () => ['', '', '', '', '', ''];
+      const rows = [];
+      if (v.sales) { const a = six(); a[v.idx] = String(Math.round(v.sales / 1000)); rows.push({ year: v.year, kind: 'sales', values: a }); }
+      if (v.purchases) { const a = six(); a[v.idx] = String(Math.round(v.purchases / 1000)); rows.push({ year: v.year, kind: 'purchases', values: a }); }
+      return { section, vat: { rows, summary: '', count: rows.length } };
+    }
     if (block.jcic) {
       // 聯徵報告只能變成金融負債；硬指到別的段落就當作沒有資料
       if (section !== 'debts') return section === 'fin' ? { section, fin: { periods: null, values: {}, count: 0, keys: 0 } } : section === 'vat' ? { section, vat: { rows: [], summary: '', count: 0 } } : { section, rows: [], columns: [] };
@@ -666,6 +676,66 @@
     return { rows, baseDate, subject, count: raw.length };
   }
 
+  /* ---------------- 營業稅 401 申報書 → 401表（同期進銷貨比較表） ---------------- */
+  /*
+   * 一份 401 申報書就是一期（兩個月）。要的只有三個東西：
+   *   所屬年月份 → 哪一年、哪一期（1~2、3~4…）
+   *   銷售額總計（代號 25 (7)，＝應稅 21 (1)＋零稅率 23 (3)）→ 銷項
+   *   進項「進貨及費用 合計」（代號 44）→ 進項
+   * 金額是元，表上填仟元（四捨五入）。這跟使用者手填 4.pdf 的方式一致：
+   * 例如 115 年 05-06 月 銷售額總計 4,995,649 → 2026 年 5~6 銷項 4,996；進貨及費用 1,547,610 → 進項 1,547。
+   * 財政部匯出的 401 常是掃描圖，沒有文字層時用 tesseract（繁中）辨識第一頁。
+   */
+  const is401Text = (t) => /401/.test(t) && /(銷售額與稅額申報書|銷項稅額合計|所屬年月份|得扣抵進項稅額)/.test(t);
+  const numOf = (t) => Number(String(t || '').replace(/[,，\s]/g, '')) || 0;
+
+  function parse401Text(text, fileName) {
+    const t = String(text || '').replace(/[，]/g, ',').replace(/[\u3000]/g, ' ');
+    const flat = t.replace(/\s+/g, ' ');
+    let year = 0;
+    let startMonth = 0;
+    const m = flat.match(/所屬年月份[^0-9]{0,4}(\d{2,3})\s*年\s*(\d{1,2})\s*[^0-9月]{0,4}\s*(\d{1,2})\s*月/);
+    if (m) { year = Number(m[1]); startMonth = Number(m[2]); }
+    if (!year) {
+      const f = String(fileName || '').match(/(\d{2,3})[.\-_年]\s*(\d{1,2})\s*[-~～至]\s*(\d{1,2})\s*月?/);
+      if (f) { year = Number(f[1]); startMonth = Number(f[2]); }
+    }
+    if (!year || !startMonth) return null;
+    if (year < 1911) year += 1911;
+    const idx = Math.floor((startMonth - 1) / 2);
+    if (idx < 0 || idx >= M.VAT_PERIODS.length) return null;
+
+    let sales = 0;
+    const s1 = flat.match(/21\s*\(?1\)?\s*([\d,]{3,})/);
+    const s3 = flat.match(/23\s*\(?3\)?\s*([\d,]{1,})/);
+    if (s1) sales = numOf(s1[1]) + (s3 ? numOf(s3[1]) : 0);
+    if (!sales) { const s7 = flat.match(/25\s*\(7\)\s*([\d,]{3,})/); if (s7) sales = numOf(s7[1]); }
+    if (!sales) { const st = flat.match(/銷售額總計[^0-9]{0,12}([\d,]{4,})/); if (st) sales = numOf(st[1]); }
+
+    let purchases = 0;
+    const p44 = flat.match(/(?:^|\s)44\s+([\d,]{1,})\s+45\b/) || flat.match(/(?:^|\s)44\s+([\d,]{4,})/);
+    if (p44) purchases = numOf(p44[1]);
+    if (!purchases) { const pt = flat.match(/進項總金額[^0-9]{0,30}([\d,]{4,})/); if (pt) purchases = numOf(pt[1]); }
+    if (!purchases) { const p48 = flat.match(/(?:^|\s)48\s+([\d,]{4,})/); if (p48) purchases = numOf(p48[1]); }
+
+    if (!sales && !purchases) return null;
+    return { year: String(year), idx, sales, purchases, period: M.VAT_PERIODS[idx] };
+  }
+
+  /** 把 pdf.js 的第一頁畫成圖，給 OCR 用。 */
+  async function renderPdfPage(buffer, pageNo, scale) {
+    const doc = await global.pdfjsLib.getDocument({ data: buffer, isEvalSupported: false }).promise;
+    const page = await doc.getPage(pageNo || 1);
+    const viewport = page.getViewport({ scale: scale || 2 });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    page.cleanup();
+    await doc.destroy();
+    return canvas;
+  }
+
   /* ---------------- 讀檔 ---------------- */
 
   function parseCsv(text) {
@@ -718,13 +788,35 @@
     if (ext === 'pdf' || file.type === 'application/pdf') {
       if (!global.PdfTable || !global.pdfjsLib) throw new Error('PDF 解析元件沒有載入，請重新整理頁面再試');
       const buffer = await file.arrayBuffer();
-      // 先看第一頁是不是聯徵報告；是的話走專用解析
+      // 先看第一頁是不是聯徵報告或 401 申報書；是的話走專用解析
       const peek = await pdfTextLines(buffer.slice(0), 1);
-      if (peek.pages[0] && peek.pages[0].some((l) => /綜合信用報告/.test(lineText(l)))) {
+      const firstText = peek.pages[0] ? peek.pages[0].map(lineText).join('\n') : '';
+      if (/綜合信用報告/.test(firstText)) {
         say(`⏳ 解析聯徵報告 ${name}…`);
         const all = await pdfTextLines(buffer.slice(0));
         const jcic = parseJcic(all.pages, name, opts && opts.owner);
         return [{ name, rows: [], jcic }];
+      }
+      let text401 = is401Text(firstText) ? firstText : '';
+      if (!text401 && firstText.replace(/\s/g, '').length < 40 && global.Ocr && global.Tesseract) {
+        // 沒有文字層（掃描圖）：辨識第一頁看看是不是 401
+        say(`⏳ ${name} 是掃描圖，辨識文字中（第一次要載入辨識模型，約十幾秒）…`);
+        try {
+          // 放大到 3 倍、用「散落文字」模式（psm 11）抓表格裡的數字最準；抓不到再用分欄模式（psm 4）
+          const canvas = await renderPdfPage(buffer.slice(0), 1, 3);
+          const progress = (m) => { if (m && m.status === 'recognizing text' && m.progress) say(`⏳ 辨識 ${name}… ${Math.round(m.progress * 100)}%`); };
+          let ocr = await global.Ocr.recognizeText(canvas, progress, { tessedit_pageseg_mode: '11' });
+          if (!(is401Text(ocr) && parse401Text(ocr, name))) {
+            const again = await global.Ocr.recognizeText(canvas, progress, { tessedit_pageseg_mode: '4' });
+            if (is401Text(again) && parse401Text(again, name)) ocr = again;
+          }
+          if (is401Text(ocr) || /401|營業稅/.test(name)) text401 = ocr;
+        } catch (err) { console.warn('OCR 失敗', err); }
+      }
+      if (text401) {
+        const vat401 = parse401Text(text401, name);
+        if (vat401) return [{ name, rows: [], vat401 }];
+        throw new Error(`${name} 看起來是 401 申報書，但讀不到所屬年月份或銷售額，請確認檔案清晰`);
       }
       const parsed = await global.PdfTable.parsePdf(buffer, (done, total) => say(`⏳ 解析 ${name}… 第 ${done}/${total} 頁`));
       return [{ name, rows: parsed.rows, pages: parsed.pages, mode: parsed.mode }];
@@ -743,6 +835,12 @@
     const tables = await readFile(file, onProgress, opts);
     const found = [];
     tables.forEach((t) => {
+      if (t.vat401) {
+        const v = t.vat401;
+        const block = { section: 'vat', vat401: v, header: null, rows: [], sheet: '401 申報書' };
+        found.push({ id: `${found.length + 1}`, source: `401 申報書 ${v.year} 年 ${v.period} 月`, section: 'vat', block, preview: mapBlock(block, 'vat') });
+        return;
+      }
       if (t.jcic) {
         if (!t.jcic.rows.length) return;
         const block = { section: 'debts', jcic: t.jcic, header: null, rows: [], sheet: '聯徵報告' };
@@ -825,5 +923,5 @@
     return added;
   }
 
-  global.DossierImport = { analyze, apply, mapBlock, splitBlocks, readFile, parseCsv, finKeyOf, matchHeader, norm, parseJcic, shortBank, pdfTextLines };
+  global.DossierImport = { analyze, apply, mapBlock, splitBlocks, readFile, parseCsv, finKeyOf, matchHeader, norm, parseJcic, shortBank, pdfTextLines, parse401Text };
 })(window);
