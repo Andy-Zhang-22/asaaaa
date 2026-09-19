@@ -1,5 +1,5 @@
 /*
- * crm-store.js — 客戶管理的資料層（IndexedDB）。
+ * crm-store.js — 徵信資料的資料層（IndexedDB；客戶管理頁已移除，customers 等表留著相容備份）。
  * 客戶、貸款案件、跟進紀錄、徵信資料都只存在這台裝置的瀏覽器裡。
  */
 (function (global) {
