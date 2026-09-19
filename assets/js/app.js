@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-106';
+  const APP_VERSION = '20260919-107';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -2538,15 +2538,17 @@ export default {
   }
 
   /*
-   * 每天第一次打開網站時，在背景把全部名單對一次商工登記。
+   * 每天自動把全部名單對一次商工登記。
    *
-   * 沒有後端，所以「每天自動」只能靠使用者打開網站這個時機。查的是全部校正
-   * （登記資料是使用者要的正確版本），差異直接套用；一路失敗就停下來，
-   * 當天不再重試，把原因記在設定視窗裡。
+   * 沒有後端，所以沒辦法在瀏覽器關著的時候跑；能做到的是「網站開著就跨過 0:00
+   * 準時開跑，沒開著就等下次打開時補跑」——兩邊都走這支，靠 registry-auto-last
+   * 這個日期擋重複。查的是全部校正（登記資料是使用者要的正確版本），差異直接
+   * 套用；一路失敗就停下來，當天不再重試，把原因記在設定視窗裡。
    */
   async function maybeAutoRegistry() {
     if (!registryAutoOn()) return;
     if (!state.records.length) return;
+    if (registryJob.running) return;   // 手動那輪還在跑，先不要搶，下一分鐘再看
     const today = todayISO();
     if (registryPref('registry-auto-last') === today) return;
     registryPref('registry-auto-last', today);   // 先記，避免同一天多個分頁重複跑
@@ -2555,6 +2557,10 @@ export default {
       useMirror: registryPref('registry-mirror') === '1',
       auto: true,
     });
+  }
+
+  function autoRegistryTick() {
+    maybeAutoRegistry().catch((err) => console.error('自動更新商工登記失敗', err));
   }
 
   /*
@@ -2696,8 +2702,9 @@ export default {
     /*
      * 每天自動更新。
      *
-     * 網站沒有後端，沒辦法真的在半夜自己跑；做法是「每天第一次打開網站時在背景跑
-     * 一次全部校正」，對使用者來說效果一樣：每天看到的都是當天查過的登記資料。
+     * 網站沒有後端，瀏覽器關著的時候不可能自己跑；做法是網站開著就在 0:00 自己
+     * 開跑，沒開著就等下次打開時補跑，對使用者來說效果一樣：每天看到的都是當天
+     * 查過的登記資料。
      * 查完直接套用（登記資料就是使用者要的正確資訊），套用的內容記成「已修改」，
      * 詳細頁隨時可以還原。
      */
@@ -2707,7 +2714,7 @@ export default {
     const autoInfo = el('p', { className: 'muted', textContent: autoRegistrySummary() });
     host.append(el('label', { className: 'rule-field' }, [
       auto,
-      el('span', { textContent: ' 每天自動更新全部名單（每天第一次打開網站時在背景查一次，查到的差異直接套用）' }),
+      el('span', { textContent: ' 每天自動更新全部名單（跨過 0:00 就在背景查一次，查到的差異直接套用；網站沒開著就等下次打開時補跑）' }),
     ]), autoInfo);
 
     /*
@@ -4021,7 +4028,15 @@ export default {
     prebuildRules();
     checkForUpdate(false);
     dropOldDossierDb();
-    maybeAutoRegistry().catch((err) => console.error('自動更新商工登記失敗', err));
+    autoRegistryTick();
+    /*
+     * 每分鐘看一次日期跳了沒，跨過 0:00 就自己開跑。
+     *
+     * 不用「算到下一個午夜的 setTimeout」是因為筆電闔上、手機鎖屏的時候計時器
+     * 不會準時醒來，睡醒之後那個時間點早就過去了；每分鐘比一次日期最不會漏，
+     * 而且日期沒跳的時候 maybeAutoRegistry 只是讀一個 localStorage 就回來。
+     */
+    setInterval(autoRegistryTick, 60000);
     checkReminders();
     setInterval(checkReminders, 30000);
     /*
@@ -4031,7 +4046,9 @@ export default {
      * 那就永遠不會再檢查——更新了也不知道。
      */
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) checkForUpdate(false);
+      if (document.hidden) return;
+      checkForUpdate(false);
+      autoRegistryTick();   // 手機鎖了一整晚，解鎖回來就該補跑
     });
     if (!state.records.length) $('#importer').hidden = false;
   }
