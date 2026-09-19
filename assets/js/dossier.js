@@ -1,5 +1,5 @@
 /*
- * dossier.js — 徵信資料編輯：列表、五個段落的表格、貼上填入、自動儲存、下載 Excel。
+ * dossier.js — 徵信資料編輯：列表、六個段落的表格、貼上填入、自動儲存、下載 Excel。
  */
 (function () {
   'use strict';
@@ -86,7 +86,7 @@
     });
     $('#listSummary').textContent = `${list.length} 份徵信資料`;
     $('#emptyState').hidden = !!state.dossiers.length;
-    $('#brandSub').textContent = state.dossiers.length ? `${state.dossiers.length} 份資料` : '五張表 → 一份 Excel';
+    $('#brandSub').textContent = state.dossiers.length ? `${state.dossiers.length} 份資料` : '六張表 → 一份 Excel';
   }
 
   function showList() {
@@ -123,6 +123,9 @@
     d.sales = d.sales || blank.sales; d.sales.rows = d.sales.rows || [];
     d.purchases = d.purchases || blank.purchases; d.purchases.rows = d.purchases.rows || [];
     d.estates = d.estates || blank.estates; d.estates.rows = d.estates.rows || [];
+    d.vat = d.vat || M.blankVat();
+    d.vat.years = d.vat.years || M.defaultVatYears();
+    M.VAT_KINDS.forEach(([k]) => { d.vat[k] = d.vat[k] || []; for (let i = 0; i < M.VAT_YEARS; i++) d.vat[k][i] = d.vat[k][i] || ['', '', '', '', '', '']; });
     d.fin = d.fin || blank.fin; d.fin.periods = d.fin.periods || M.defaultPeriods(); d.fin.values = d.fin.values || {};
     return d;
   }
@@ -179,6 +182,14 @@
           return `月平均往來合計 ${fmt(total)} 仟${key === 'sales' ? ` · 佔營收比率合計 ${fmt(ratio)}%` : ''}`;
         },
       }));
+    }
+    if (key === 'vat') {
+      const vat = d.vat;
+      section.append(el('p', { className: 'desc', textContent: '照 401 申報書填每兩個月的銷項、進項金額（單位：仟元），合計自動算。年份可以直接改，四年由新到舊。' }));
+      const summary = el('textarea', { className: 'summary', value: vat.summary || '', placeholder: '綜合說明：營收趨勢、淡旺季、進銷差異…' });
+      summary.oninput = () => { vat.summary = summary.value; scheduleSave(); };
+      section.append(summary);
+      section.append(vatEditor(vat));
     }
     if (key === 'estates') {
       section.append(el('p', { className: 'desc', textContent: '負責人與關係人名下不動產。餘值＝不動產市價－設定金額合計（單位：仟元），會自動計算。' }));
@@ -490,6 +501,109 @@
     return wrap;
   }
 
+  /* ---------------- 同期進銷貨比較表 ---------------- */
+
+  function vatEditor(vat) {
+    const wrap = el('div');
+    const tableWrap = el('div', { className: 'grid-wrap' });
+    const table = el('table', { className: 'grid vat-grid' });
+    const hr = el('tr', {}, [el('th', { textContent: '年份' }), el('th', { textContent: '項目' })]);
+    M.VAT_PERIODS.forEach((p) => hr.append(el('th', { className: 'num', textContent: `${p} 月` })));
+    hr.append(el('th', { className: 'num', textContent: '合計' }));
+    table.append(el('thead', {}, [hr]));
+    const tbody = el('tbody');
+    table.append(tbody);
+    tableWrap.append(table);
+
+    const totals = {};      // kind -> td[]
+    const inputs = {};      // kind -> input[year][period]
+    const yearInputs = [];
+    const recompute = (kind, y) => { totals[kind][y].textContent = fmt(M.vatTotal(vat[kind][y])); };
+
+    const cleanNum = (v) => String(v).replace(/[^\d.\-]/g, '');
+    /** 從 Excel 複製一塊數字貼進來：往右填期別、往下填年份（同一類別）。 */
+    const onPaste = (e, kind, y, p) => {
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      if (!text || (!text.includes('\t') && !text.includes('\n'))) return;
+      e.preventDefault();
+      const lines = parseClipboard(text);
+      let filled = 0;
+      lines.forEach((line, dy) => {
+        const yy = y + dy;
+        if (yy >= M.VAT_YEARS) return;
+        line.forEach((val, dx) => {
+          const pp = p + dx;
+          if (pp >= M.VAT_PERIODS.length) return;
+          vat[kind][yy][pp] = cleanNum(val);
+          inputs[kind][yy][pp].value = vat[kind][yy][pp];
+          filled++;
+        });
+        recompute(kind, yy);
+      });
+      scheduleSave();
+      toast(`已填入 ${filled} 格`);
+    };
+
+    M.VAT_KINDS.forEach(([kind, label]) => {
+      totals[kind] = [];
+      inputs[kind] = [];
+      for (let y = 0; y < M.VAT_YEARS; y++) {
+        const tr = el('tr', { className: kind === 'purchases' && y === 0 ? 'is-kind-start' : '' });
+        const yearTd = el('td', { className: 'year' });
+        if (kind === 'sales') {
+          const inp = el('input', { value: vat.years[y] || '', placeholder: String(new Date().getFullYear() - y), inputMode: 'numeric' });
+          inp.oninput = () => { vat.years[y] = inp.value.trim(); if (yearInputs[y]) yearInputs[y].textContent = vat.years[y]; scheduleSave(); };
+          yearTd.append(inp);
+        } else {
+          yearTd.className = 'year label';
+          yearTd.textContent = vat.years[y] || '';
+          yearInputs[y] = yearTd;
+        }
+        tr.append(yearTd, el('td', { className: 'label', textContent: label }));
+        inputs[kind][y] = [];
+        M.VAT_PERIODS.forEach((_, p) => {
+          const inp = el('input', { inputMode: 'decimal', value: vat[kind][y][p] || '', placeholder: '' });
+          inp.oninput = () => { vat[kind][y][p] = cleanNum(inp.value); recompute(kind, y); scheduleSave(); };
+          inp.onpaste = (e) => onPaste(e, kind, y, p);
+          inp.onkeydown = (e) => {
+            if (e.key !== 'Enter' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+            e.preventDefault();
+            const dir = e.key === 'ArrowUp' ? -1 : 1;
+            let yy = y + dir;
+            let kk = kind;
+            if (yy < 0 || yy >= M.VAT_YEARS) {
+              kk = kind === 'sales' ? 'purchases' : 'sales';
+              if ((kind === 'sales' && dir < 0) || (kind === 'purchases' && dir > 0)) return;
+              yy = dir > 0 ? 0 : M.VAT_YEARS - 1;
+            }
+            if (inputs[kk][yy] && inputs[kk][yy][p]) inputs[kk][yy][p].focus();
+          };
+          inputs[kind][y][p] = inp;
+          tr.append(el('td', {}, [inp]));
+        });
+        const total = el('td', { className: 'computed' });
+        totals[kind].push(total);
+        tr.append(total);
+        tbody.append(tr);
+        recompute(kind, y);
+      }
+    });
+
+    const clear = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '清空全部數字' });
+    clear.onclick = () => {
+      if (!confirm('確定清空進銷貨比較表的所有數字？')) return;
+      const years = vat.years;
+      Object.assign(vat, M.blankVat(), { summary: vat.summary, years });
+      renderSection();
+      scheduleSave();
+    };
+    wrap.append(tableWrap, el('div', { className: 'section-actions' }, [
+      clear,
+      el('span', { className: 'muted', textContent: '合計自動加總。從 Excel 複製一塊數字貼到左上那格會往右、往下填。' }),
+    ]));
+    return wrap;
+  }
+
   /* ---------------- Excel ---------------- */
 
   async function exportExcel() {
@@ -569,7 +683,7 @@
       sel.value = section;
       sel.onchange = () => { importState.picks[f.id] = sel.value; renderImportPreview(); };
       const preview = section === 'skip' ? null : window.DossierImport.mapBlock(f.block, section);
-      const count = !preview ? '' : preview.fin ? `${preview.fin.keys} 個科目、${preview.fin.count} 個數字` : `${preview.rows.length} 列`;
+      const count = !preview ? '' : preview.fin ? `${preview.fin.keys} 個科目、${preview.fin.count} 個數字` : preview.vat ? `${preview.vat.rows.length} 列` : `${preview.rows.length} 列`;
       head.append(el('strong', { textContent: `表格 ${f.id}` }), el('span', { className: 'src', textContent: `${f.source}${count ? ` · ${count}` : ''}` }), sel);
       box.append(head);
       if (preview) box.append(previewTable(preview, section));
@@ -598,6 +712,20 @@
       if (!fin.periods) wrap.append(el('div', { className: 'more', textContent: '檔案裡沒認出期別標題，會照目前的四期順序填入（最新一期在最左邊）。' }));
       return wrap;
     }
+    if (preview.vat) {
+      const v = preview.vat;
+      table.append(el('thead', {}, [el('tr', {}, [el('th', { textContent: '年份' }), el('th', { textContent: '項目' })].concat(M.VAT_PERIODS.map((p) => el('th', { textContent: p }))))]));
+      const tbody = el('tbody');
+      v.rows.slice(0, 8).forEach((row) => {
+        tbody.append(el('tr', {}, [el('td', { textContent: row.year }), el('td', { textContent: row.kind === 'sales' ? '銷項' : '進項' })]
+          .concat(row.values.map((x) => el('td', { className: 'num', textContent: fmt(x) })))));
+      });
+      table.append(tbody);
+      wrap.append(table);
+      if (v.rows.length > 8) wrap.append(el('div', { className: 'more', textContent: `…還有 ${v.rows.length - 8} 列` }));
+      if (v.summary) wrap.append(el('div', { className: 'more', textContent: `綜合說明：${v.summary.slice(0, 80)}` }));
+      return wrap;
+    }
     const columns = ({ debts: M.DEBT_COLUMNS, sales: M.SALES_COLUMNS, purchases: M.PURCHASE_COLUMNS, estates: M.ESTATE_COLUMNS })[section]
       .filter((c) => !c.computed && (preview.columns.includes(c.key) || c.key === 'type'));
     table.append(el('thead', {}, [el('tr', {}, columns.map((c) => el('th', { textContent: c.label })))]));
@@ -623,7 +751,7 @@
     const picks = importState.found.map((f) => ({ block: f.block, section: importState.picks[f.id], replace }));
     const added = window.DossierImport.apply(d, picks);
     $('#importDlg').hidden = true;
-    const parts = Object.entries(added).map(([k, n]) => `${SECTION_LABEL[k].replace(/^[①-⑤]\s*/, '')} ${n}${k === 'fin' ? ' 個數字' : ' 列'}`);
+    const parts = Object.entries(added).map(([k, n]) => `${SECTION_LABEL[k].replace(/^[①-⑩]\s*/, '')} ${n}${k === 'fin' || k === 'vat' ? ' 個數字' : ' 列'}`);
     const first = M.SECTIONS.find((s) => added[s.key]);
     if (first) state.tab = first.key;
     await saveNow();

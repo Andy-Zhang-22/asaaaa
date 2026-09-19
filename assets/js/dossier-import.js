@@ -1,5 +1,5 @@
 /*
- * dossier-import.js — 把 PDF／Excel／CSV 丟進徵信資料頁，自動認出五張表的內容。
+ * dossier-import.js — 把 PDF／Excel／CSV 丟進徵信資料頁，自動認出六張表的內容。
  *
  * 流程：
  *   1. 讀檔成一堆「表格」（每個工作表一張；PDF 用 pdf-table.js 還原格線後整份當一張）。
@@ -199,6 +199,60 @@
     return false;
   };
 
+  /* ---------------- 同期進銷貨比較表（401） ---------------- */
+  const VAT_PERIOD_RE = /^(\d{1,2})\s*[~～\-–—至]\s*(\d{1,2})\s*月?$/;
+  const YEAR_RE = /^(?:(19|20)\d{2}|1[01]\d)\s*年?(?:度)?$/;
+  const kindOf = (t) => (/銷項|銷貨|銷售|營業收入|收入/.test(t) ? 'sales' : /進項|進貨|採購|支出/.test(t) ? 'purchases' : null);
+
+  /** 標題列裡「1~2、3~4…」對到第幾期；另外找年份、項目欄。 */
+  function vatHeader(row) {
+    const periods = {};
+    let yearCol = -1;
+    let kindCol = -1;
+    row.forEach((c, col) => {
+      const t = String(c || '').replace(/[\s\u3000]/g, '');
+      const m = t.match(VAT_PERIOD_RE);
+      if (m) {
+        const idx = M.VAT_PERIODS.findIndex((p) => p.split('~')[0] === String(Number(m[1])));
+        if (idx >= 0) periods[col] = idx;
+        return;
+      }
+      if (yearCol < 0 && /年份|年度|年別/.test(t)) yearCol = col;
+      else if (kindCol < 0 && /項目|類別|銷進|進銷/.test(t)) kindCol = col;
+    });
+    return { periods, yearCol, kindCol, score: Object.keys(periods).length };
+  }
+
+  function mapVat(block) {
+    const header = block.header || guessVatHeader(block.rows);
+    const h = vatHeader(header || []);
+    const rows = [];
+    const dataRows = block.header ? block.rows : block.rows.slice(1);
+    let prevYear = '';
+    dataRows.forEach((row) => {
+      if (isBlankRow(row)) return;
+      const texts = row.map(cellText);
+      let year = h.yearCol >= 0 ? texts[h.yearCol] : '';
+      if (!YEAR_RE.test(year)) year = texts.find((t) => YEAR_RE.test(t) && !Object.prototype.hasOwnProperty.call(h.periods, texts.indexOf(t))) || '';
+      let kind = h.kindCol >= 0 ? kindOf(texts[h.kindCol]) : null;
+      if (!kind) { const hit = texts.find((t) => t.length <= 6 && kindOf(t)); kind = hit ? kindOf(hit) : null; }
+      if (!kind) return;
+      year = year.replace(/[^\d]/g, '');
+      if (!year) year = prevYear;           // 同一年的第二列省略年份
+      if (year.length === 3) year = String(Number(year) + 1911);   // 民國 → 西元
+      if (!year) return;
+      prevYear = year;
+      const values = ['', '', '', '', '', ''];
+      let any = false;
+      Object.entries(h.periods).forEach(([col, idx]) => { const v = cleanNum(row[col]); values[idx] = v; if (v !== '') any = true; });
+      if (!any) return;
+      rows.push({ year, kind, values });
+    });
+    return { rows, summary: summaryOf(block), count: rows.reduce((n, r) => n + r.values.filter((v) => v !== '').length, 0) };
+  }
+
+  const guessVatHeader = (rows) => rows.find((r) => vatHeader(r).score >= 3) || rows[0] || [];
+
   /* ---------------- 切塊 ---------------- */
 
   /**
@@ -230,6 +284,7 @@
         const score = headerScore(row, section);
         if (score && (!best || score > best.score)) best = { section, score };
       });
+      if (vatHeader(row).score >= 3) best = { section: 'vat', score: 99 };
       if (best) {
         flush();
         let section = best.section;
@@ -254,7 +309,7 @@
     return blocks.filter((b) => b.rows.length);
   }
 
-  const TITLE_RE = /金融負債|廠商資料|不動產|財務分析|資產負債表|損益表|徵信資料|基準日/;
+  const TITLE_RE = /金融負債|廠商資料|不動產|財務分析|資產負債表|損益表|徵信資料|基準日|進銷貨比較/;
   /** 只有一兩格有字、又是表名的列。 */
   function isTitleRow(row) {
     const cells = row.map(cellText).filter(Boolean);
@@ -406,6 +461,7 @@
   /** 把一塊資料對到指定段落，回傳預覽用的結果。 */
   function mapBlock(block, section) {
     if (section === 'fin') return { section, fin: mapFin(block) };
+    if (section === 'vat') return { section, vat: mapVat(block) };
     const grid = mapGrid(block, section);
     const out = { section, rows: grid.rows, columns: grid.columns };
     if (section === 'sales' || section === 'purchases') out.summary = summaryOf(block);
@@ -483,7 +539,7 @@
     tables.forEach((t) => {
       splitBlocks(t.rows, t.name).forEach((block) => {
         const preview = mapBlock(block, block.section);
-        const empty = preview.fin ? preview.fin.count === 0 : preview.rows.length === 0 && !preview.summary;
+        const empty = preview.fin ? preview.fin.count === 0 : preview.vat ? preview.vat.rows.length === 0 : preview.rows.length === 0 && !preview.summary;
         if (empty) return;
         found.push({ id: `${found.length + 1}`, source: t.name, section: block.section, block, preview });
       });
@@ -512,6 +568,33 @@
             added.fin = (added.fin || 0) + 1;
           });
         });
+        return;
+      }
+      if (p.section === 'vat') {
+        const vat = dossier.vat || (dossier.vat = M.blankVat());
+        if (p.replace || !M.vatFilled(vat)) {
+          const years = [...new Set(r.vat.rows.map((x) => x.year))].sort((a, b) => Number(b) - Number(a));
+          Object.assign(vat, M.blankVat(), { summary: p.replace ? '' : vat.summary });
+          years.slice(0, M.VAT_YEARS).forEach((y, i) => { vat.years[i] = y; });
+        }
+        const slotOf = (year) => {
+          let i = vat.years.indexOf(year);
+          if (i >= 0) return i;
+          // 這一年還沒有欄位：找一個沒填數字的年份格借用
+          i = vat.years.findIndex((_, k) => !M.VAT_KINDS.some(([kind]) => vat[kind][k].some((v) => v !== '')));
+          if (i >= 0) vat.years[i] = year;
+          return i;
+        };
+        r.vat.rows.forEach((row) => {
+          const i = slotOf(row.year);
+          if (i < 0) return;
+          row.values.forEach((v, k) => {
+            if (v === '' || String(vat[row.kind][i][k] || '') === v) return;
+            vat[row.kind][i][k] = v;
+            added.vat = (added.vat || 0) + 1;
+          });
+        });
+        if (r.vat.summary && (p.replace || !vat.summary)) vat.summary = r.vat.summary;
         return;
       }
       const sec = dossier[p.section];

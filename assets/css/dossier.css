@@ -81,6 +81,15 @@
 .fin-grid td.value { width: 110px; }
 .fin-grid td.pct { width: 70px; }
 
+/* 同期進銷貨比較表 */
+.vat-grid th.num { text-align: right; }
+.vat-grid td.year { width: 90px; }
+.vat-grid td.year input { text-align: center; font-weight: 600; }
+.vat-grid td.label { padding: 7px 10px; white-space: nowrap; }
+.vat-grid td.year.label { text-align: center; color: var(--muted); font-weight: 600; }
+.vat-grid td input { text-align: right; }
+.vat-grid tr.is-kind-start td { border-top: 2px solid var(--border); }
+
 /* 匯入 PDF／Excel */
 .import-modal { width: min(760px, calc(100% - 32px)); }
 .import-block { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }

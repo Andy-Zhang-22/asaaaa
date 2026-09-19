@@ -1,5 +1,5 @@
 /*
- * dossier-model.js — 徵信資料（送銀行五張表）的欄位定義與計算。
+ * dossier-model.js — 徵信資料（送銀行六張表）的欄位定義與計算。
  * 編輯頁與 Excel 匯出共用，改欄位只要改這裡。
  */
 (function (global) {
@@ -135,6 +135,28 @@
     { key: 'netIncome', label: '稅後淨利', level: 0, calc: ['pretax', '-tax'], total: true },
   ];
 
+  /* ---------- ⑥ 同期進銷貨比較表（401 申報書每兩個月的銷項／進項） ---------- */
+  const VAT_PERIODS = ['1~2', '3~4', '5~6', '7~8', '9~10', '11~12'];
+  const VAT_YEARS = 4;
+  const VAT_KINDS = [['sales', '銷項'], ['purchases', '進項']];
+
+  function defaultVatYears() {
+    const y = new Date().getFullYear();
+    return [0, 1, 2, 3].map((i) => String(y - i));
+  }
+  function blankVat() {
+    const six = () => ['', '', '', '', '', ''];
+    return {
+      summary: '',
+      years: defaultVatYears(),
+      sales: [six(), six(), six(), six()],
+      purchases: [six(), six(), six(), six()],
+    };
+  }
+  /** 某一年某類別的六期合計。 */
+  const vatTotal = (arr) => (arr || []).reduce((s, v) => s + num(v), 0);
+  const vatFilled = (vat) => !!vat && VAT_KINDS.some(([k]) => (vat[k] || []).some((row) => (row || []).some((v) => v !== '' && v != null)));
+
   const FIN_ITEMS = BS_ITEMS.concat(IS_ITEMS);
   const PERIODS = 4;
 
@@ -209,6 +231,7 @@
       debts: { rows: [] },
       sales: { summary: '', rows: [] },
       purchases: { summary: '', rows: [] },
+      vat: blankVat(),
       estates: { rows: [] },
       fin: { periods: defaultPeriods(), values: {} },
     };
@@ -223,8 +246,9 @@
     { key: 'debts', title: '金融負債表明細', short: '① 金融負債' },
     { key: 'sales', title: '銷貨廠商資料', short: '② 銷貨廠商' },
     { key: 'purchases', title: '進貨廠商資料', short: '③ 進貨廠商' },
-    { key: 'estates', title: '不動產資料', short: '④ 不動產' },
-    { key: 'fin', title: '乙表 財務分析', short: '⑤ 財務分析' },
+    { key: 'vat', title: '同期進銷貨比較表', short: '④ 進銷貨比較' },
+    { key: 'estates', title: '不動產資料', short: '⑤ 不動產' },
+    { key: 'fin', title: '乙表 財務分析', short: '⑥ 財務分析' },
   ];
 
   /** 各段落有沒有填東西，列表頁用來顯示完成度。 */
@@ -235,6 +259,7 @@
       debts: rowsFilled(d.debts && d.debts.rows),
       sales: rowsFilled(d.sales && d.sales.rows) || !!(d.sales && d.sales.summary),
       purchases: rowsFilled(d.purchases && d.purchases.rows) || !!(d.purchases && d.purchases.summary),
+      vat: vatFilled(d.vat) || !!(d.vat && d.vat.summary),
       estates: rowsFilled(d.estates && d.estates.rows),
       fin: [0, 1, 2, 3].some((i) => hasAnyInput(raw, i)),
     };
@@ -243,6 +268,7 @@
   global.DossierModel = {
     num, DEBT_TYPES, DEBT_COLUMNS, SALES_COLUMNS, PURCHASE_COLUMNS, ESTATE_COLUMNS,
     BS_ITEMS, IS_ITEMS, FIN_ITEMS, PERIODS, SECTIONS,
+    VAT_PERIODS, VAT_YEARS, VAT_KINDS, blankVat, defaultVatYears, vatTotal, vatFilled,
     computeFin, isInput, lienTotalOf, residualOf, blankDossier, defaultPeriods, sectionFilled,
   };
 })(window);

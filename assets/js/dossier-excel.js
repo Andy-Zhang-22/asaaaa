@@ -1,5 +1,5 @@
 /*
- * dossier-excel.js — 把一份徵信資料輸出成 Excel（五個工作表），版面比照範例。
+ * dossier-excel.js — 把一份徵信資料輸出成 Excel（六個工作表），版面比照範例。
  * 需要 ExcelJS（assets/vendor/exceljs）。
  */
 (function (global) {
@@ -155,7 +155,62 @@
     return ws;
   }
 
-  /* ---------- ④ 不動產 ---------- */
+  /* ---------- ④ 同期進銷貨比較表 ---------- */
+  function sheetVat(wb, d) {
+    const ws = wb.addWorksheet('同期進銷貨比較表', {
+      views: [{ showGridLines: false }],
+      pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.5, right: 0.5, top: 0.6, bottom: 0.6, header: 0.3, footer: 0.3 } },
+    });
+    const vat = d.vat || M.blankVat();
+    const nCols = 3 + M.VAT_PERIODS.length;   // 年份、項目、六期、合計
+    const last = colLetter(nCols);
+    [10, 10].concat(M.VAT_PERIODS.map(() => 11), [11]).forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+    const PURPLE = 'FF7F7FBF';
+    const border = boxAll(thin(PURPLE));
+    const numFont = { name: 'Times New Roman', size: 12 };
+
+    ws.mergeCells(`A1:${last}1`);
+    setCell(ws, 'A1', '同期進銷貨比較表', { font: { name: KAI, size: 16, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+    ws.getRow(1).height = 30;
+
+    setCell(ws, 'A2', '綜合說明', { font: { name: KAI, size: 12 }, alignment: { vertical: 'middle', wrapText: true }, border });
+    ws.mergeCells(`B2:${last}2`);
+    setCell(ws, 'B2', vat.summary || '', { font: { name: KAI, size: 11 }, alignment: { vertical: 'top', wrapText: true }, border });
+    for (let i = 3; i <= nCols; i++) ws.getCell(`${colLetter(i)}2`).border = border;
+    ws.getRow(2).height = Math.max(24, lineCount(vat.summary) * 15 + 8);
+
+    const headers = ['年份\n(YYYY)', '項目/月'].concat(M.VAT_PERIODS, ['合計']);
+    headers.forEach((h, i) => setCell(ws, `${colLetter(i + 1)}3`, h, {
+      font: i >= 2 ? numFont : { name: KAI, size: 12 }, fill: fill('FFCCCCFF'), border,
+      alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
+    }));
+    ws.getRow(3).height = 34;
+
+    let r = 4;
+    M.VAT_KINDS.forEach(([kind, label]) => {
+      for (let y = 0; y < M.VAT_YEARS; y++) {
+        const values = (vat[kind] && vat[kind][y]) || [];
+        const year = (vat.years || [])[y] || '';
+        setCell(ws, `A${r}`, /^\d+$/.test(year) ? Number(year) : year, { font: numFont, border, alignment: { horizontal: 'right', vertical: 'middle' } });
+        setCell(ws, `B${r}`, label, { font: { name: KAI, size: 12 }, border, alignment: { horizontal: 'center', vertical: 'middle' } });
+        M.VAT_PERIODS.forEach((_, p) => {
+          const v = values[p];
+          const c = setCell(ws, `${colLetter(3 + p)}${r}`, has(v) ? num(v) : null, { font: numFont, border, numFmt: AMOUNT, alignment: { horizontal: 'right', vertical: 'middle' } });
+          return c;
+        });
+        const first = colLetter(3);
+        const lastP = colLetter(2 + M.VAT_PERIODS.length);
+        setCell(ws, `${last}${r}`, { formula: `SUM(${first}${r}:${lastP}${r})`, result: M.vatTotal(values) }, {
+          font: { ...numFont, bold: true }, border, numFmt: AMOUNT, alignment: { horizontal: 'right', vertical: 'middle' },
+        });
+        ws.getRow(r).height = 20;
+        r++;
+      }
+    });
+    return ws;
+  }
+
+  /* ---------- ⑤ 不動產 ---------- */
   function sheetEstates(wb, d) {
     const ws = wb.addWorksheet('不動產', {
       views: [{ showGridLines: false }],
@@ -199,7 +254,7 @@
     return ws;
   }
 
-  /* ---------- ⑤ 乙表 財務分析 ---------- */
+  /* ---------- ⑥ 乙表 財務分析 ---------- */
   function sheetFin(wb, d) {
     const ws = wb.addWorksheet('乙表財務分析', {
       views: [{ showGridLines: false }],
@@ -308,6 +363,7 @@
     sheetDebts(wb, d);
     sheetVendors(wb, '銷貨廠商資料', '綜合說明(客戶規模、客戶集中度、收款方式…等)', M.SALES_COLUMNS, d.sales || {}, 12);
     sheetVendors(wb, '進貨廠商資料', '綜合說明', M.PURCHASE_COLUMNS, d.purchases || {}, 11);
+    sheetVat(wb, d);
     sheetEstates(wb, d);
     sheetFin(wb, d);
     const buffer = await wb.xlsx.writeBuffer();
