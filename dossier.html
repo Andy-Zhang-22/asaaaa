@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>徵信資料｜中小企業貸款</title>
-<meta name="description" content="把客戶的金融負債、銷貨／進貨廠商、不動產、財務報表填進五個標題，一鍵產出送銀行用的 Excel。資料只存在本機瀏覽器。">
+<meta name="description" content="把客戶的金融負債、銷貨／進貨廠商、進銷貨比較、不動產、財務報表填進六個標題，一鍵產出送銀行用的 Excel。資料只存在本機瀏覽器。">
 <meta name="theme-color" content="#0f172a">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📑</text></svg>">
-<link rel="stylesheet" href="assets/css/app.css?v=20260919-95">
-<link rel="stylesheet" href="assets/css/crm.css?v=20260919-95">
-<link rel="stylesheet" href="assets/css/dossier.css?v=20260919-95">
+<link rel="stylesheet" href="assets/css/app.css?v=20260919-96">
+<link rel="stylesheet" href="assets/css/crm.css?v=20260919-96">
+<link rel="stylesheet" href="assets/css/dossier.css?v=20260919-96">
 </head>
 <body data-theme="auto">
 
@@ -18,7 +18,7 @@
     <span class="brand-mark">📑</span>
     <div>
       <h1>徵信資料</h1>
-      <p class="brand-sub" id="brandSub">五張表 → 一份 Excel</p>
+      <p class="brand-sub" id="brandSub">六張表 → 一份 Excel</p>
     </div>
   </div>
 
@@ -49,7 +49,7 @@
     <div id="cards" class="cards"></div>
     <div id="emptyState" class="empty" hidden>
       <strong>還沒有任何徵信資料</strong>
-      <p>按右上角「新增一份」，輸入公司名稱後，把資料填進五個標題，就能下載跟範例一樣的 Excel。</p>
+      <p>按右上角「新增一份」，輸入公司名稱後，把資料填進六個標題，就能下載跟範例一樣的 Excel。</p>
     </div>
   </section>
 
@@ -66,7 +66,7 @@
       </div>
       <div class="head-actions">
         <span id="saveState" class="muted">尚未儲存</span>
-        <button id="btnImportFile" class="btn" type="button" title="把 PDF、Excel 或 CSV 丟進來，自動認出五張表的內容">📥 匯入 PDF／Excel</button>
+        <button id="btnImportFile" class="btn" type="button" title="把 PDF、Excel 或 CSV 丟進來，自動認出六張表的內容">📥 匯入 PDF／Excel</button>
         <button id="btnExcel" class="btn btn-primary" type="button">⬇ 下載 Excel</button>
         <button id="btnDelete" class="btn btn-ghost danger-text" type="button" title="刪除這份資料">🗑</button>
       </div>
@@ -105,14 +105,14 @@
 </div>
 <div id="toast" class="toast" hidden></div>
 
-<script src="assets/vendor/exceljs/exceljs.min.js?v=20260919-95"></script>
-<script src="assets/vendor/xlsx/xlsx.min.js?v=20260919-95"></script>
-<script src="assets/vendor/pdfjs/pdf.min.js?v=20260919-95"></script>
-<script src="assets/js/pdf-table.js?v=20260919-95"></script>
-<script src="assets/js/crm-store.js?v=20260919-95"></script>
-<script src="assets/js/dossier-model.js?v=20260919-95"></script>
-<script src="assets/js/dossier-excel.js?v=20260919-95"></script>
-<script src="assets/js/dossier-import.js?v=20260919-95"></script>
-<script src="assets/js/dossier.js?v=20260919-95"></script>
+<script src="assets/vendor/exceljs/exceljs.min.js?v=20260919-96"></script>
+<script src="assets/vendor/xlsx/xlsx.min.js?v=20260919-96"></script>
+<script src="assets/vendor/pdfjs/pdf.min.js?v=20260919-96"></script>
+<script src="assets/js/pdf-table.js?v=20260919-96"></script>
+<script src="assets/js/crm-store.js?v=20260919-96"></script>
+<script src="assets/js/dossier-model.js?v=20260919-96"></script>
+<script src="assets/js/dossier-excel.js?v=20260919-96"></script>
+<script src="assets/js/dossier-import.js?v=20260919-96"></script>
+<script src="assets/js/dossier.js?v=20260919-96"></script>
 </body>
 </html>
