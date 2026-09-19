@@ -7,9 +7,9 @@
 <meta name="description" content="把客戶的金融負債、銷貨／進貨廠商、不動產、財務報表填進五個標題，一鍵產出送銀行用的 Excel。資料只存在本機瀏覽器。">
 <meta name="theme-color" content="#0f172a">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📑</text></svg>">
-<link rel="stylesheet" href="assets/css/app.css?v=20260919-90">
-<link rel="stylesheet" href="assets/css/crm.css?v=20260919-90">
-<link rel="stylesheet" href="assets/css/dossier.css?v=20260919-90">
+<link rel="stylesheet" href="assets/css/app.css?v=20260919-92">
+<link rel="stylesheet" href="assets/css/crm.css?v=20260919-92">
+<link rel="stylesheet" href="assets/css/dossier.css?v=20260919-92">
 </head>
 <body data-theme="auto">
 
@@ -28,12 +28,11 @@
   </div>
 
   <div class="topbar-actions">
-    <a class="btn btn-ghost nav-link" href="customers.html" title="客戶管理">🗂️ 客戶</a>
     <a class="btn btn-ghost nav-link" href="index.html" title="電話推廣名單">📞 名單</a>
     <button id="btnNew" class="btn btn-primary">＋ 新增一份</button>
     <button id="btnMenu" class="btn btn-ghost" aria-haspopup="true" title="更多">⋯</button>
     <div id="menu" class="menu" hidden>
-      <button data-act="export-json">下載備份 JSON（含客戶管理）</button>
+      <button data-act="export-json">下載備份 JSON</button>
       <button data-act="import-json">還原備份 JSON</button>
       <hr>
       <button data-act="theme">切換深色／淺色</button>
@@ -85,10 +84,10 @@
 <input id="jsonPick" type="file" accept="application/json,.json" hidden>
 <div id="toast" class="toast" hidden></div>
 
-<script src="assets/vendor/exceljs/exceljs.min.js?v=20260919-90"></script>
-<script src="assets/js/crm-store.js?v=20260919-90"></script>
-<script src="assets/js/dossier-model.js?v=20260919-90"></script>
-<script src="assets/js/dossier-excel.js?v=20260919-90"></script>
-<script src="assets/js/dossier.js?v=20260919-90"></script>
+<script src="assets/vendor/exceljs/exceljs.min.js?v=20260919-92"></script>
+<script src="assets/js/crm-store.js?v=20260919-92"></script>
+<script src="assets/js/dossier-model.js?v=20260919-92"></script>
+<script src="assets/js/dossier-excel.js?v=20260919-92"></script>
+<script src="assets/js/dossier.js?v=20260919-92"></script>
 </body>
 </html>
