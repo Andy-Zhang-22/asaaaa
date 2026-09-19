@@ -36,6 +36,9 @@
       <button data-act="import-json">還原備份 JSON</button>
       <hr>
       <button data-act="theme">切換深色／淺色</button>
+      <hr>
+      <button data-act="check-update">檢查更新</button>
+      <div class="menu-version" id="menuVersion"></div>
     </div>
   </div>
 </header>
@@ -104,6 +107,11 @@
   </div>
 </div>
 <div id="toast" class="toast" hidden></div>
+<div id="updateBar" class="update-bar" hidden>
+  <span>網站有新版本可用</span>
+  <button id="btnUpdate" class="btn btn-primary" type="button">立即更新</button>
+  <button id="btnUpdateLater" class="btn btn-ghost" type="button">稍後</button>
+</div>
 
 <script src="assets/vendor/exceljs/exceljs.min.js?v=20260919-97"></script>
 <script src="assets/vendor/xlsx/xlsx.min.js?v=20260919-97"></script>

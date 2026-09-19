@@ -460,12 +460,210 @@
 
   /** 把一塊資料對到指定段落，回傳預覽用的結果。 */
   function mapBlock(block, section) {
+    if (block.jcic) {
+      // 聯徵報告只能變成金融負債；硬指到別的段落就當作沒有資料
+      if (section !== 'debts') return section === 'fin' ? { section, fin: { periods: null, values: {}, count: 0, keys: 0 } } : section === 'vat' ? { section, vat: { rows: [], summary: '', count: 0 } } : { section, rows: [], columns: [] };
+      return { section, rows: block.jcic.rows.map((r) => ({ ...r })), columns: ['type', 'borrower', 'bank', 'subject', 'limit', 'balance', 'collateral', 'diff'], baseDate: block.jcic.baseDate };
+    }
     if (section === 'fin') return { section, fin: mapFin(block) };
     if (section === 'vat') return { section, vat: mapVat(block) };
     const grid = mapGrid(block, section);
     const out = { section, rows: grid.rows, columns: grid.columns };
     if (section === 'sales' || section === 'purchases') out.summary = summaryOf(block);
     return out;
+  }
+
+  /* ---------------- 聯徵「當事人綜合信用報告」→ 金融負債 ---------------- */
+  /*
+   * 聯徵報告不是一般表格：銀行名稱直排在左邊好幾行、從債務的主借款戶跨三行。
+   * 所以不走格線還原，直接拿 pdf.js 的文字座標，用欄位標題的 x 位置對欄。
+   *   表 B1 借款餘額明細   → 當事人本人的借款（訂約金額＝額度，未逾期＋逾期＝餘額）
+   *   表 B2 從債務／共同債務 → 當事人擔任保證人的借款，主借款戶是公司或其他人
+   * 同一借款人、同一家分行的科目合併成一列（跟送銀行的金融負債表一樣），科目取餘額最大的，
+   * 其餘明細寫在「前後次差異說明」。
+   */
+  const BANK_SHORT = [
+    [/合作金庫/, '合庫'], [/中小企業銀行|企銀/, '台企銀'], [/第一(商業)?銀行|一銀/, '一銀'], [/華南/, '華銀'],
+    [/彰化/, '彰銀'], [/[台臺]灣銀行/, '台銀'], [/土地銀行/, '土銀'], [/兆豐/, '兆豐'], [/國泰世華/, '國泰'],
+    [/玉山/, '玉山'], [/台新/, '台新'], [/中國信託/, '中信'], [/[台臺]北富邦/, '北富'], [/上海/, '上海'],
+    [/聯邦/, '聯邦'], [/永豐/, '永豐'], [/遠東/, '遠銀'], [/元大/, '元大'], [/新光/, '新光'], [/日盛/, '日盛'],
+    [/京城/, '京城'], [/高雄銀行/, '高銀'], [/板信/, '板信'], [/陽信/, '陽信'], [/三信/, '三信'], [/華泰/, '華泰'],
+    [/瑞興/, '瑞興'], [/星展/, '星展'], [/[滙匯]豐/, '匯豐'], [/渣打/, '渣打'], [/花旗/, '花旗'], [/郵政|郵局/, '郵局'],
+    [/凱基/, '凱基'], [/王道/, '王道'], [/將來/, '將來'], [/樂天/, '樂天'], [/連線/, 'LINE Bank'],
+    [/中租/, '中租'], [/裕融/, '裕融'], [/和潤/, '和潤'],
+  ];
+  function shortBank(name) {
+    const t = String(name || '').replace(/[\s\u3000]/g, '');
+    if (!t) return '';
+    let bank = t.replace(/(商業)?銀行.*$/, '').replace(/股份有限公司/, '');
+    for (const [re, short] of BANK_SHORT) { if (re.test(t)) { bank = short; break; } }
+    const m = t.match(/(?:銀行|郵政|信用合作社|農會|漁會|公司)(.+?)(?:分行|分部|分社|辦事處|支局)$/);
+    const branch = m ? m[1] : '';
+    return branch ? `${bank}/${branch}` : bank;
+  }
+  const SUBJECT_SHORT = [[/長期擔保/, '長擔'], [/長期/, '長放'], [/中期擔保/, '中擔'], [/中期/, '中放'], [/短期擔保/, '短擔'], [/短期/, '短放'], [/信用卡/, '信用卡'], [/現金卡/, '現金卡'], [/呆帳/, '呆帳'], [/催收/, '催收']];
+  const shortSubject = (sub) => { const t = String(sub || ''); for (const [re, v] of SUBJECT_SHORT) { if (re.test(t)) return v; } return t.replace(/放款/, '').trim(); };
+  const isCompanyName = (n) => /公司|企業|實業|工程|工業|商行|商號|工作室|事務所|工廠|股份|有限|行$|社$|店$/.test(String(n || ''));
+  const thousand = (t) => { const m = String(t || '').replace(/,/g, '').match(/-?\d+(?:\.\d+)?/); return m ? Number(m[0]) : 0; };
+
+  /** pdf.js 文字項目 → 每頁的「行」（y 相近的併一行，行內依 x 排序）。 */
+  async function pdfTextLines(buffer, maxPages) {
+    const doc = await global.pdfjsLib.getDocument({ data: buffer, isEvalSupported: false }).promise;
+    const pages = [];
+    const n = Math.min(doc.numPages, maxPages || doc.numPages);
+    for (let p = 1; p <= n; p++) {
+      const page = await doc.getPage(p);
+      const tc = await page.getTextContent();
+      const items = tc.items.filter((it) => it.str && it.str.trim()).map((it) => ({ x: it.transform[4], y: it.transform[5], s: it.str.trim() }));
+      items.sort((a, b) => b.y - a.y || a.x - b.x);
+      const lines = [];
+      let cur = null;
+      items.forEach((it) => {
+        if (!cur || Math.abs(it.y - cur.y) > 3) { cur = { y: it.y, page: p, items: [] }; lines.push(cur); }
+        cur.items.push(it);
+      });
+      lines.forEach((l) => l.items.sort((a, b) => a.x - b.x));
+      pages.push(lines);
+      page.cleanup();
+    }
+    const total = doc.numPages;
+    await doc.destroy();
+    return { pages, total };
+  }
+
+  const lineText = (l) => l.items.map((i) => i.s).join(' ');
+  const NOISE_LINE = /^(第\s*\d+\s*頁|當事人綜合信用報告|R\d{10,})/;
+  const WATERMARK = /^R\d{10,}$/;
+
+  function parseJcic(pages, fileName, ownerHint) {
+    const lines = [];
+    pages.forEach((pl) => pl.forEach((l) => {
+      const items = l.items.filter((it) => !WATERMARK.test(it.s));
+      if (!items.length) return;
+      const t = items.map((i) => i.s).join(' ');
+      if (NOISE_LINE.test(t.trim())) return;
+      lines.push({ ...l, items, text: t });
+    }));
+    const find = (re, from) => lines.findIndex((l, i) => i >= (from || 0) && re.test(l.text.replace(/\s/g, '')));
+
+    let baseDate = '';
+    for (const l of lines) {
+      const m = l.text.replace(/\s/g, '').match(/截至(\d{2,3})\/(\d{1,2})底止/);
+      if (m) { baseDate = `${Number(m[1]) + 1911}${m[2].padStart(2, '0')}`; break; }
+    }
+    // 當事人姓名：報告內文只有身分證號，從檔名（xxx聯徵紀錄）或負責人欄位拿
+    const nameFromFile = (String(fileName || '').match(/([\u4e00-\u9fff]{2,4})(?:聯徵|信用報告|JC)/) || [])[1];
+    const subject = nameFromFile || ownerHint || '當事人';
+
+    const raw = [];   // { borrower, type, bank, subject, limit, balance }
+
+    /* ---- 表 B1：本人借款 ---- */
+    const b1 = find(/借款餘額明細/);
+    const b2 = find(/共同債務|從債務/, b1 + 1);
+    if (b1 >= 0) {
+      const end = b2 >= 0 ? b2 : lines.length;
+      const header = lines.slice(b1, end).find((l) => /訂約金額/.test(l.text) && /科目/.test(l.text));
+      const stop = lines.slice(b1, end).findIndex((l) => /未結案之借款總餘額|^借款餘額/.test(l.text.trim()));
+      const last = stop >= 0 ? b1 + stop : end;
+      if (header) {
+        const cols = {};
+        header.items.forEach((it) => { ['資料年月', '訂約金額', '未逾期餘額', '逾期金額', '科目', '用途'].forEach((k) => { if (it.s.replace(/\s/g, '').includes(k)) cols[k] = it.x; }); });
+        const colOf = (x) => { let best = null; Object.entries(cols).forEach(([k, cx]) => { if (x >= cx - 15 && (!best || cx > cols[best])) best = k; }); return best; };
+        const dataRows = [];
+        const bankFrags = [];
+        const bankLimit = (cols['資料年月'] || 70) - 8;
+        for (let i = b1 + 1; i < last; i++) {
+          const l = lines[i];
+          if (l === header || /金融機構|名稱|最近十二個月/.test(l.text)) continue;
+          const money = l.items.filter((it) => /千元$/.test(it.s));
+          if (money.length >= 2 && l.items.some((it) => /放款|借款|卡|呆帳|催收|透支|票貼|融資/.test(it.s))) {
+            const row = { limit: 0, balance: 0, subject: '', purpose: '' };
+            l.items.forEach((it) => {
+              if (it.x < bankLimit) { bankFrags.push({ i, s: it.s }); return; }
+              if (/千元$/.test(it.s)) {
+                const k = colOf(it.x);
+                if (k === '訂約金額') row.limit += thousand(it.s);
+                else if (k === '未逾期餘額' || k === '逾期金額') row.balance += thousand(it.s);
+                return;
+              }
+              // 「長期擔保放款 購置不動產」有時擠在同一個文字項目裡：科目在前、用途在後
+              const m = it.s.match(/^(.*?(?:放款|借款|卡|呆帳|催收|透支|票貼|融資))\s*(.*)$/);
+              if (m) { row.subject += m[1]; row.purpose += m[2]; return; }
+              if (colOf(it.x) === '用途' && it.x < (cols['用途'] || 0) + 35 && !/^(有|無)$/.test(it.s)) row.purpose += it.s;
+            });
+            dataRows.push(row);
+          } else {
+            l.items.forEach((it) => { if (it.x < bankLimit) bankFrags.push({ i, s: it.s }); });
+          }
+        }
+        // 銀行名稱直排成好幾行，平均分給每一列
+        const per = dataRows.length ? Math.max(1, Math.round(bankFrags.length / dataRows.length)) : 0;
+        dataRows.forEach((row, k) => {
+          const frags = k === dataRows.length - 1 ? bankFrags.slice(k * per) : bankFrags.slice(k * per, (k + 1) * per);
+          row.bank = shortBank(frags.map((f) => f.s).join(''));
+          const purpose = /不動產|房|屋|土地/.test(row.purpose) ? '不動產' : /動產|車/.test(row.purpose) ? '動產' : '';
+          raw.push({ borrower: subject, type: 'person', bank: row.bank, subject: shortSubject(row.subject), limit: row.limit, balance: row.balance, purpose });
+        });
+      }
+    }
+
+    /* ---- 表 B2：從債務（本人當保證人） ---- */
+    if (b2 >= 0) {
+      const endIdx = find(/信用卡資訊|信用卡持卡|票信資訊|查詢紀錄/, b2 + 1);
+      const end = endIdx >= 0 ? endIdx : lines.length;
+      const region = lines.slice(b2 + 1, end).filter((l) => !/主借款戶|承貸金融機構|從債務資訊|共同債務資訊|截至.*底止/.test(l.text));
+      const isData = (l) => l.items.some((it) => /千元$/.test(it.s)) && l.items.some((it) => /放款|借款|卡|呆帳|催收|透支|票貼|融資/.test(it.s));
+      const isId = (it) => /X{2,}|\*{2,}/.test(it.s) || /^[A-Z]?\d{4,}X*$/.test(it.s);
+      region.forEach((l, j) => {
+        if (!isData(l)) return;
+        const prev = region[j - 1] && !isData(region[j - 1]) ? region[j - 1] : null;
+        const next = region[j + 1] && !isData(region[j + 1]) ? region[j + 1] : null;
+        const bankX = (it) => it.x >= 130 && it.x < 280 && !/千元/.test(it.s);
+        const bank = [prev, l, next].filter(Boolean).flatMap((x) => x.items.filter(bankX).map((it) => it.s)).join('');
+        let name = '';
+        [next, prev].filter(Boolean).some((x) => {
+          const hit = x.items.filter((it) => it.x < 130 && !isId(it) && /[\u4e00-\u9fff]/.test(it.s)).map((it) => it.s).join('');
+          if (hit) { name = hit; return true; }
+          return false;
+        });
+        let balance = 0;
+        let subject = '';
+        l.items.forEach((it) => {
+          if (/千元$/.test(it.s)) balance += thousand(it.s);
+          else if (/放款|借款|卡|呆帳|催收|透支|票貼|融資/.test(it.s)) subject += it.s;
+        });
+        raw.push({ borrower: name || '（主借款戶）', type: isCompanyName(name) ? 'company' : 'person', bank: shortBank(bank), subject: shortSubject(subject), limit: 0, balance, purpose: '' });
+      });
+    }
+
+    /* ---- 同借款人、同分行合併 ---- */
+    const groups = new Map();
+    raw.forEach((r) => {
+      const key = `${r.type}|${r.borrower}|${r.bank}`;
+      if (!groups.has(key)) groups.set(key, { ...r, limit: 0, balance: 0, bySubject: {}, purposes: new Set() });
+      const g = groups.get(key);
+      g.limit += r.limit;
+      g.balance += r.balance;
+      g.bySubject[r.subject] = (g.bySubject[r.subject] || 0) + r.balance;
+      if (r.purpose) g.purposes.add(r.purpose);
+    });
+    const fmtK = (n) => Math.round(n).toLocaleString('en-US');
+    const rows = [...groups.values()].map((g) => {
+      const subs = Object.entries(g.bySubject).sort((a, b) => b[1] - a[1]);
+      return {
+        type: g.type,
+        borrower: g.borrower,
+        bank: g.bank,
+        subject: subs.length ? subs[0][0] : '',
+        limit: g.limit ? String(Math.round(g.limit)) : '',
+        balance: String(Math.round(g.balance)),
+        collateral: [...g.purposes].join('、'),
+        diff: subs.length > 1 ? `含${subs.map(([k, v]) => `${k} ${fmtK(v)}`).join('、')}（聯徵 ${baseDate ? `${baseDate.slice(0, 4)}/${baseDate.slice(4)}` : ''}）` : '',
+      };
+    });
+    // 公司在前、本人其次、其他關係人最後
+    rows.sort((a, b) => (a.type === b.type ? (a.borrower === subject ? -1 : b.borrower === subject ? 1 : 0) : (a.type === 'company' ? -1 : 1)));
+    return { rows, baseDate, subject, count: raw.length };
   }
 
   /* ---------------- 讀檔 ---------------- */
@@ -507,7 +705,7 @@
    * @param {File} file
    * @param {(msg:string)=>void} [onProgress]
    */
-  async function readFile(file, onProgress) {
+  async function readFile(file, onProgress, opts) {
     const name = file.name || '';
     const ext = (name.split('.').pop() || '').toLowerCase();
     const say = (m) => { if (onProgress) onProgress(m); };
@@ -520,6 +718,14 @@
     if (ext === 'pdf' || file.type === 'application/pdf') {
       if (!global.PdfTable || !global.pdfjsLib) throw new Error('PDF 解析元件沒有載入，請重新整理頁面再試');
       const buffer = await file.arrayBuffer();
+      // 先看第一頁是不是聯徵報告；是的話走專用解析
+      const peek = await pdfTextLines(buffer.slice(0), 1);
+      if (peek.pages[0] && peek.pages[0].some((l) => /綜合信用報告/.test(lineText(l)))) {
+        say(`⏳ 解析聯徵報告 ${name}…`);
+        const all = await pdfTextLines(buffer.slice(0));
+        const jcic = parseJcic(all.pages, name, opts && opts.owner);
+        return [{ name, rows: [], jcic }];
+      }
       const parsed = await global.PdfTable.parsePdf(buffer, (done, total) => say(`⏳ 解析 ${name}… 第 ${done}/${total} 頁`));
       return [{ name, rows: parsed.rows, pages: parsed.pages, mode: parsed.mode }];
     }
@@ -533,10 +739,16 @@
    * 讀檔並認出所有區塊。
    * 回傳 [{ id, source, section, block, preview }]，preview = mapBlock(block, section)。
    */
-  async function analyze(file, onProgress) {
-    const tables = await readFile(file, onProgress);
+  async function analyze(file, onProgress, opts) {
+    const tables = await readFile(file, onProgress, opts);
     const found = [];
     tables.forEach((t) => {
+      if (t.jcic) {
+        if (!t.jcic.rows.length) return;
+        const block = { section: 'debts', jcic: t.jcic, header: null, rows: [], sheet: '聯徵報告' };
+        found.push({ id: `${found.length + 1}`, source: `聯徵報告，${t.jcic.count} 筆借款`, section: 'debts', block, preview: mapBlock(block, 'debts') });
+        return;
+      }
       splitBlocks(t.rows, t.name).forEach((block) => {
         const preview = mapBlock(block, block.section);
         const empty = preview.fin ? preview.fin.count === 0 : preview.vat ? preview.vat.rows.length === 0 : preview.rows.length === 0 && !preview.summary;
@@ -597,6 +809,10 @@
         if (r.vat.summary && (p.replace || !vat.summary)) vat.summary = r.vat.summary;
         return;
       }
+      if (p.block.jcic && p.section === 'debts') {
+        if (p.block.jcic.baseDate) dossier.baseDate = p.block.jcic.baseDate;
+        if (!dossier.owner && p.block.jcic.subject && p.block.jcic.subject !== '當事人') dossier.owner = p.block.jcic.subject;
+      }
       const sec = dossier[p.section];
       // 編輯頁一開始會放一列空白給人打字，匯入時把全空的列拿掉，免得排在前面
       sec.rows = p.replace ? [] : sec.rows.filter((row) => Object.values(row).some((v) => has(v) && v !== 'company'));
@@ -609,5 +825,5 @@
     return added;
   }
 
-  global.DossierImport = { analyze, apply, mapBlock, splitBlocks, readFile, parseCsv, finKeyOf, matchHeader, norm };
+  global.DossierImport = { analyze, apply, mapBlock, splitBlocks, readFile, parseCsv, finKeyOf, matchHeader, norm, parseJcic, shortBank, pdfTextLines };
 })(window);
