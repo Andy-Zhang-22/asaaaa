@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-90';
+  const APP_VERSION = '20260916-87';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1572,20 +1572,6 @@
     editBtn.onclick = () => openEditor(r.id);
     const dealBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '承作檢核' });
     dealBtn.onclick = () => openDealCheck(r.id);
-    // 談出興趣的公司帶到客戶管理頁建檔，之後在那裡追貸款案件、填徵信資料
-    const crmBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '建立為客戶', title: '帶到客戶管理，追貸款案件與徵信資料' });
-    crmBtn.onclick = () => {
-      const capitalWan = r.capital ? Math.round(Number(String(r.capital).replace(/[^\d]/g, '')) / 10) : '';
-      try {
-        localStorage.setItem('crm-prefill', JSON.stringify({
-          leadId: r.id, company: r.company, taxId: r.taxId, owner: r.owner, contact: r.keyman,
-          phone: (r.phoneRaw || '').replace(/\n/g, ' / '), address: r.addressActual || r.address, industry: r.industry,
-          founded: r.founded, capital: capitalWan, source: '電話推廣', stage: 'talking',
-          note: (r.timeline || []).slice(0, 3).map((t) => `${t.date || t.dateRaw || ''} ${t.text}`).join('\n'),
-        }));
-      } catch (e) { /* 無痕模式：不帶資料，到客戶頁手動填 */ }
-      location.href = 'customers.html';
-    };
     // 公司名稱旁一顆複製：查商工登記、找 104、貼進系統都要打公司名，打字容易錯
     const copyName = el('button', { className: 'btn btn-tiny copy-name', type: 'button', textContent: '複製', title: `複製 ${r.company}` });
     copyName.onclick = async () => {
@@ -1600,7 +1586,6 @@
         r.edited ? el('span', { className: 'badge badge-edited', textContent: '已修改' }) : '',
         editBtn,
         dealBtn,
-        crmBtn,
         deleteBtn(r),
       ].filter(Boolean)),
     ].filter(Boolean)));
@@ -3779,7 +3764,7 @@ export default {
 
     $('#tabs').onclick = (e) => {
       const btn = e.target.closest('.tab');
-      if (!btn || btn.id === 'btnFilters' || btn.classList.contains('tab-link')) return;
+      if (!btn || btn.id === 'btnFilters') return;
       state.tab = btn.dataset.tab;
       state.limit = PAGE_SIZE;
       [...$('#tabs').children].forEach((b) => b.classList.toggle('is-active', b === btn));
