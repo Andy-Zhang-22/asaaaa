@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-103';
+  const APP_VERSION = '20260919-104';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1572,12 +1572,6 @@
     editBtn.onclick = () => openEditor(r.id);
     const dealBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '承作檢核' });
     dealBtn.onclick = () => openDealCheck(r.id);
-    // 帶名單資料到徵信頁：已有這家的徵信資料就打開，沒有就建一份
-    const dossierBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '徵信資料', title: '到徵信資料頁建檔或打開這家的五張表' });
-    dossierBtn.onclick = () => {
-      const q = new URLSearchParams({ lead: r.id, company: r.company || '', taxId: r.taxId || '', owner: r.owner || '' });
-      location.href = `dossier.html?${q.toString()}`;
-    };
     // 公司名稱旁一顆複製：查商工登記、找 104、貼進系統都要打公司名，打字容易錯
     const copyName = el('button', { className: 'btn btn-tiny copy-name', type: 'button', textContent: '複製', title: `複製 ${r.company}` });
     copyName.onclick = async () => {
@@ -1592,7 +1586,6 @@
         r.edited ? el('span', { className: 'badge badge-edited', textContent: '已修改' }) : '',
         editBtn,
         dealBtn,
-        dossierBtn,
         deleteBtn(r),
       ].filter(Boolean)),
     ].filter(Boolean)));

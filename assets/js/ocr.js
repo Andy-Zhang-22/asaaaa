@@ -65,39 +65,6 @@
     return text;
   }
 
-  /** 只辨識、回傳文字（給 401 申報書這種掃描 PDF 用；source 可以是 File、Blob 或 canvas）。 */
-  async function recognizeText(source, onProgress, params) {
-    const worker = await getWorker(onProgress);
-    // 例如表格型的申報書用 tessedit_pageseg_mode '11'（散落文字）比較抓得到數字；用完還原
-    if (params) await worker.setParameters(params);
-    try {
-      const { data } = await worker.recognize(source);
-      return data.text || '';
-    } finally {
-      if (params) await worker.setParameters(Object.fromEntries(Object.keys(params).map((k) => [k, k === 'tessedit_pageseg_mode' ? '3' : ''])));
-    }
-  }
-
-  /**
-   * 辨識並回傳文字＋每個字的位置（給謄本這種「標籤｜值」表格用：先找標籤在哪，再讀右邊那一格）。
-   * rect = { top, left, width, height } 只辨識那一塊。
-   */
-  async function recognizeData(source, params, rect) {
-    const worker = await getWorker();
-    if (params) await worker.setParameters(params);
-    try {
-      const opts = rect ? { rectangle: rect } : {};
-      const { data } = await worker.recognize(source, opts, { text: true, blocks: true });
-      let words = data.words || [];
-      if (!words.length && data.blocks) {
-        data.blocks.forEach((b) => (b.paragraphs || []).forEach((pg) => (pg.lines || []).forEach((ln) => (ln.words || []).forEach((w) => words.push(w)))));
-      }
-      return { text: data.text || '', words: words.map((w) => ({ text: w.text, bbox: w.bbox })) };
-    } finally {
-      if (params) await worker.setParameters(Object.fromEntries(Object.keys(params).map((k) => [k, k === 'tessedit_pageseg_mode' ? '3' : ''])));
-    }
-  }
-
   /* ------------------------------------------------------------------
    * 解析 104 公司頁文字
    * ------------------------------------------------------------------ */
@@ -224,5 +191,5 @@
     return bits.join('');
   }
 
-  global.Ocr = { recognize, parse104, describe, parsePhone, capitalToThousands, recognizeText, recognizeData };
+  global.Ocr = { recognize, parse104, describe, parsePhone, capitalToThousands };
 })(window);
