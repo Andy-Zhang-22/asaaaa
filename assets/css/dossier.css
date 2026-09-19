@@ -81,6 +81,29 @@
 .fin-grid td.value { width: 110px; }
 .fin-grid td.pct { width: 70px; }
 
+/* 匯入 PDF／Excel */
+.import-modal { width: min(760px, calc(100% - 32px)); }
+.import-block { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.import-block-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.import-block-head strong { font-size: 14px; }
+.import-block-head .src { font-size: 12px; color: var(--muted); }
+.import-block-head select {
+  margin-left: auto; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); font: inherit; font-size: 13px;
+}
+.import-block.is-skip { opacity: .55; }
+.import-preview { overflow: auto; margin-top: 8px; }
+.import-preview table { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
+.import-preview th, .import-preview td { border: 1px solid var(--border); padding: 3px 6px; text-align: left; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.import-preview th { background: var(--surface-2); font-weight: 600; }
+.import-preview td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.import-preview .more { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.import-actions { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-top: 14px; }
+.import-actions > div { display: flex; gap: 8px; }
+.import-replace { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.import-busy { font-size: 13px; color: var(--muted); margin-top: 8px; }
+#editView.is-dragover { outline: 3px dashed var(--primary); outline-offset: -6px; border-radius: var(--radius); }
+
 @media (max-width: 700px) {
   .head-actions { margin-left: 0; width: 100%; justify-content: space-between; }
   .head-fields label:first-child input { min-width: 0; }
