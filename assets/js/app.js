@@ -3701,6 +3701,21 @@ export default {
     }
   }
 
+  /*
+   * 徵信資料功能移除後，瀏覽器裡還留著它的資料庫（crm-db）。名單完全用不到，
+   * 留著只是佔空間又沒有介面可以看，所以每台裝置第一次開到新版時清掉一次。
+   * 其他分頁還開著舊版徵信頁時瀏覽器會擋住刪除，那就不記旗標，下次開再試。
+   */
+  function dropOldDossierDb() {
+    try {
+      if (localStorage.getItem('crm-db-dropped') === '1' || !window.indexedDB) return;
+      const req = indexedDB.deleteDatabase('crm-db');
+      req.onsuccess = () => {
+        try { localStorage.setItem('crm-db-dropped', '1'); } catch (e) { /* 無痕模式 */ }
+      };
+    } catch (e) { /* 無痕模式或瀏覽器不給刪，下次再試 */ }
+  }
+
   /* ---------------- 啟動 ---------------- */
 
   async function reload() {
@@ -3931,6 +3946,7 @@ export default {
     }
     prebuildRules();
     checkForUpdate(false);
+    dropOldDossierDb();
     maybeAutoRegistry().catch((err) => console.error('自動更新商工登記失敗', err));
     checkReminders();
     setInterval(checkReminders, 30000);
