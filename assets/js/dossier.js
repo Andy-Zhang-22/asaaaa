@@ -560,7 +560,7 @@
       if (act === 'export-json') {
         const blob = new Blob([JSON.stringify(await Store.exportAll())], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
-        const a = el('a', { href: url, download: `客戶管理備份_${new Date().toISOString().slice(0, 10)}.json` });
+        const a = el('a', { href: url, download: `徵信資料備份_${new Date().toISOString().slice(0, 10)}.json` });
         document.body.append(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
