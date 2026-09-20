@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-134';
+  const APP_VERSION = '20260920-135';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1202,19 +1202,40 @@
       regBtn.disabled = false;
       regBtn.textContent = wasLabel;
       if (!res.ok) {
-        // 每一種寫法的結果都照實列出來：關鍵字不對、代理不通、資料集有問題，
-        // 三件事處理方式完全不一樣，不講清楚只會亂試一通
         regNote.className = 'rule-verdict is-fail';
-        // 名稱一字之差就查不到，所以「查無資料」要順便講怎麼改，不然使用者只會一直按
-        regNote.textContent = `查不到：${res.reason}`
-          + (/查無資料/.test(res.reason)
-            ? '　登記上的寫法可能跟你打的不一樣：少打幾個字（例如只打「方舟國際」），或改用統一編號。'
+        regNote.textContent = '每一種寫法都查不到。'
+          + (/查無資料/.test(res.reason || '')
+            ? '登記上的寫法可能跟你打的不一樣，或是這家的登記狀態不是「核准設立」。'
             : '');
+        /*
+         * 把每一次查詢的網址列出來讓使用者自己點開。
+         *
+         * 「查無資料」有三種完全不同的原因：查詢語法不對、代理那段有問題、這家在登記上
+         * 真的查不到。從畫面上分不出來，但點開網址直接連政府網站就分得出來——
+         * 有 JSON 就是代理的問題，空白就是這家真的查不到。
+         * 設定頁的「先試一筆」本來就是這樣做的，這裡照抄。
+         */
+        (res.attempts || []).forEach((a) => {
+          regList.append(el('p', { className: 'rule-note', textContent: `${a.label}：${a.reason}` }));
+          if (a.body) regList.append(el('p', { className: 'rule-note', textContent: `　　實際收到：${String(a.body).slice(0, 200)}` }));
+          const link = a.upstream || a.url;
+          if (link) {
+            regList.append(el('p', { className: 'rule-note' }, [
+              document.createTextNode('　　'),
+              el('a', { href: link, target: '_blank', rel: 'noopener', textContent: '在新分頁打開這個查詢網址' }),
+            ]));
+          }
+        });
+        regList.append(el('p', { className: 'rule-note',
+          textContent: '點開任何一個網址：那是你的瀏覽器直接連政府網站，不受跨網域限制。'
+            + '看到 JSON 就是查詢語法對了、代理那段有問題；看到空白就是這個名稱在登記上查不到，'
+            + '改用統一編號最準。' }));
         return;
       }
       regNote.className = 'rule-note';
-      regNote.textContent = `${res.label} 找到 ${res.companies.length} 家。`
-        + '勾你要的那一家，存檔時會連同統編、負責人、資本總額、地址一起加進名單並連結。';
+      regNote.textContent = `${res.label} 找到 ${res.companies.length} 家`
+        + (res.used && res.used !== kw ? `（用「${res.used}」查到的）` : '')
+        + '。勾你要的那一家，存檔時會連同統編、負責人、資本總額、地址一起加進名單並連結。';
       res.companies.forEach((c) => regList.append(regRow(c)));
       if (!res.companies.length) regList.append(el('p', { className: 'rule-note', textContent: '查不到。登記上的寫法可能不一樣，少打幾個字（例如只打「方舟國際」）或改用統一編號再試。' }));
     };
