@@ -526,10 +526,13 @@ button, input, select { font: inherit; color: inherit; }
 .tel-group { display: inline-flex; align-items: center; gap: 2px; }
 
 /*
- * 複製鈕＝一顆綠點。
+ * 複製鈕＝一顆灰點。
  *
- * 「複製」兩個字比電話號碼本身還搶眼，而且每張卡片都跟著一顆。綠點只佔一個字的
+ * 「複製」兩個字比電話號碼本身還搶眼，而且每張卡片都跟著一顆。一顆點只佔一個字的
  * 寬度，按的範圍仍然是 26px 見方——手指按得到，不是只有那 10px 的點。
+ *
+ * 用灰色不用綠色：卡片上已經有綠色的優先區域、有機會、分公司標記，複製鈕是輔助
+ * 動作，不該跟那些搶顏色。滑過去、按下去才變深。
  */
 .copy-dot {
   width: 26px; height: 26px; padding: 0; flex: none;
@@ -539,17 +542,18 @@ button, input, select { font: inherit; color: inherit; }
 }
 .copy-dot::before {
   content: ''; width: 10px; height: 10px; border-radius: 999px;
-  background: var(--ok); transition: transform .12s ease, box-shadow .12s ease;
+  background: var(--muted); opacity: .55;
+  transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease;
 }
-.copy-dot:hover::before { transform: scale(1.25); }
+.copy-dot:hover::before { transform: scale(1.25); opacity: 1; }
 .copy-dot:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .copy-dot:active::before { transform: scale(.85); }
 /* 複製成功：點自己擴一圈再收回來，不然按下去畫面完全沒反應 */
-.copy-dot.is-copied::before { animation: copied .7s ease; }
+.copy-dot.is-copied::before { animation: copied .7s ease; opacity: 1; }
 @keyframes copied {
-  0% { transform: scale(1); box-shadow: 0 0 0 0 var(--ok); }
-  40% { transform: scale(1.5); box-shadow: 0 0 0 5px rgba(22, 163, 74, .18); }
-  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+  0% { transform: scale(1); box-shadow: 0 0 0 0 currentColor; }
+  40% { transform: scale(1.5); box-shadow: 0 0 0 5px rgba(100, 116, 139, .22); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(100, 116, 139, 0); }
 }
 
 /* ---------- 有新版本時的提示列 ---------- */
