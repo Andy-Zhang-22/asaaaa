@@ -523,7 +523,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 
 /* ---------- 電話：撥號 + 複製 ---------- */
-.tel-group { display: inline-flex; align-items: center; gap: 2px; }
+.tel-group { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; }
 
 /*
  * 複製鈕＝一顆灰點。
@@ -534,21 +534,40 @@ button, input, select { font: inherit; color: inherit; }
  * 用灰色不用綠色：卡片上已經有綠色的優先區域、有機會、分公司標記，複製鈕是輔助
  * 動作，不該跟那些搶顏色。滑過去、按下去才變深。
  */
+/*
+ * 大小跟著旁邊的字走：點＝那行字的一半（0.5em），所以公司名稱那顆大、電話那顆小，
+ * 看起來才是同一個東西的不同尺寸，而不是隨便擺一顆固定大小的點。
+ *
+ * 按的範圍另外用 ::after 疊一塊 26px 的透明區，不佔版面高度——按鈕本身只有 1em 高，
+ * 塞在文字行裡不會把行距撐開。
+ */
 .copy-dot {
-  width: 26px; height: 26px; padding: 0; flex: none;
+  position: relative;
+  width: 1em; height: 1em; padding: 0; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
   border: 0; background: none; cursor: pointer; border-radius: 999px;
-  vertical-align: middle;
+  /* 對齊字的中間：實測下來框要比基線再抬 0.1em，中線才跟那行字的中線重合 */
+  vertical-align: 0.1em;
+}
+/*
+ * 按壓範圍往右、往上下擴，左邊只留一點點。
+ *
+ * 左邊就是電話膠囊或那串數字，整圈擴出去會蓋到它們——在手機上想按撥號、
+ * 結果按到複製。右邊是空白，愛擴多少都行。
+ */
+.copy-dot::after {
+  content: ''; position: absolute;
+  left: -3px; right: -13px; top: -9px; bottom: -9px;
 }
 .copy-dot::before {
-  content: ''; width: 10px; height: 10px; border-radius: 999px;
+  content: ''; width: .5em; height: .5em; border-radius: 999px;
   background: var(--muted); opacity: .55;
   transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease;
 }
 .copy-dot:hover::before { transform: scale(1.25); opacity: 1; }
 .copy-dot:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 /* 資料列（統編那種）裡的點往左靠一點，不要離值太遠 */
-.detail-grid dd .copy-dot { margin-left: 2px; }
+.detail-grid dd .copy-dot { margin-left: .25em; }
 .copy-dot:active::before { transform: scale(.85); }
 /* 複製成功：點自己擴一圈再收回來，不然按下去畫面完全沒反應 */
 .copy-dot.is-copied::before { animation: copied .7s ease; opacity: 1; }
