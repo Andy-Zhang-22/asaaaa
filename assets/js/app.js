@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-142';
+  const APP_VERSION = '20260920-145';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1150,21 +1150,11 @@
     const regBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '查商工登記並加入' });
 
     const sameAsListed = (c) => state.records.find((x) => sameCompany(x, { company: c.name, taxId: c.taxId }));
+    const isSelf = (c) => { const x = sameAsListed(c); return !!x && x.id === r.id; };
     const regRow = (c) => {
       const already = sameAsListed(c);
+      const self = !!already && already.id === r.id;
       const key = String(c.taxId || c.name);
-      const cb = el('input', { type: 'checkbox' });
-      if (already) cb.checked = picked.has(already.id) || already.id === r.id;
-      else cb.checked = newPicks.has(key);
-      cb.disabled = !!(already && already.id === r.id);
-      cb.onchange = () => {
-        if (already) {
-          if (cb.checked) picked.add(already.id); else picked.delete(already.id);
-          paintChosen();
-          paintList(search.value.toLowerCase());
-        } else if (cb.checked) newPicks.set(key, c);
-        else newPicks.delete(key);
-      };
       const bits = [
         c.taxId && `統編 ${c.taxId}`,
         c.owner && `負責人 ${c.owner}`,
@@ -1172,15 +1162,53 @@
         c.status,
         c.address,
       ].filter(Boolean).join('　');
-      const tag = already
-        ? (already.id === r.id ? '就是這一家' : `已在名單（${already.source}）`)
-        : '名單裡沒有，勾了會一起加進來';
-      return el('label', { className: 'group-row' }, [cb,
-        el('span', {}, [
-          el('strong', { textContent: c.name || '（無名稱）' }),
-          el('small', { className: 'muted', textContent: bits }),
-          el('small', { className: 'muted', textContent: tag }),
-        ])]);
+      const info = (tag) => el('span', {}, [
+        el('strong', { textContent: c.name || '（無名稱）' }),
+        el('small', { className: 'muted', textContent: bits }),
+        el('small', { className: 'muted', textContent: tag }),
+      ]);
+      /*
+       * 查到的就是正在看的那一家時，不要畫成「已勾選的核取方塊」。
+       *
+       * 原本是打勾＋停用，使用者看到的是一個藍色勾勾配「就是這一家」——
+       * 實際回報是「這是什麼狀態，我還沒建立連結耶」。勾勾在這個畫面的意思是
+       * 「會連結」，拿它來表示「這是你自己」等於講了反話。
+       * 改成不放核取方塊，直接用一句話講清楚，並且告訴他下一步該打什麼。
+       */
+      if (self) {
+        return el('div', { className: 'group-row is-self' }, [
+          info('這就是你正在看的這一家（統編一樣），不是關係企業——請改打關係企業那一家的名稱或統編。'),
+        ]);
+      }
+      /*
+       * 查到的那一列直接給一顆按鈕，按下去就完成。
+       *
+       * 原本是勾核取方塊、再捲到視窗最底按「儲存連結」。使用者的話很直白：
+       * 「別再讓我跳到下面去勾選，白忙一場」——而且上面那顆按鈕本來就寫著
+       * 「查商工登記**並加入**」，卻只查不加入，等於說了不算。
+       * 現在按一下就把這家加進名單、連結、存檔、關掉視窗，一次做完。
+       */
+      const go = el('button', {
+        className: 'btn btn-tiny btn-primary', type: 'button',
+        textContent: already ? '連結這一家' : '加入並連結',
+      });
+      go.onclick = async () => {
+        if (go.disabled) return;
+        go.disabled = true;
+        const was = go.textContent;
+        go.textContent = '處理中…';
+        if (already) picked.add(already.id); else newPicks.set(key, c);
+        try {
+          await save.onclick();
+        } finally {
+          go.disabled = false;
+          go.textContent = was;
+        }
+      };
+      return el('div', { className: 'group-row is-action' }, [
+        info(already ? `已在名單（${already.source}）` : '名單裡沒有，會一起加進來'),
+        go,
+      ]);
     };
 
     regBtn.onclick = async () => {
@@ -1195,7 +1223,8 @@
       regNote.textContent = `正在用「${kw}」查商工登記…`;
       let res;
       try {
-        res = await window.Registry.lookupByKeyword(kw);
+        // g0v 鏡像排第一：使用者那台官方的名稱查詢整條不通，只有鏡像查得到
+        res = await window.Registry.lookupByKeyword(kw, { mirrorFirst: true });
       } catch (err) {
         res = { ok: false, reason: err && err.message ? err.message : String(err), attempts: [] };
       }
@@ -1245,14 +1274,14 @@
               + `（同一支資料集用統編查得到，經由${base.label}），`
               + '但換成中文公司名就一律查無資料。也就是這支資料集不吃「用公司名查」這個條件。'
               + '這不是你打錯名字，換幾個名字都一樣。'
-              + '現在可行的：① 直接貼統一編號（那條一直是好的）② 按下面的 g0v 鏡像。'
+              + '這一次連 g0v 鏡像也沒有。可行的：直接貼統一編號（那條一直是好的）。'
               + '要修名稱這條，得換一支支援名稱查詢的資料集：⋯ 選單 →「從商工登記更新公司資料」→'
               + '「用名稱查的資料集網址」。';
           } else {
             verdict.textContent = '查出來了：「用名稱查的資料集」整支都不通'
               + `（連用統編查同一支資料集都查不到，統編 ${window.Registry.PROBE_TAXID}）。`
               + '這支資料集的編號可能已經失效。你的每日更新走的是另一支（用統編查的），所以沒受影響。'
-              + '現在可行的：① 直接貼統一編號 ② 按下面的 g0v 鏡像。'
+              + '這一次連 g0v 鏡像也沒有。可行的：直接貼統一編號。'
               + '要修就到 ⋯ 選單 →「從商工登記更新公司資料」→「用名稱查的資料集網址」換一支。';
           }
         }
@@ -1276,30 +1305,6 @@
             + '看到 JSON 就是查詢語法對了、代理那段有問題；看到空白就是這個名稱在登記上查不到。' }));
 
         /*
-         * g0v 鏡像是另一條完全不同的路（不是 OData、有自己的搜尋），官方那支名稱
-         * 查詢不管用的時候它常常查得到。但它是第三方，照既有的做法不預設偷偷送出去——
-         * 給一顆按鈕讓使用者自己決定，並且講明會送什麼出去。
-         */
-        const mirrorBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '改用 g0v 社群鏡像再查一次' });
-        mirrorBtn.onclick = async () => {
-          mirrorBtn.disabled = true;
-          mirrorBtn.textContent = '查詢中…';
-          let m;
-          try { m = await window.Registry.lookupByKeyword(kw, { useMirror: true }); } catch (e) { m = { ok: false, reason: String(e) }; }
-          mirrorBtn.disabled = false;
-          mirrorBtn.textContent = '改用 g0v 社群鏡像再查一次';
-          if (!m.ok || !m.companies.length) {
-            regList.append(el('p', { className: 'rule-verdict is-fail', textContent: `g0v 鏡像也查不到：${m.reason || '查無資料'}` }));
-            return;
-          }
-          regList.textContent = '';
-          regNote.className = 'rule-note';
-          regNote.textContent = `g0v 社群鏡像找到 ${m.companies.length} 家`
-            + (m.used && m.used !== kw ? `（用「${m.used}」查到的）` : '')
-            + '。資料來自社群鏡像、不是政府即時資料，勾之前看一下統編對不對。';
-          m.companies.forEach((c) => regList.append(regRow(c)));
-        };
-        /*
          * 查不到也不要把人卡住。
          *
          * 使用者知道那家是關企、名字就在眼前，只是商工登記查不到而已。與其要他切出去
@@ -1314,21 +1319,16 @@
             .replace(/^[,，、/／|｜-]+|[,，、/／|｜-]+$/g, '');
           if (!name) { toast('只有統編沒有公司名，沒辦法直接加入'); return; }
           newPicks.set(taxId || name, { name, taxId, owner: '', address: '', capital: '' });
-          regList.textContent = '';
-          regNote.className = 'rule-note';
-          regNote.textContent = `會用「${name}」建一筆並連結（沒有商工登記的資料，統編與資本額之後可以自己補）。`
-            + '按下面的「儲存連結」完成。';
           rawAdd.disabled = true;
+          rawAdd.textContent = '處理中…';
+          // 按一下就做完，不要再叫人捲到下面按「儲存連結」
+          save.onclick();
         };
         regList.append(el('p', { className: 'rule-note',
           textContent: '查不到也不用卡在這裡：可以直接用你打的名字建一筆並連結，'
             + '商工登記的欄位之後自己補就好。' }));
         regList.append(el('div', { className: 'card-actions' }, [rawAdd]));
 
-        regList.append(el('p', { className: 'rule-note',
-          textContent: 'g0v 鏡像是另一條路（社群維護的同一份登記資料，不是 OData）。'
-            + '官方那支名稱查詢不通時它常常查得到，但它是第三方，要按才會送出——送出去的只有公司名。' }));
-        regList.append(el('div', { className: 'card-actions' }, [mirrorBtn]));
 
         /*
          * 一鍵把診斷內容複製起來。
@@ -1356,10 +1356,30 @@
         return;
       }
       regNote.className = 'rule-note';
-      regNote.textContent = `${res.label} 找到 ${res.companies.length} 家`
-        + (res.used && res.used !== kw ? `（用「${res.used}」查到的）` : '')
-        + '。勾你要的那一家，存檔時會連同統編、負責人、資本總額、地址一起加進名單並連結。';
+      /*
+       * 沒有名稱的那幾筆不要列。
+       *
+       * g0v 的搜尋結果混著公司、商號、分公司，欄位名稱各不相同，對不上就變成
+       * 「（無名稱）統編 98270490」這種只有統編的列——那勾了也不知道是什麼公司，
+       * 使用者看到只會覺得畫面怪怪的。名稱欄位已經多補了幾個候選，剩下真的沒有的就略過。
+       */
+      const nameless = res.companies.filter((c) => !c.name).length;
+      res.companies = res.companies.filter((c) => c.name);
+      const onlySelf = res.companies.length > 0 && res.companies.every(isSelf);
+      regNote.textContent = onlySelf
+        // 查到自己不是成功。還叫人「勾你要的那一家」只會讓人以為畫面壞了
+        ? `查到的就是你正在看的這一家（${r.company}），不是關係企業。`
+          + '要連結的是「另一家」——請打那一家的公司名或統編。'
+        : `${res.label} 找到 ${res.companies.length} 家`
+          + (res.used && res.used !== kw ? `（用「${res.used}」查到的）` : '')
+          + (nameless ? `（另有 ${nameless} 筆沒有公司名稱，略過）` : '')
+          + '。按你要的那一家旁邊的按鈕就完成，不用再捲到下面。'
+          // 鏡像資料不是政府即時的，勾之前看一下統編
+          + (res.source === 'g0v' ? '資料來自 g0v 社群鏡像、不是政府即時資料，勾之前看一下統編對不對。' : '');
       res.companies.forEach((c) => regList.append(regRow(c)));
+      // 結果常常落在畫面外，捲進來才看得到——不然使用者以為按了沒反應
+      const first = regList.querySelector('.group-row');
+      if (first && first.scrollIntoView) first.scrollIntoView({ block: 'center' });
       if (!res.companies.length) regList.append(el('p', { className: 'rule-note', textContent: '查不到。登記上的寫法可能不一樣，少打幾個字（例如只打「方舟國際」）或改用統一編號再試。' }));
     };
     regBox.append(
