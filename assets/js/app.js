@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-143';
+  const APP_VERSION = '20260920-144';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1206,7 +1206,8 @@
       regNote.textContent = `正在用「${kw}」查商工登記…`;
       let res;
       try {
-        res = await window.Registry.lookupByKeyword(kw);
+        // g0v 鏡像排第一：使用者那台官方的名稱查詢整條不通，只有鏡像查得到
+        res = await window.Registry.lookupByKeyword(kw, { mirrorFirst: true });
       } catch (err) {
         res = { ok: false, reason: err && err.message ? err.message : String(err), attempts: [] };
       }
@@ -1256,14 +1257,14 @@
               + `（同一支資料集用統編查得到，經由${base.label}），`
               + '但換成中文公司名就一律查無資料。也就是這支資料集不吃「用公司名查」這個條件。'
               + '這不是你打錯名字，換幾個名字都一樣。'
-              + '現在可行的：① 直接貼統一編號（那條一直是好的）② 按下面的 g0v 鏡像。'
+              + '這一次連 g0v 鏡像也沒有。可行的：直接貼統一編號（那條一直是好的）。'
               + '要修名稱這條，得換一支支援名稱查詢的資料集：⋯ 選單 →「從商工登記更新公司資料」→'
               + '「用名稱查的資料集網址」。';
           } else {
             verdict.textContent = '查出來了：「用名稱查的資料集」整支都不通'
               + `（連用統編查同一支資料集都查不到，統編 ${window.Registry.PROBE_TAXID}）。`
               + '這支資料集的編號可能已經失效。你的每日更新走的是另一支（用統編查的），所以沒受影響。'
-              + '現在可行的：① 直接貼統一編號 ② 按下面的 g0v 鏡像。'
+              + '這一次連 g0v 鏡像也沒有。可行的：直接貼統一編號。'
               + '要修就到 ⋯ 選單 →「從商工登記更新公司資料」→「用名稱查的資料集網址」換一支。';
           }
         }
@@ -1286,30 +1287,6 @@
           textContent: '點開任何一個網址：那是你的瀏覽器直接連政府網站，不受跨網域限制。'
             + '看到 JSON 就是查詢語法對了、代理那段有問題；看到空白就是這個名稱在登記上查不到。' }));
 
-        /*
-         * g0v 鏡像是另一條完全不同的路（不是 OData、有自己的搜尋），官方那支名稱
-         * 查詢不管用的時候它常常查得到。但它是第三方，照既有的做法不預設偷偷送出去——
-         * 給一顆按鈕讓使用者自己決定，並且講明會送什麼出去。
-         */
-        const mirrorBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '改用 g0v 社群鏡像再查一次' });
-        mirrorBtn.onclick = async () => {
-          mirrorBtn.disabled = true;
-          mirrorBtn.textContent = '查詢中…';
-          let m;
-          try { m = await window.Registry.lookupByKeyword(kw, { useMirror: true }); } catch (e) { m = { ok: false, reason: String(e) }; }
-          mirrorBtn.disabled = false;
-          mirrorBtn.textContent = '改用 g0v 社群鏡像再查一次';
-          if (!m.ok || !m.companies.length) {
-            regList.append(el('p', { className: 'rule-verdict is-fail', textContent: `g0v 鏡像也查不到：${m.reason || '查無資料'}` }));
-            return;
-          }
-          regList.textContent = '';
-          regNote.className = 'rule-note';
-          regNote.textContent = `g0v 社群鏡像找到 ${m.companies.length} 家`
-            + (m.used && m.used !== kw ? `（用「${m.used}」查到的）` : '')
-            + '。資料來自社群鏡像、不是政府即時資料，勾之前看一下統編對不對。';
-          m.companies.forEach((c) => regList.append(regRow(c)));
-        };
         /*
          * 查不到也不要把人卡住。
          *
@@ -1336,10 +1313,6 @@
             + '商工登記的欄位之後自己補就好。' }));
         regList.append(el('div', { className: 'card-actions' }, [rawAdd]));
 
-        regList.append(el('p', { className: 'rule-note',
-          textContent: 'g0v 鏡像是另一條路（社群維護的同一份登記資料，不是 OData）。'
-            + '官方那支名稱查詢不通時它常常查得到，但它是第三方，要按才會送出——送出去的只有公司名。' }));
-        regList.append(el('div', { className: 'card-actions' }, [mirrorBtn]));
 
         /*
          * 一鍵把診斷內容複製起來。
@@ -1367,6 +1340,15 @@
         return;
       }
       regNote.className = 'rule-note';
+      /*
+       * 沒有名稱的那幾筆不要列。
+       *
+       * g0v 的搜尋結果混著公司、商號、分公司，欄位名稱各不相同，對不上就變成
+       * 「（無名稱）統編 98270490」這種只有統編的列——那勾了也不知道是什麼公司，
+       * 使用者看到只會覺得畫面怪怪的。名稱欄位已經多補了幾個候選，剩下真的沒有的就略過。
+       */
+      const nameless = res.companies.filter((c) => !c.name).length;
+      res.companies = res.companies.filter((c) => c.name);
       const onlySelf = res.companies.length > 0 && res.companies.every(isSelf);
       regNote.textContent = onlySelf
         // 查到自己不是成功。還叫人「勾你要的那一家」只會讓人以為畫面壞了
@@ -1374,7 +1356,10 @@
           + '要連結的是「另一家」——請打那一家的公司名或統編。'
         : `${res.label} 找到 ${res.companies.length} 家`
           + (res.used && res.used !== kw ? `（用「${res.used}」查到的）` : '')
-          + '。勾你要的那一家，存檔時會連同統編、負責人、資本總額、地址一起加進名單並連結。';
+          + (nameless ? `（另有 ${nameless} 筆沒有公司名稱，略過）` : '')
+          + '。勾你要的那一家，存檔時會連同統編、負責人、資本總額、地址一起加進名單並連結。'
+          // 鏡像資料不是政府即時的，勾之前看一下統編
+          + (res.source === 'g0v' ? '資料來自 g0v 社群鏡像、不是政府即時資料，勾之前看一下統編對不對。' : '');
       res.companies.forEach((c) => regList.append(regRow(c)));
       if (!res.companies.length) regList.append(el('p', { className: 'rule-note', textContent: '查不到。登記上的寫法可能不一樣，少打幾個字（例如只打「方舟國際」）或改用統一編號再試。' }));
     };

@@ -236,7 +236,9 @@
    */
   const FIELD_CANDIDATES = {
     taxId: ['Business_Accounting_NO', 'BAN', 'Business_Accounting_No', '統一編號'],
-    name: ['Company_Name', 'Business_Name', 'Company_Name_Chinese', '公司名稱', '商業名稱'],
+    // g0v 鏡像的搜尋結果混著公司、商號、分公司，欄位名稱各不相同——少列一個就變「（無名稱）」
+    name: ['Company_Name', 'Business_Name', 'Company_Name_Chinese', 'Branch_Name',
+      '公司名稱', '商業名稱', '分公司名稱', '名稱'],
     status: ['Company_Status_Desc', 'Company_Status', 'Business_Status_Desc', '公司狀況', '狀態'],
     owner: ['Responsible_Name', 'Company_Responsible_Name', 'Business_Responsible_Name',
       '代表人姓名', '負責人姓名', '負責人'],
@@ -546,10 +548,20 @@
   }
 
   /** 目前可以用的來源，依序試。沒填代理就跳過代理，沒啟用鏡像就跳過鏡像。 */
-  function activeSources({ useMirror = false } = {}) {
+  /*
+   * mirrorFirst：把 g0v 鏡像排到最前面。
+   *
+   * 連結關係企業那個畫面用的就是這個。使用者那台的「用公司名查」官方整條不通
+   * （連登記全名都查無資料），只有 g0v 查得到——把官方那 14 種寫法先跑一輪再落到
+   * 鏡像，等於每次都先卡十幾秒才出結果。既然他明講「都用 g0v 查詢」，就先打鏡像，
+   * 鏡像沒有再往官方要（官方的資料比較新，有就用它的）。
+   */
+  function activeSources({ useMirror = false, mirrorFirst = false } = {}) {
     const keys = ['official'];
     if (getProxy()) keys.push('proxy');
-    if (useMirror) keys.push('g0v');
+    if (useMirror || mirrorFirst) {
+      if (mirrorFirst) keys.unshift('g0v'); else keys.push('g0v');
+    }
     return keys;
   }
 
