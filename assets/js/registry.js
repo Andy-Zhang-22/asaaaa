@@ -517,27 +517,90 @@
   };
 
   /*
+   * 把公司名去掉組織型態，留下真正在找的那幾個字。
+   * 「方舟國際股份有限公司」→「方舟國際」。登記上的全名常常跟業務講的不一樣
+   * （中間多兩個字、或寫成「股份有限公司」以外的型態），用全名 like 就對不到。
+   */
+  function companyStem(name) {
+    return String(name || '')
+      .replace(/\s/g, '')
+      .replace(/(股份有限公司|有限公司|股份公司|兩合公司|無限公司|公司|企業社|商行|工作室|事務所)$/, '');
+  }
+
+  /*
    * 連結關係企業時用的查詢：照使用者打的公司名（或統編）去查。
    *
    * 這裡**不自己組查詢網址**，直接用 lookupByName／lookupByTaxId——網站每天在用、
-   * 確定通的那兩條。上一版自己組了一份幾乎一樣但 $top=50 的網址，結果代理回「查無資料」，
-   * 而同一台裝置的商工登記更新明明是好的：差別就在那個自己加的參數。
-   * 查同一份資料就該走同一條路，不要為了「想多拿幾筆」另外開一條沒人驗過的。
+   * 確定通的那兩條。曾經自己組了一份幾乎一樣但 $top=50 的網址，結果代理回「查無資料」。
+   * 查同一份資料就走同一條路。
    *
-   * 回傳把 candidates 攤成 companies，讓呼叫端不用管這兩支函式的形狀差異。
+   * 查不到會自己退一步再試，而不是把「查無資料」丟回去讓使用者猜：
+   *   1. 使用者打的全名
+   *   2. 去掉組織型態的短名（「方舟國際股份有限公司」→「方舟國際」）——登記上的全名
+   *      常常跟業務講的差幾個字，短名才對得到
+   *   3. 欄位最齊的那支資料集（應用一）也用名稱試一次；平常它只拿來用統編查，
+   *      但關鍵字查詢那支在某些代理上就是回空白，多一支多一條路
+   * 每一次嘗試的網址都留在 attempts 裡，讓畫面可以列出來讓使用者自己點開看原始回應——
+   * 查詢語法對不對、代理通不通、還是這家真的查不到，只有那個畫面分得出來。
    */
   async function lookupByKeyword(text, opts) {
     const clean = String(text || '').trim();
     if (!clean) return { ok: false, reason: '請先填公司名稱或統一編號', attempts: [] };
+
     // 純數字 8 碼當統編查：使用者手上有統編時這條最準，也省得名稱一字之差查不到
     const digits = clean.replace(/\D/g, '');
-    const res = (digits.length === 8 && digits === clean.replace(/[\s-]/g, ''))
-      ? await lookupByTaxId(digits, opts)
-      : await lookupByName(clean, opts);
-    if (!res.ok) return { ...res, companies: [] };
-    const companies = (res.candidates && res.candidates.length ? res.candidates : [res.data])
-      .filter((c) => c && (c.taxId || c.name));
-    return { ...res, companies };
+    if (digits.length === 8 && digits === clean.replace(/[\s-]/g, '')) {
+      const res = await lookupByTaxId(digits, opts);
+      return res.ok ? { ...res, companies: pickCompanies(res), used: digits } : { ...res, companies: [] };
+    }
+
+    const attempts = [];
+    const names = [clean];
+    const stem = companyStem(clean);
+    if (stem && stem !== clean && stem.length >= 2) names.push(stem);
+    for (const name of names) {
+      const res = await lookupByName(name, opts);
+      (res.attempts || []).forEach((a) => attempts.push({ ...a, label: `${a.label}／查「${name}」` }));
+      if (res.ok) return { ...res, companies: pickCompanies(res), attempts, used: name };
+    }
+
+    // 關鍵字查詢那支回空白時，拿欄位最齊的應用一再試一次名稱
+    for (const name of names) {
+      const extra = await tryNameOn(FULL_TAXID_BASE, name, opts);
+      attempts.push(...extra.attempts);
+      if (extra.ok) return { ...extra, attempts, used: name };
+    }
+
+    return {
+      ok: false, attempts, companies: [],
+      reason: attempts.length ? attempts.map((a) => `${a.label}：${a.reason}`).join('\n') : '沒有可用的查詢來源',
+    };
+  }
+
+  const pickCompanies = (res) => (res.candidates && res.candidates.length ? res.candidates : [res.data])
+    .filter((c) => c && (c.taxId || c.name));
+
+  /** 拿某一支資料集用公司名試一次（關鍵字那支回空白時的備援）。 */
+  async function tryNameOn(base, name, opts) {
+    const attempts = [];
+    for (const key of activeSources(opts)) {
+      if (key === 'g0v') continue;                 // g0v 不是 OData，換資料集沒有意義
+      const wrap = key === 'proxy' ? viaProxy : ((u) => u);
+      const label = `${SOURCES[key].label}／應用一資料集／查「${name}」`;
+      for (const variant of nameVariants(name)) {
+        const url = wrap(odata(base, `Company_Name like ${variant} and Company_Status eq 01`, 5));
+        try {
+          const rows = await request(url);
+          if (!rows.length) { attempts.push({ source: key, label, reason: '查無資料', url, upstream: upstreamOf(url) }); continue; }
+          const companies = rows.map(mapRow).filter((c) => c && (c.taxId || c.name));
+          return { ok: true, source: key, label, url, upstream: upstreamOf(url), companies, attempts };
+        } catch (err) {
+          attempts.push({ source: key, label, reason: explain(err, key), body: err.body, url, upstream: upstreamOf(url) });
+          if (err instanceof TypeError) break;
+        }
+      }
+    }
+    return { ok: false, attempts };
   }
 
   /**
@@ -574,7 +637,7 @@
   }
 
   global.Registry = {
-    lookupByTaxId, lookupByName, lookupByKeyword, lookupCompany, mapRow, toThousands, tidyDate,
+    lookupByTaxId, lookupByName, lookupByKeyword, companyStem, lookupCompany, mapRow, toThousands, tidyDate,
     FULL_TAXID_BASE, LEGACY_TAXID_BASE,
     SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, nameVariants,
     getBase, setBase, DEFAULT_BASE, getTaxIdBase, setTaxIdBase, DEFAULT_TAXID_BASE, FIELD_CANDIDATES,
