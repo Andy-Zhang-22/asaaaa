@@ -126,15 +126,30 @@
     return [...out].filter(Boolean);
   }
 
+  /*
+   * 用名稱查要多試幾種寫法，因為「哪一種寫法這支 API 才吃」沒辦法在開發環境驗證
+   * （連不上 data.gcis.nat.gov.tw）。
+   *
+   * 其中**加單引號**那組是後來補的，理由很具體：使用者那台用統編查天天成功，
+   * 用公司名查卻永遠查無資料——連登記全名「台灣積體電路製造股份有限公司」都一樣。
+   * 兩者唯一的差別是「值是數字還是字串」：OData 的字串值本來就要用單引號包起來
+   * （`Company_Name eq '台積電'`），數字不用（`Business_Accounting_NO eq 22099131`）。
+   * 官方文件的範例寫的是不加引號的 like，所以兩種都試，不去賭哪一種才對。
+   *
+   * 順序：文件上的寫法擺前面（真的能用就不必多打幾次），加引號的當備援。
+   */
   const officialByName = (name) => {
     const urls = [];
     for (const variant of nameVariants(name)) {
       urls.push(odata(getBase(), `Company_Name like ${variant} and Company_Status eq 01`, 5));
       urls.push(odata(getBase(), `Company_Name like ${variant}`, 5));
-      // 上面的註解一直寫著「like 找不到再試 eq」，但程式裡沒有——兩個寫法都是 like。
-      // 萬一這支資料集的 like 不吃中文或已經不支援，eq 是另一條路，補上不吃虧。
+      // 註解一直寫著「like 找不到再試 eq」，但程式裡曾經兩種寫法都是 like
       urls.push(odata(getBase(), `Company_Name eq ${variant} and Company_Status eq 01`, 5));
       urls.push(odata(getBase(), `Company_Name eq ${variant}`, 5));
+      // 字串值加單引號：OData 的標準寫法，也是統編（數字）通、公司名（字串）不通的最大嫌疑
+      urls.push(odata(getBase(), `Company_Name like '${variant}' and Company_Status eq '01'`, 5));
+      urls.push(odata(getBase(), `Company_Name like '${variant}'`, 5));
+      urls.push(odata(getBase(), `Company_Name eq '${variant}'`, 5));
     }
     return urls;
   };
@@ -184,7 +199,15 @@
       label: 'g0v 公司登記資料（社群鏡像）',
       // 網域是 company.g0v.ronny.tw（實測 company.g0v.tw 根本不存在，DNS 查不到）
       byTaxId: (taxId) => [`https://company.g0v.ronny.tw/api/show/${encodeURIComponent(taxId)}`],
-      byName: (name) => [`https://company.g0v.ronny.tw/api/search/${encodeURIComponent(name)}`],
+      /*
+       * 搜尋端點兩種形式都試。path 那種是原本寫的，但使用者按了鏡像之後一樣查不到，
+       * 而 /api/show/<統編> 明明是 path 形式——所以 search 很可能是 query 參數那種。
+       * 猜不出來就兩種都打一次，反正失敗會照實列出來。
+       */
+      byName: (name) => [
+        `https://company.g0v.ronny.tw/api/search/${encodeURIComponent(name)}`,
+        `https://company.g0v.ronny.tw/api/search?q=${encodeURIComponent(name)}`,
+      ],
     },
     proxy: {
       label: '自架代理',
@@ -651,8 +674,14 @@
       if (key === 'g0v') continue;                 // g0v 不是 OData，換資料集沒有意義
       const wrap = key === 'proxy' ? viaProxy : ((u) => u);
       const label = `${SOURCES[key].label}／應用一資料集／查「${name}」`;
-      for (const variant of nameVariants(name)) {
-        const url = wrap(odata(base, `Company_Name like ${variant} and Company_Status eq 01`, 5));
+      const writings = [];
+      nameVariants(name).forEach((variant) => {
+        writings.push(`Company_Name like ${variant} and Company_Status eq 01`);
+        // 加單引號那種：字串值的標準寫法，跟 officialByName 同一個理由
+        writings.push(`Company_Name like '${variant}' and Company_Status eq '01'`);
+      });
+      for (const filter of writings) {
+        const url = wrap(odata(base, filter, 5));
         try {
           const rows = await request(url);
           if (!rows.length) { attempts.push({ source: key, label, reason: '查無資料', body: rows.info, url, upstream: upstreamOf(url) }); continue; }
