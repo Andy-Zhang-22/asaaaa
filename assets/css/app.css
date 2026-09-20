@@ -699,3 +699,5 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 .group-registry .paste-box { flex: 1; min-width: 160px; }
 /* 登記查到的每一家要三行：名稱、統編地址資本額、在不在名單裡 */
 .group-registry .group-row span { display: flex; flex-direction: column; gap: 2px; }
+/* 查到的就是正在看的那一家：不是可勾的選項，縮排對齊其他列的文字，別看起來像少了勾勾 */
+.group-row.is-self { padding-left: 34px; opacity: .85; cursor: default; }

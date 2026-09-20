@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-142';
+  const APP_VERSION = '20260920-143';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1150,13 +1150,38 @@
     const regBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '查商工登記並加入' });
 
     const sameAsListed = (c) => state.records.find((x) => sameCompany(x, { company: c.name, taxId: c.taxId }));
+    const isSelf = (c) => { const x = sameAsListed(c); return !!x && x.id === r.id; };
     const regRow = (c) => {
       const already = sameAsListed(c);
+      const self = !!already && already.id === r.id;
       const key = String(c.taxId || c.name);
+      const bits = [
+        c.taxId && `統編 ${c.taxId}`,
+        c.owner && `負責人 ${c.owner}`,
+        c.capital && `資本總額 ${c.capital} 仟元`,
+        c.status,
+        c.address,
+      ].filter(Boolean).join('　');
+      const info = (tag) => el('span', {}, [
+        el('strong', { textContent: c.name || '（無名稱）' }),
+        el('small', { className: 'muted', textContent: bits }),
+        el('small', { className: 'muted', textContent: tag }),
+      ]);
+      /*
+       * 查到的就是正在看的那一家時，不要畫成「已勾選的核取方塊」。
+       *
+       * 原本是打勾＋停用，使用者看到的是一個藍色勾勾配「就是這一家」——
+       * 實際回報是「這是什麼狀態，我還沒建立連結耶」。勾勾在這個畫面的意思是
+       * 「會連結」，拿它來表示「這是你自己」等於講了反話。
+       * 改成不放核取方塊，直接用一句話講清楚，並且告訴他下一步該打什麼。
+       */
+      if (self) {
+        return el('div', { className: 'group-row is-self' }, [
+          info('這就是你正在看的這一家（統編一樣），不是關係企業——請改打關係企業那一家的名稱或統編。'),
+        ]);
+      }
       const cb = el('input', { type: 'checkbox' });
-      if (already) cb.checked = picked.has(already.id) || already.id === r.id;
-      else cb.checked = newPicks.has(key);
-      cb.disabled = !!(already && already.id === r.id);
+      cb.checked = already ? picked.has(already.id) : newPicks.has(key);
       cb.onchange = () => {
         if (already) {
           if (cb.checked) picked.add(already.id); else picked.delete(already.id);
@@ -1165,22 +1190,8 @@
         } else if (cb.checked) newPicks.set(key, c);
         else newPicks.delete(key);
       };
-      const bits = [
-        c.taxId && `統編 ${c.taxId}`,
-        c.owner && `負責人 ${c.owner}`,
-        c.capital && `資本總額 ${c.capital} 仟元`,
-        c.status,
-        c.address,
-      ].filter(Boolean).join('　');
-      const tag = already
-        ? (already.id === r.id ? '就是這一家' : `已在名單（${already.source}）`)
-        : '名單裡沒有，勾了會一起加進來';
       return el('label', { className: 'group-row' }, [cb,
-        el('span', {}, [
-          el('strong', { textContent: c.name || '（無名稱）' }),
-          el('small', { className: 'muted', textContent: bits }),
-          el('small', { className: 'muted', textContent: tag }),
-        ])]);
+        info(already ? `已在名單（${already.source}）　勾了就連結` : '名單裡沒有，勾了會一起加進來')]);
     };
 
     regBtn.onclick = async () => {
@@ -1356,9 +1367,14 @@
         return;
       }
       regNote.className = 'rule-note';
-      regNote.textContent = `${res.label} 找到 ${res.companies.length} 家`
-        + (res.used && res.used !== kw ? `（用「${res.used}」查到的）` : '')
-        + '。勾你要的那一家，存檔時會連同統編、負責人、資本總額、地址一起加進名單並連結。';
+      const onlySelf = res.companies.length > 0 && res.companies.every(isSelf);
+      regNote.textContent = onlySelf
+        // 查到自己不是成功。還叫人「勾你要的那一家」只會讓人以為畫面壞了
+        ? `查到的就是你正在看的這一家（${r.company}），不是關係企業。`
+          + '要連結的是「另一家」——請打那一家的公司名或統編。'
+        : `${res.label} 找到 ${res.companies.length} 家`
+          + (res.used && res.used !== kw ? `（用「${res.used}」查到的）` : '')
+          + '。勾你要的那一家，存檔時會連同統編、負責人、資本總額、地址一起加進名單並連結。';
       res.companies.forEach((c) => regList.append(regRow(c)));
       if (!res.companies.length) regList.append(el('p', { className: 'rule-note', textContent: '查不到。登記上的寫法可能不一樣，少打幾個字（例如只打「方舟國際」）或改用統一編號再試。' }));
     };
