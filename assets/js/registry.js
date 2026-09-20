@@ -41,6 +41,15 @@
   const DEFAULT_TAXID_BASE = FULL_TAXID_BASE;
   const BASE_KEY = 'registry-dataset-url';
   const TAXID_BASE_KEY = 'registry-dataset-taxid-url';
+  /*
+   * 用負責人查的資料集。
+   *
+   * 預設就用關鍵字查詢那一支——它確定存在、也確定會回 Responsible_Name。至於它接不接受
+   * 拿 Responsible_Name 當 $filter 條件，開發環境連不上政府網站驗不了，所以不硬塞一個
+   * 猜來的資料集編號進去；查不到的時候畫面會照實把每一種寫法的結果列出來，
+   * 要換資料集在設定裡填就好。
+   */
+  const OWNER_BASE_KEY = 'registry-dataset-owner-url';
 
   /*
    * 整理使用者貼進來的資料集網址。
@@ -72,6 +81,21 @@
       if (t.url) localStorage.setItem(BASE_KEY, t.url);
       else localStorage.removeItem(BASE_KEY);
     } catch (e) { /* 無痕模式寫不進去，不影響當次使用 */ }
+    return t;
+  };
+  const getOwnerBase = () => {
+    try {
+      const t = tidyDatasetUrl(localStorage.getItem(OWNER_BASE_KEY) || '');
+      return (t.ok && t.url) ? t.url : DEFAULT_BASE;
+    } catch (e) { return DEFAULT_BASE; }
+  };
+  const setOwnerBase = (url) => {
+    const t = tidyDatasetUrl(url);
+    if (!t.ok) return t;
+    try {
+      if (t.url) localStorage.setItem(OWNER_BASE_KEY, t.url);
+      else localStorage.removeItem(OWNER_BASE_KEY);
+    } catch (e) { /* 同上 */ }
     return t;
   };
   const getTaxIdBase = () => {
@@ -136,6 +160,25 @@
   };
 
   /*
+   * 用負責人姓名查同一個人名下的公司——關係企業就是這樣找出來的。
+   *
+   * 姓名一字不差才對得到，所以 eq 先試（同名同姓的別家也會一起回來，交給使用者自己判斷，
+   * 不自動連結）；eq 落空再試 like，因為有些資料集只吃 like。
+   * 帶 Company_Status eq 01 的寫法擺前面：關係企業要找的是還在營業的。
+   */
+  const officialByOwner = (owner) => {
+    const name = String(owner || '').replace(/\s/g, '');
+    const bases = [...new Set([getOwnerBase(), DEFAULT_BASE])];
+    const urls = [];
+    bases.forEach((b) => {
+      urls.push(odata(b, `Responsible_Name eq ${name} and Company_Status eq 01`, 50));
+      urls.push(odata(b, `Responsible_Name eq ${name}`, 50));
+      urls.push(odata(b, `Responsible_Name like ${name} and Company_Status eq 01`, 50));
+    });
+    return urls;
+  };
+
+  /*
    * 實測官方 API 不送 CORS 標頭，瀏覽器直接擋掉，所以只有官方這一條走不通。
    * 這裡改成依序試三個來源，讓使用者有不必改架構就能用的路：
    *
@@ -175,6 +218,7 @@
       label: '商工行政資料開放平臺（官方）',
       byTaxId: officialByTaxId,
       byName: officialByName,
+      byOwner: officialByOwner,
     },
     g0v: {
       label: 'g0v 公司登記資料（社群鏡像）',
@@ -186,6 +230,7 @@
       label: '自架代理',
       byTaxId: (taxId) => officialByTaxId(taxId).map(viaProxy),
       byName: (name) => officialByName(name).map(viaProxy),
+      byOwner: (owner) => officialByOwner(owner).map(viaProxy),
     },
   };
 
@@ -516,6 +561,57 @@
     return tryEach('name', clean, opts);
   };
 
+  /*
+   * 查同一個負責人名下的公司。
+   *
+   * 跟查單一公司不一樣的地方：這裡要的是「全部」，不是第一筆，所以不走 tryEach 那套
+   * 「欄位不齊就換下一個資料集補」的邏輯——那是為了把一家公司拼完整，這裡拼不起來。
+   *
+   * 同名同姓的人很多，所以只回結果、不自動連結：畫面上把統編、地址、資本額都列出來，
+   * 由使用者自己判斷是不是同一個人。這跟當初決定不用負責人自動猜關係企業是同一個理由，
+   * 差別在於這次資料來自商工登記而不是名單上的欄位，而且最後還是人來勾。
+   *
+   * g0v 鏡像沒有對應的查法（它的搜尋是查公司名），所以不列入來源，不去猜一個網址。
+   */
+  async function lookupByOwner(owner, opts) {
+    const clean = String(owner || '').replace(/\s/g, '');
+    if (!clean) return { ok: false, reason: '這家沒有負責人姓名，先用商工登記更新公司資料再試', attempts: [] };
+    const attempts = [];
+    const usable = activeSources(opts).filter((key) => SOURCES[key].byOwner);
+    for (const key of usable) {
+      const src = SOURCES[key];
+      const urls = src.byOwner(clean);
+      for (let i = 0; i < urls.length; i++) {
+        const tag = urls.length > 1 ? `${src.label}（寫法 ${i + 1}）` : src.label;
+        try {
+          const rows = await request(urls[i]);
+          if (!rows.length) {
+            attempts.push({ source: key, label: tag, reason: '查無資料', url: urls[i], upstream: upstreamOf(urls[i]) });
+            continue;
+          }
+          const list = rows.map(mapRow).filter((c) => c && (c.taxId || c.name));
+          // like 會撈到姓名有包含關係的（「王大明」撈到「王大明和」），姓名一樣的優先
+          const exact = list.filter((c) => String(c.owner || '').replace(/\s/g, '') === clean);
+          return {
+            ok: true, source: key, label: tag, url: urls[i], upstream: upstreamOf(urls[i]),
+            companies: exact.length ? exact : list,
+            loose: !exact.length,
+            attempts,
+          };
+        } catch (err) {
+          attempts.push({ source: key, label: tag, reason: explain(err, key), body: err.body, url: urls[i], upstream: upstreamOf(urls[i]) });
+          if (err instanceof TypeError) break;   // 跨網域被擋是整個來源的問題，換寫法沒意義
+        }
+      }
+    }
+    return {
+      ok: false, attempts,
+      reason: attempts.length
+        ? attempts.map((a) => `${a.label}：${a.reason}`).join('\n')
+        : '沒有可用的查詢來源（用負責人查只走官方 API 或你的代理，g0v 鏡像沒有這種查法）',
+    };
+  }
+
   /**
    * 一家公司的完整查法：有統編先用統編查；查不到、或查到的欄位不齊（資本額、負責人、
    * 地址缺任何一個），再用名稱查，把缺的補上。名稱查回來的要對得上統編（或名稱一字不差）
@@ -550,7 +646,8 @@
   }
 
   global.Registry = {
-    lookupByTaxId, lookupByName, lookupCompany, mapRow, toThousands, tidyDate, FULL_TAXID_BASE, LEGACY_TAXID_BASE,
+    lookupByTaxId, lookupByName, lookupByOwner, lookupCompany, mapRow, toThousands, tidyDate,
+    FULL_TAXID_BASE, LEGACY_TAXID_BASE, officialByOwner, getOwnerBase, setOwnerBase,
     SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, nameVariants,
     getBase, setBase, DEFAULT_BASE, getTaxIdBase, setTaxIdBase, DEFAULT_TAXID_BASE, FIELD_CANDIDATES,
     officialByTaxId, officialByName, upstreamOf, PROBE_TAXID, tidyDatasetUrl,
