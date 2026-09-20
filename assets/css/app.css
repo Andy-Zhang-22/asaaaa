@@ -218,6 +218,9 @@ button, input, select { font: inherit; color: inherit; }
 }
 .detail-head h2 { font-size: 19px; margin-bottom: 4px; }
 .detail-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 公司名稱是連到 g0v 公司資料的連結：維持標題的樣子，用虛線底線暗示按得下去 */
+.company-link { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--border); }
+.company-link:hover, .company-link:focus-visible { color: var(--primary); border-bottom-color: var(--primary); }
 .detail-title h2 { margin-bottom: 0; }
 .detail-alias { font-size: 13px; color: var(--muted); }
 .detail-grid {
