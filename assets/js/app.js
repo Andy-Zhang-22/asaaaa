@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-144';
+  const APP_VERSION = '20260920-145';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1180,18 +1180,35 @@
           info('這就是你正在看的這一家（統編一樣），不是關係企業——請改打關係企業那一家的名稱或統編。'),
         ]);
       }
-      const cb = el('input', { type: 'checkbox' });
-      cb.checked = already ? picked.has(already.id) : newPicks.has(key);
-      cb.onchange = () => {
-        if (already) {
-          if (cb.checked) picked.add(already.id); else picked.delete(already.id);
-          paintChosen();
-          paintList(search.value.toLowerCase());
-        } else if (cb.checked) newPicks.set(key, c);
-        else newPicks.delete(key);
+      /*
+       * 查到的那一列直接給一顆按鈕，按下去就完成。
+       *
+       * 原本是勾核取方塊、再捲到視窗最底按「儲存連結」。使用者的話很直白：
+       * 「別再讓我跳到下面去勾選，白忙一場」——而且上面那顆按鈕本來就寫著
+       * 「查商工登記**並加入**」，卻只查不加入，等於說了不算。
+       * 現在按一下就把這家加進名單、連結、存檔、關掉視窗，一次做完。
+       */
+      const go = el('button', {
+        className: 'btn btn-tiny btn-primary', type: 'button',
+        textContent: already ? '連結這一家' : '加入並連結',
+      });
+      go.onclick = async () => {
+        if (go.disabled) return;
+        go.disabled = true;
+        const was = go.textContent;
+        go.textContent = '處理中…';
+        if (already) picked.add(already.id); else newPicks.set(key, c);
+        try {
+          await save.onclick();
+        } finally {
+          go.disabled = false;
+          go.textContent = was;
+        }
       };
-      return el('label', { className: 'group-row' }, [cb,
-        info(already ? `已在名單（${already.source}）　勾了就連結` : '名單裡沒有，勾了會一起加進來')]);
+      return el('div', { className: 'group-row is-action' }, [
+        info(already ? `已在名單（${already.source}）` : '名單裡沒有，會一起加進來'),
+        go,
+      ]);
     };
 
     regBtn.onclick = async () => {
@@ -1302,11 +1319,10 @@
             .replace(/^[,，、/／|｜-]+|[,，、/／|｜-]+$/g, '');
           if (!name) { toast('只有統編沒有公司名，沒辦法直接加入'); return; }
           newPicks.set(taxId || name, { name, taxId, owner: '', address: '', capital: '' });
-          regList.textContent = '';
-          regNote.className = 'rule-note';
-          regNote.textContent = `會用「${name}」建一筆並連結（沒有商工登記的資料，統編與資本額之後可以自己補）。`
-            + '按下面的「儲存連結」完成。';
           rawAdd.disabled = true;
+          rawAdd.textContent = '處理中…';
+          // 按一下就做完，不要再叫人捲到下面按「儲存連結」
+          save.onclick();
         };
         regList.append(el('p', { className: 'rule-note',
           textContent: '查不到也不用卡在這裡：可以直接用你打的名字建一筆並連結，'
@@ -1357,10 +1373,13 @@
         : `${res.label} 找到 ${res.companies.length} 家`
           + (res.used && res.used !== kw ? `（用「${res.used}」查到的）` : '')
           + (nameless ? `（另有 ${nameless} 筆沒有公司名稱，略過）` : '')
-          + '。勾你要的那一家，存檔時會連同統編、負責人、資本總額、地址一起加進名單並連結。'
+          + '。按你要的那一家旁邊的按鈕就完成，不用再捲到下面。'
           // 鏡像資料不是政府即時的，勾之前看一下統編
           + (res.source === 'g0v' ? '資料來自 g0v 社群鏡像、不是政府即時資料，勾之前看一下統編對不對。' : '');
       res.companies.forEach((c) => regList.append(regRow(c)));
+      // 結果常常落在畫面外，捲進來才看得到——不然使用者以為按了沒反應
+      const first = regList.querySelector('.group-row');
+      if (first && first.scrollIntoView) first.scrollIntoView({ block: 'center' });
       if (!res.companies.length) regList.append(el('p', { className: 'rule-note', textContent: '查不到。登記上的寫法可能不一樣，少打幾個字（例如只打「方舟國際」）或改用統一編號再試。' }));
     };
     regBox.append(
