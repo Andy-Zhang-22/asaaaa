@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-137';
+  const APP_VERSION = '20260920-138';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1208,35 +1208,46 @@
             ? '登記上的寫法可能跟你打的不一樣，或是這家的登記狀態不是「核准設立」。'
             : '');
         /*
-         * 把每一次查詢的網址列出來讓使用者自己點開。
+         * 先做結論，再排版。
          *
-         * 「查無資料」有三種完全不同的原因：查詢語法不對、代理那段有問題、這家在登記上
-         * 真的查不到。從畫面上分不出來，但點開網址直接連政府網站就分得出來——
-         * 有 JSON 就是代理的問題，空白就是這家真的查不到。
-         * 設定頁的「先試一筆」本來就是這樣做的，這裡照抄。
+         * 使用者已經連續幾輪對著一長串「查無資料」試不同的名字——那串東西對他沒有用，
+         * 他要的是「那我現在該按哪裡」。所以先跑探測拿到結論，把真的可行的那條
+         * （g0v 鏡像、或改用統編）放在最前面，一長串嘗試明細收到後面去。
          */
+        const verdict = el('p', { className: 'rule-note', textContent: `正在確認「用公司名查」這條路通不通（拿${window.Registry.PROBE_NAME}試）…` });
+        regList.append(verdict);
+        let probe;
+        try { probe = await window.Registry.probeNameQuery(); } catch (e) { probe = { ok: false }; }
+        if (probe.ok) {
+          verdict.className = 'rule-note';
+          verdict.textContent = `用公司名查是通的（拿${probe.name}試有查到）。`
+            + `所以是「${kw}」這個寫法在商工登記上比不到——登記全名可能多幾個字，`
+            + '或這家的登記狀態不是「核准設立」。改用統一編號最準。';
+        } else {
+          verdict.className = 'rule-verdict is-fail';
+          verdict.textContent = `用公司名查整條路不通：連${window.Registry.PROBE_NAME}都查不到，`
+            + '換幾個名字都一樣。（你的商工登記更新走的是用統編查的另一支資料集，那支是好的。）'
+            + '兩條路可以走：按下面的 g0v 鏡像，或改用統一編號。';
+        }
+        const details = el('details', { className: 'proxy-guide' }, [
+          el('summary', { textContent: `查詢明細（${(res.attempts || []).length} 次嘗試）` }),
+        ]);
+        const push = (node) => details.append(node);
         (res.attempts || []).forEach((a) => {
-          regList.append(el('p', { className: 'rule-note', textContent: `${a.label}：${a.reason}` }));
-          if (a.body) regList.append(el('p', { className: 'rule-note', textContent: `　　實際收到：${String(a.body).slice(0, 200)}` }));
+          push(el('p', { className: 'rule-note', textContent: `${a.label}：${a.reason}` }));
+          if (a.body) push(el('p', { className: 'rule-note', textContent: `　　實際收到：${String(a.body).slice(0, 200)}` }));
           const link = a.upstream || a.url;
           if (link) {
-            regList.append(el('p', { className: 'rule-note' }, [
+            push(el('p', { className: 'rule-note' }, [
               document.createTextNode('　　'),
               el('a', { href: link, target: '_blank', rel: 'noopener', textContent: '在新分頁打開這個查詢網址' }),
             ]));
           }
         });
-        regList.append(el('p', { className: 'rule-note',
+        push(el('p', { className: 'rule-note',
           textContent: '點開任何一個網址：那是你的瀏覽器直接連政府網站，不受跨網域限制。'
             + '看到 JSON 就是查詢語法對了、代理那段有問題；看到空白就是這個名稱在登記上查不到。' }));
 
-        /*
-         * 自己判斷是「這個名字比不到」還是「用名稱查整條路不通」。
-         *
-         * 使用者卡住的正是這個：統編更新天天成功（那是另一支資料集），名稱卻一直
-         * 查無資料，畫面上分不出來。拿一家一定存在的公司用同一條路試一次就分得出來，
-         * 不用叫使用者自己去點網址看 JSON。
-         */
         /*
          * g0v 鏡像是另一條完全不同的路（不是 OData、有自己的搜尋），官方那支名稱
          * 查詢不管用的時候它常常查得到。但它是第三方，照既有的做法不預設偷偷送出去——
@@ -1266,22 +1277,27 @@
             + '官方那支名稱查詢不通時它常常查得到，但它是第三方，要按才會送出——送出去的只有公司名。' }));
         regList.append(el('div', { className: 'card-actions' }, [mirrorBtn]));
 
-        const verdict = el('p', { className: 'rule-note', textContent: `正在確認「用公司名查」這條路通不通（拿${window.Registry.PROBE_NAME}試）…` });
-        regList.append(verdict);
-        let probe;
-        try { probe = await window.Registry.probeNameQuery(); } catch (e) { probe = { ok: false }; }
-        if (probe.ok) {
-          verdict.className = 'rule-note';
-          verdict.textContent = `用公司名查是通的（拿${probe.name}試有查到）。`
-            + `所以是「${kw}」這個寫法在商工登記上比不到——登記全名可能多幾個字，`
-            + '或這家的登記狀態不是「核准設立」。改用統一編號最準。';
-        } else {
-          verdict.className = 'rule-verdict is-fail';
-          verdict.textContent = `用公司名查整條路不通：連${window.Registry.PROBE_NAME}都查不到。`
-            + '（你的商工登記更新走的是用統編查的另一支資料集，那支是好的。）'
-            + '先用統一編號加這一家；要修名稱這條，到 ⋯ 選單 →「從商工登記更新公司資料」→'
-            + '「用名稱查的資料集網址」換一支資料集。';
-        }
+        /*
+         * 一鍵把診斷內容複製起來。
+         *
+         * 這幾輪都卡在同一件事：畫面上有答案，但那是一長串網址與 JSON，
+         * 在手機上要逐段選取才能貼出來問人。整包複製就不用再轉述。
+         */
+        const copyBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '複製診斷內容' });
+        copyBtn.onclick = async () => {
+          const lines = [
+            `查「${kw}」`,
+            `版本 ${APP_VERSION}`,
+            `用公司名查這條路：${probe.ok ? '通（台積電查得到）' : '不通（連台積電都查不到）'}`,
+            ...(res.attempts || []).map((a) => `${a.label}：${a.reason}${a.body ? `｜實際收到：${a.body}` : ''}`),
+          ];
+          try {
+            await navigator.clipboard.writeText(lines.join('\n'));
+            toast('已複製診斷內容');
+          } catch (e) { toast('複製失敗，請長按上面的明細自己選取'); }
+        };
+        details.append(el('div', { className: 'card-actions' }, [copyBtn]));
+        regList.append(details);
         return;
       }
       regNote.className = 'rule-note';
