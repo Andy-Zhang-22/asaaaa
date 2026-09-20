@@ -875,6 +875,8 @@
       names.forEach((name) => {
         for (const line of lines) {
           if (!line.includes(name)) continue;
+          // 中租單位要排掉同名的地址與銀行（新北市、彰化銀行）
+          if (bucket === 'internal' && !hasInternalUnit(line)) continue;
           if (needContext && !BANK_CONTEXT.test(line)) continue;
           // 已經收過更長的名稱就不重複收短的（例如有「台新租賃」就不再收「台新」）
           if ([...seen].some((got) => got.includes(name))) return;
@@ -904,9 +906,36 @@
   // 使用者實際在名單裡看到這種寫法，所以一併收。
   const BALANCE_RE = /本餘|本金餘|本於|本金於/;
 
-  // 中租體系內部單位（往來情形與往來對象兩處共用）
-  const INTERNAL_UNITS = ['大企部', '大企', '微企處', '微企', '融專', '城北',
-    '一版組', '設備組', '長租', '中租'];
+  /*
+   * 中租體系的單位名稱（往來情形與往來對象兩處共用）。
+   *
+   * 除了大企、微企、融專這些，**行銷區域的各分公司名稱也算**——業務在紀錄裡會直接
+   * 寫「城東202210結束」「融專目前億土建榮」「宜花已經沒」，不會寫成「中租城東分公司」。
+   * 「供型／弓形」是同一個東西的兩種寫法，名單裡兩種都出現過。
+   */
+  const INTERNAL_UNITS = ['大企部', '大企', '微企處', '微企', '融專',
+    '一版組', '設備組', '長租', '中租', '供型', '弓形',
+    // 行銷區域劃分表上的分公司名稱
+    '城中', '城東', '城北', '新莊', '新北', '桃園', '新竹', '宜花',
+    '北台中', '南台中', '中彰', '彰化', '嘉義', '府城', '台南', '北高雄', '南高雄', '高屏'];
+
+  /*
+   * 分公司名稱有一半同時是地名或銀行名，後面接這些字就不是在講中租的單位。
+   *
+   * 「新北市新莊區中正路」是地址、「彰化銀行」是銀行、「台南的廠」是地點——
+   * 不擋的話，光是地址出現在訪談內容裡就會被判成跟中租往來。
+   */
+  const UNIT_NOT_AFTER = /^(市|縣|區|鄉|鎮|村|里|路|街|巷|弄|號|樓|銀行|商銀|銀|分行)/;
+  /** 這段文字裡有沒有真的提到中租的單位（排除地址、銀行那種同名的）。 */
+  function hasInternalUnit(text) {
+    const re = new RegExp(INTERNAL_UNITS.join('|'), 'g');
+    let m = re.exec(text);
+    while (m) {
+      if (!UNIT_NOT_AFTER.test(text.slice(m.index + m[0].length))) return true;
+      m = re.exec(text);
+    }
+    return false;
+  }
 
   // 合作已經結束的寫法。最新一期若寫到這些，就算同一則裡還提到本餘（例如
   // 「本餘還完、5 月解約了」），也視為沒有往來——使用者要的是「現在」的狀態。
@@ -919,14 +948,21 @@
   // 只算中租體系（中租、大企、微企、融專、城北、長租、設備組、一版組）：使用者說
   // 跟銀行、同業有合作不算，分類就是「有跟中租往來／沒有跟中租往來」。
   // 以逗號、句號切成小句，同一小句要同時有中租單位、往來字眼，而且沒有否定字。
-  const ACTIVE_WORD_RE = /(還在|仍在|有在|正在|持續|目前|現在|一直|尚在|有)[^，。,；;\n]{0,10}(往來|合作|配合|承作|進件|有案)|(往來|合作|配合|承作)中/;
+  /*
+   * 往來字眼。
+   *
+   * 原本一定要有「還在／目前／有」這種前綴才算，但業務寫的是「城東8000萬往來中」
+   * 「新北承作過設備」這種短句，沒有前綴；使用者要的規則是「分公司名稱＋本餘或往來」
+   * 就算，所以把單獨的往來、本餘、承作、進件、有案也收進來（同一小句裡有否定字
+   * 還是不算）。
+   */
+  const ACTIVE_WORD_RE = /(還在|仍在|有在|正在|持續|目前|現在|一直|尚在|有)[^，。,；;\n]{0,10}(往來|合作|配合|承作|進件|有案)|(往來|合作|配合|承作)中|往來|本餘|承作|進件|有案/;
   const NEGATED_RE = /沒|無|不|未|停|結束|解約|過$/;
-  const INTERNAL_RE = new RegExp(INTERNAL_UNITS.join('|'));
   function findActive(text) {
     const clauses = text.split(/[，。,；;\n]/);
     let offset = 0;
     for (const clause of clauses) {
-      if (INTERNAL_RE.test(clause) && ACTIVE_WORD_RE.test(clause) && !NEGATED_RE.test(clause)) {
+      if (hasInternalUnit(clause) && ACTIVE_WORD_RE.test(clause) && !NEGATED_RE.test(clause)) {
         const m = [clause.trim()];
         m.index = offset + clause.indexOf(clause.trim());
         return m;
