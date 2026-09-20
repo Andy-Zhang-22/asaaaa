@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260919-114';
+  const APP_VERSION = '20260920-115';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -30,7 +30,18 @@
   const PAGE_SIZE = 60;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props, children) => {
-    const node = Object.assign(document.createElement(tag), props || {});
+    const node = document.createElement(tag);
+    Object.entries(props || {}).forEach(([key, value]) => {
+      /*
+       * aria-label 這種帶連字號的要走 setAttribute。
+       *
+       * 原本整包丟 Object.assign，`node['aria-label'] = x` 只是在物件上掛一個
+       * 沒人看得到的欄位，屬性根本沒進 DOM——讀螢幕的人什麼也聽不到，
+       * 而且不會有任何錯誤訊息，就這樣靜悄悄地失效。
+       */
+      if (key.includes('-')) { if (value !== null && value !== undefined) node.setAttribute(key, value); }
+      else node[key] = value;
+    });
     (children || []).forEach((c) => node.append(c));
     return node;
   };
@@ -1430,6 +1441,20 @@
     }
   }
 
+  /**
+   * 複製成功時讓那顆綠點自己閃一下。
+   *
+   * 沒有文字了，按下去如果畫面完全沒反應，會讓人懷疑到底有沒有複製到；
+   * 提示訊息在畫面下方，眼睛未必跟過去。
+   */
+  function flashCopied(btn, ok) {
+    if (!ok) return;
+    btn.classList.remove('is-copied');
+    void btn.offsetWidth;          // 連按兩次也要重播動畫
+    btn.classList.add('is-copied');
+    setTimeout(() => btn.classList.remove('is-copied'), 700);
+  }
+
   /** 一支電話 = 撥號連結 + 複製鈕。複製的是純數字，貼到撥號鍵盤直接可用。 */
   function telGroup(p) {
     const digits = String(p.dial || '').split(',')[0];
@@ -1439,14 +1464,22 @@
     link.append(document.createTextNode(`📞 ${p.display}${p.note ? ` · ${p.note}` : ''}`));
     link.onclick = (e) => e.stopPropagation();
 
+    /*
+     * 複製鈕改成一顆綠點。
+     *
+     * 名單上每一張卡片、每一支電話後面都跟著一顆「複製」，兩個字比號碼本身還搶眼；
+     * 綠點只佔一個字的寬度，按的位置照樣是 26px 見方（手指按得到）。
+     * 文字改放 aria-label 與 title，讀螢幕的人與滑過去的人都還知道那是什麼。
+     */
     const copy = el('button', {
-      className: 'tel-copy', type: 'button',
-      title: `複製 ${digits}`, 'aria-label': `複製電話 ${digits}`, textContent: '複製',
+      className: 'copy-dot', type: 'button',
+      title: `複製 ${digits}`, 'aria-label': `複製電話 ${digits}`,
     });
     copy.onclick = async (e) => {
       e.preventDefault();
       e.stopPropagation();
       const ok = await copyText(digits);
+      flashCopied(copy, ok);
       toast(ok
         ? `已複製 ${digits}${ext ? `（分機 ${ext}）` : ''}`
         : '複製失敗，請手動選取號碼');
@@ -1687,9 +1720,13 @@
     const dealBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '承作檢核' });
     dealBtn.onclick = () => openDealCheck(r.id);
     // 公司名稱旁一顆複製：查商工登記、找 104、貼進系統都要打公司名，打字容易錯
-    const copyName = el('button', { className: 'btn btn-tiny copy-name', type: 'button', textContent: '複製', title: `複製 ${r.company}` });
+    const copyName = el('button', {
+      className: 'copy-dot copy-name', type: 'button',
+      title: `複製 ${r.company}`, 'aria-label': `複製公司名稱 ${r.company}`,
+    });
     copyName.onclick = async () => {
       const ok = await copyText(r.company);
+      flashCopied(copyName, ok);
       toast(ok ? `已複製：${r.company}` : '這個瀏覽器不讓網頁複製，請長按公司名稱手動複製');
     };
     /*
