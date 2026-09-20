@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-139';
+  const APP_VERSION = '20260920-140';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1145,7 +1145,7 @@
     const regList = el('div', { className: 'group-list' });
     const kwInput = el('input', {
       type: 'search', className: 'paste-box',
-      placeholder: '登記全名或統一編號（簡稱查不到）',
+      placeholder: '登記全名或統一編號（簡稱查不到；兩個一起貼也可以）',
     });
     const regBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '查商工登記並加入' });
 
@@ -1208,6 +1208,7 @@
             // 簡稱查不到是最常見的原因，而且使用者不會想到——登記比對的是全名
             ? '登記比對的是全名，簡稱查不到（像「台積電」要打「台灣積體電路製造股份有限公司」）。'
             : '');
+        if (res.triedTaxId) regNote.textContent += `（你貼的統編 ${res.triedTaxId} 也查過了，一樣沒有）`;
         /*
          * 先做結論，再排版。
          *
