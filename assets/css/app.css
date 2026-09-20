@@ -547,6 +547,8 @@ button, input, select { font: inherit; color: inherit; }
 }
 .copy-dot:hover::before { transform: scale(1.25); opacity: 1; }
 .copy-dot:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+/* 資料列（統編那種）裡的點往左靠一點，不要離值太遠 */
+.detail-grid dd .copy-dot { margin-left: 2px; }
 .copy-dot:active::before { transform: scale(.85); }
 /* 複製成功：點自己擴一圈再收回來，不然按下去畫面完全沒反應 */
 .copy-dot.is-copied::before { animation: copied .7s ease; opacity: 1; }

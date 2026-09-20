@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-116';
+  const APP_VERSION = '20260920-117';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1455,6 +1455,25 @@
     setTimeout(() => btn.classList.remove('is-copied'), 700);
   }
 
+  /**
+   * 一顆灰點的複製鈕。
+   * @param {string} text 要複製的內容
+   * @param {string} label 滑鼠提示與讀螢幕用的說明
+   * @param {string} doneMsg 複製成功時畫面下方顯示的話
+   * @param {string} [failMsg] 複製失敗時的話
+   */
+  function copyDot(text, label, doneMsg, failMsg) {
+    const btn = el('button', { className: 'copy-dot', type: 'button', title: label, 'aria-label': label });
+    btn.onclick = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();      // 在卡片上按複製不該順便把詳細頁打開
+      const ok = await copyText(text);
+      flashCopied(btn, ok);
+      toast(ok ? doneMsg : (failMsg || '複製失敗，請手動選取'));
+    };
+    return btn;
+  }
+
   /** 一支電話 = 撥號連結 + 複製鈕。複製的是純數字，貼到撥號鍵盤直接可用。 */
   function telGroup(p) {
     const digits = String(p.dial || '').split(',')[0];
@@ -1465,25 +1484,14 @@
     link.onclick = (e) => e.stopPropagation();
 
     /*
-     * 複製鈕改成一顆灰點。
+     * 複製鈕是一顆灰點。
      *
      * 名單上每一張卡片、每一支電話後面都跟著一顆「複製」，兩個字比號碼本身還搶眼；
      * 一顆點只佔一個字的寬度，按的位置照樣是 26px 見方（手指按得到）。
      * 文字改放 aria-label 與 title，讀螢幕的人與滑過去的人都還知道那是什麼。
      */
-    const copy = el('button', {
-      className: 'copy-dot', type: 'button',
-      title: `複製 ${digits}`, 'aria-label': `複製電話 ${digits}`,
-    });
-    copy.onclick = async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const ok = await copyText(digits);
-      flashCopied(copy, ok);
-      toast(ok
-        ? `已複製 ${digits}${ext ? `（分機 ${ext}）` : ''}`
-        : '複製失敗，請手動選取號碼');
-    };
+    const copy = copyDot(digits, `複製電話 ${digits}`,
+      `已複製 ${digits}${ext ? `（分機 ${ext}）` : ''}`, '複製失敗，請手動選取號碼');
 
     return el('span', { className: 'tel-group' }, [link, copy]);
   }
@@ -1720,15 +1728,9 @@
     const dealBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '承作檢核' });
     dealBtn.onclick = () => openDealCheck(r.id);
     // 公司名稱旁一顆複製：查商工登記、找 104、貼進系統都要打公司名，打字容易錯
-    const copyName = el('button', {
-      className: 'copy-dot copy-name', type: 'button',
-      title: `複製 ${r.company}`, 'aria-label': `複製公司名稱 ${r.company}`,
-    });
-    copyName.onclick = async () => {
-      const ok = await copyText(r.company);
-      flashCopied(copyName, ok);
-      toast(ok ? `已複製：${r.company}` : '這個瀏覽器不讓網頁複製，請長按公司名稱手動複製');
-    };
+    const copyName = copyDot(r.company, `複製公司名稱 ${r.company}`, `已複製：${r.company}`,
+      '這個瀏覽器不讓網頁複製，請長按公司名稱手動複製');
+    copyName.classList.add('copy-name');
     /*
      * 有機會／無機會：再按一次同一顆就取消，回到「未判斷」。
      * 判斷會變（今天說要資料、下週說不用了），沒有取消的路就只能在兩個錯的之間選。
@@ -1821,8 +1823,9 @@
     }
 
     const dl = el('dl', { className: 'detail-grid' });
+    // 第三個值＝要複製的內容：統編查登記、貼進公司系統都用得到，手打八碼很容易錯
     const rows = [
-      ['統一編號', r.taxId], ['負責人', r.owner],
+      ['統一編號', r.taxId, r.taxId], ['負責人', r.owner],
       ['KEYMAN', r.keyman ? `${r.keyman}${r.keymanFrom === 'notes' ? `　（${r.keymanInfo.reason}：「${r.keymanInfo.snippet}」）` : r.keymanFrom === 'owner' ? '　（訪談看不出 KEYMAN，先填負責人）' : ''}` : ''],
       ['產業別', r.industry], ['成立年', r.founded],
       ['資本總額', r.capital ? `${r.capital} 仟元${capitalScale(r) ? `（${capitalScale(r)}）` : ''}` : ''],
@@ -1843,9 +1846,11 @@
       ['最近聯絡', r.lastDate ? dateLabel(r.lastDate) : ''],
       ['名單新增', r.addedDate ? dateLabel(r.addedDate) : ''],
     ];
-    rows.forEach(([k, v]) => {
+    rows.forEach(([k, v, copyable]) => {
       if (!v) return;
-      dl.append(el('dt', { textContent: k }), el('dd', { textContent: v }));
+      const dd = el('dd', { textContent: v });
+      if (copyable) dd.append(copyDot(copyable, `複製${k} ${copyable}`, `已複製${k}：${copyable}`));
+      dl.append(el('dt', { textContent: k }), dd);
     });
     // 行銷區域：依規範用「公司登記地址」判，跟服務區域（看實際地址）分開
     {
