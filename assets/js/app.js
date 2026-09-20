@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-127';
+  const APP_VERSION = '20260920-128';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -2664,7 +2664,25 @@
       if (!v.company && !v.phoneRaw) { toast('請至少填公司名稱或電話'); return; }
       const source = '手動新增';
       const id = window.Normalize.makeId(source, v.company, v.taxId);
-      if (state.records.some((r) => r.id === id)) { toast('已經有同名同統編的客戶了'); return; }
+      /*
+       * 同一家公司不要出現兩筆。
+       *
+       * 原本只擋「一模一樣的 id」，而 id 是「來源＋公司名＋統編」算出來的——同一家
+       * 已經在 A 名單裡的話，手動新增會算出不同的 id，就多出一張卡片。兩張卡片各自
+       * 記通話、各自排下次聯絡日，等於打兩次。
+       * 比對用統編優先（唯一且沒有寫法差異），沒統編才比公司名稱。
+       */
+      const dup = state.records.find((r) => r.id === id || sameCompany(r, { company: v.company, taxId: v.taxId }));
+      if (dup) {
+        const d = view(dup);
+        const bits = [`來源：${dup.source}`, d.lastDate ? `最近聯絡 ${dateLabel(d.lastDate)}` : '',
+          d.nextDate ? `下次 ${dateLabel(d.nextDate)}` : ''].filter(Boolean).join('　');
+        const open = confirm(`「${dup.company}」已經在名單裡了。\n${bits}\n\n`
+          + '不會再新增一筆。要打開既有的那一筆嗎？\n'
+          + '按「確定」打開；按「取消」留在這裡繼續改。');
+        if (open) { closeOverlays(); render(); openDetail(dup.id); }
+        return;
+      }
       const record = {
         id, source,
         company: v.company, aliases: [], taxId: v.taxId,
@@ -3518,16 +3536,35 @@ export default {
       if (!parsed || !parsed.records.length) return;
       const importedAt = Date.now();
       parsed.records.forEach((r) => { r.importedAt = importedAt; });
+      /*
+       * 已經在名單裡的同一家公司先濾掉（比統編，沒統編比公司名）。
+       *
+       * 貼一整批進來時最容易重複——整批裡也可能自己重複，所以一邊過濾一邊記下來。
+       * 同 id 的不算重複：那是同一張卡片的更新，不是多開一筆。
+       */
+      const keep = [];
+      const skipped = [];
+      parsed.records.forEach((r) => {
+        const twin = state.records.find((x) => x.id !== r.id && sameCompany(x, r))
+          || keep.find((x) => x.id !== r.id && sameCompany(x, r));
+        if (twin) skipped.push(`${r.company}（已在${twin.source || '名單'}）`);
+        else keep.push(r);
+      });
+      if (!keep.length) {
+        toast(`這 ${parsed.records.length} 筆都已經在名單裡了，沒有新增`);
+        return;
+      }
       const existing = new Set(state.records.map((r) => r.id));
-      const added = parsed.records.filter((r) => !existing.has(r.id)).length;
-      await window.Store.saveRecords(parsed.records);   // 累加，不刪既有的「手動新增」
+      const added = keep.filter((r) => !existing.has(r.id)).length;
+      await window.Store.saveRecords(keep);   // 累加，不刪既有的「手動新增」
       await reload();
       closeOverlays();
       render();
-      if (parsed.records.length === 1) openDetail(parsed.records[0].id);
-      toast(`已新增 ${added} 筆${parsed.records.length - added ? `、更新 ${parsed.records.length - added} 筆` : ''}`);
+      if (keep.length === 1) openDetail(keep[0].id);
+      toast(`已新增 ${added} 筆${keep.length - added ? `、更新 ${keep.length - added} 筆` : ''}`
+        + (skipped.length ? `，略過 ${skipped.length} 筆已經在名單裡的（${skipped.slice(0, 3).join('、')}${skipped.length > 3 ? '…' : ''}）` : ''));
       scheduleSync();
-      checkNewRecords(parsed.records.map((r) => r.id));
+      checkNewRecords(keep.map((r) => r.id));
     };
 
     box.oninput = run;
