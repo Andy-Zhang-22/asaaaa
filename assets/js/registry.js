@@ -401,7 +401,17 @@
       return [];
     }
     try {
-      return unwrap(JSON.parse(text));
+      const rows = unwrap(JSON.parse(text));
+      /*
+       * 0 筆的時候也要留下實際收到什麼。
+       *
+       * unwrap 對「不是陣列、也不是 {data}／{company}」的 JSON 一律回 0 筆——政府端
+       * 回的錯誤物件（{"Error":…}）就長這樣，結果畫面只寫「查無資料」，真正的訊息
+       * 被整個吞掉。使用者回報「打公司名一直查不到」卡在這裡好幾輪，就是因為
+       * 看不到那句話。掛在陣列上當附註，不影響任何現有的呼叫端。
+       */
+      if (!rows.length) rows.info = describe();
+      return rows;
     } catch (e) {
       const err = new Error('回應不是 JSON');
       err.body = describe();
@@ -453,7 +463,7 @@
       try {
         const rows = await request(url);
         if (!rows.length) {
-          tried.push({ label, url, reason: `連台積電（統編 ${PROBE_TAXID}）都查不到，回的是空的` });
+          tried.push({ label, url, reason: `連台積電（統編 ${PROBE_TAXID}）都查不到，回的是空的`, body: rows.info });
           continue;
         }
         return {
@@ -498,7 +508,7 @@
         try {
           const rows = await request(urls[i]);
           if (!rows.length) {
-            attempts.push({ source: key, label: tag, reason: '查無資料', url: urls[i], upstream: upstreamOf(urls[i]) });
+            attempts.push({ source: key, label: tag, reason: '查無資料', body: rows.info, url: urls[i], upstream: upstreamOf(urls[i]) });
             continue;   // 同一個來源的其他寫法還有機會
           }
           const data = mapRow(rows[0]);
@@ -617,7 +627,7 @@
         const url = wrap(odata(base, `Company_Name like ${variant} and Company_Status eq 01`, 5));
         try {
           const rows = await request(url);
-          if (!rows.length) { attempts.push({ source: key, label, reason: '查無資料', url, upstream: upstreamOf(url) }); continue; }
+          if (!rows.length) { attempts.push({ source: key, label, reason: '查無資料', body: rows.info, url, upstream: upstreamOf(url) }); continue; }
           const companies = rows.map(mapRow).filter((c) => c && (c.taxId || c.name));
           return { ok: true, source: key, label, url, upstream: upstreamOf(url), companies, attempts };
         } catch (err) {
