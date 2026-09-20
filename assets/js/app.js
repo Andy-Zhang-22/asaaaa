@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-117';
+  const APP_VERSION = '20260920-118';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1755,7 +1755,8 @@
       return b;
     };
     body.append(el('div', { className: 'detail-head' }, [
-      el('div', { className: 'detail-title' }, [el('h2', { textContent: r.company }), copyName]),
+      // 複製鈕放在 h2 裡面，字級才跟著公司名稱走（點＝那行字的一半）
+      el('div', { className: 'detail-title' }, [el('h2', {}, [document.createTextNode(r.company), copyName])]),
       r.aliases.length ? el('p', { className: 'detail-alias', textContent: `關係企業：${r.aliases.join('、')}` }) : '',
       el('div', { className: 'detail-badges' }, [
         outcomeBadge(r),
