@@ -45,13 +45,33 @@
           if (!logs.indexNames.contains('uid')) logs.createIndex('uid', 'uid', { unique: false });
         }
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        /*
+         * 連線斷掉就把快取丟掉，下一次會重開。
+         *
+         * 這個連線原本是開一次用到分頁關掉為止。但瀏覽器會自己把它收掉——手機把
+         * 網站擱在背景一陣子、系統要回收資源、或是另一個分頁要升級資料庫，都會。
+         * 收掉之後 db.transaction() 每次都丟 InvalidStateError，而快取還留著那個
+         * 死掉的連線，所以「存不進去」會一直持續到使用者自己重新整理為止——
+         * 使用者回報的「儲存訪談紀錄失敗，重打一次還是失敗」就是這個。
+         */
+        db.onclose = () => { if (dbPromise === thisOpen) dbPromise = null; };
+        db.onversionchange = () => {
+          db.close();
+          if (dbPromise === thisOpen) dbPromise = null;
+        };
+        resolve(db);
+      };
       req.onerror = () => reject(req.error);
     });
+    // 開失敗的 promise 不能留著：留著的話這一輩子每次呼叫都拿到同一個失敗
+    const thisOpen = dbPromise;
+    dbPromise.catch(() => { if (dbPromise === thisOpen) dbPromise = null; });
     return dbPromise;
   }
 
-  function tx(storeNames, mode, fn) {
+  function runTx(storeNames, mode, fn) {
     return open().then((db) => new Promise((resolve, reject) => {
       const t = db.transaction(storeNames, mode);
       let result;
@@ -66,6 +86,29 @@
         result.then((v) => { result = v; }, reject);
       }
     }));
+  }
+
+  /** 連線死掉的徵兆。內容出錯（資料不合法之類）不算，那種重試也沒用。 */
+  function connectionLost(err) {
+    if (!err) return false;
+    const name = err.name || '';
+    const msg = String(err.message || '');
+    return name === 'InvalidStateError' || name === 'UnknownError'
+      || /clos(ing|ed)|connection|database is not open/i.test(msg);
+  }
+
+  /*
+   * 連線斷了就重開再試一次。
+   *
+   * 重試是安全的：IndexedDB 的交易是全有全無，中途失敗一定整個回捲，
+   * 不會留下寫到一半的東西，所以同一批動作再做一次不會變成兩筆。
+   */
+  function tx(storeNames, mode, fn) {
+    return runTx(storeNames, mode, fn).catch((err) => {
+      if (!connectionLost(err)) throw err;
+      dbPromise = null;
+      return runTx(storeNames, mode, fn);
+    });
   }
 
   /** 跨裝置唯一的識別碼，合併時用它判斷是不是同一筆。 */
