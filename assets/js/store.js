@@ -172,6 +172,17 @@
       return tx('state', 'readonly', (store) => req2promise(store.getAll()));
     },
 
+    /**
+     * 讀單一筆追蹤狀態。
+     *
+     * 寫入前要先讀這一筆最新的內容再合併，不能只靠記憶體裡的副本：背景在跑的
+     * 商工登記更新、另一個分頁、同步完成後的重載都會改到同一列，拿舊副本整列
+     * 覆寫回去，中間別人寫的欄位（例如剛連好的關係企業）就這樣沒了。
+     */
+    getState(recordId) {
+      return tx('state', 'readonly', (store) => req2promise(store.get(recordId)));
+    },
+
     setMeta(key, value) {
       return tx('meta', 'readwrite', (store) => store.put({ key, value }));
     },

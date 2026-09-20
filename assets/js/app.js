@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-128';
+  const APP_VERSION = '20260920-129';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -767,9 +767,22 @@
   }
 
   async function saveState(recordId, patch) {
+    /*
+     * 合併的底稿要用「資料庫裡當下那一列」，不能只用記憶體裡的副本。
+     *
+     * 這一列是整列覆寫的，而同一列會有好幾個人寫：背景的商工登記更新（每筆都會
+     * 記查核時間）、另一個分頁、同步完成後的重載。拿舊副本整列寫回去，中間別人
+     * 寫進去的欄位就這樣消失——使用者看到的是「剛連好的關係企業自己不見了」。
+     * 讀一次 IndexedDB 很便宜，正確性比較重要。
+     */
+    let base = state.userStates.get(recordId) || { recordId };
+    try {
+      const fresh = await window.Store.getState(recordId);
+      if (fresh) base = fresh;
+    } catch (e) { /* 讀不到就用記憶體那份，至少別讓存檔整個失敗 */ }
     // updatedAt 要在這裡明確蓋掉：舊狀態本身就帶著上一次的 updatedAt，
     // 展開之後它會蓋過 Store.setState 補的 Date.now()，時間戳永遠停在第一次。
-    const merged = { ...(state.userStates.get(recordId) || { recordId }), ...patch, recordId, updatedAt: Date.now() };
+    const merged = { ...base, ...patch, recordId, updatedAt: Date.now() };
     await window.Store.setState(merged);
     state.userStates.set(recordId, merged);
     touch();
@@ -901,8 +914,9 @@
       const show = (x) => { listBox.append(rowFor(x)); shown++; };
       // 已連結的先列，接著是名單內全部企業（照名稱排），有打字就只列符合的
       members.forEach(show);
+      // 勾起來的不要從清單消失：搜尋一打字就整列不見，看起來像沒勾到
       const rest = allViews()
-        .filter((x) => x.id !== r.id && !picked.has(x.id) && terms.every((t) => x.blob.includes(t)))
+        .filter((x) => x.id !== r.id && !members.some((m) => m.id === x.id) && terms.every((t) => x.blob.includes(t)))
         .sort((a, b) => a.company.localeCompare(b.company, 'zh-Hant'));
       rest.forEach(show);
       if (!shown) listBox.append(el('p', { className: 'rule-note', textContent: '找不到符合的公司。' }));
