@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-119';
+  const APP_VERSION = '20260920-120';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -108,10 +108,6 @@
    */
   function withDateHint(input, warnHoliday) {
     const hint = el('span', { className: 'date-hint' });
-    /*
-     * 自己選的日期照舊尊重，不會偷偷改掉——但如果那天是國定假日或週末，
-     * 這裡要講出來。快捷鍵（明天、一週後…）才會自動順延。
-     */
     const sync = () => {
       if (!input.value) { hint.textContent = ''; hint.classList.remove('is-holiday'); return; }
       const H = warnHoliday ? window.Holidays : null;
@@ -122,8 +118,28 @@
       hint.textContent = label + gap;
       hint.classList.toggle('is-holiday', !!why);
     };
+    /*
+     * 自己選的日期撞到假日也順延。
+     *
+     * 本來只有快捷鍵（明天、一週後…）會順延，自己用日期框挑的照留、旁邊標一行警告；
+     * 使用者說不用留，挑到假日就直接跳到下一個上班日——反正那天打不到人。
+     *
+     * 只在 change（挑完、關掉日期選擇器）時改，不在 input 時改：邊打年份邊被改會很煩。
+     * 改完再送一次 change，讓草稿那些跟著存到順延後的日期；fixing 擋住自己觸發自己。
+     */
+    let fixing = false;
+    const shift = () => {
+      if (fixing || !warnHoliday || !input.value || !window.Holidays) return;
+      const got = window.Holidays.nextWorkday(input.value);
+      if (!got.moved) return;
+      fixing = true;
+      input.value = got.iso;
+      input.dispatchEvent(new Event('change'));
+      fixing = false;
+      toast(`${dateLabel(got.from)} 是${got.reason}，順延到 ${dateLabel(got.iso)}（${window.Holidays.weekLabel(got.iso)}）`);
+    };
     input.addEventListener('input', sync);
-    input.addEventListener('change', sync);
+    input.addEventListener('change', () => { shift(); sync(); });
     sync();
     return el('span', { className: 'date-with-hint' }, [input, hint]);
   }
