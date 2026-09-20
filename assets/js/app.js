@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-121';
+  const APP_VERSION = '20260920-122';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -130,6 +130,8 @@
     let fixing = false;
     const shift = () => {
       if (fixing || !warnHoliday || !input.value || !window.Holidays) return;
+      // 選「今天」就是今天，今天放假也是他自己知道——快捷鍵那顆也是走這條
+      if (input.value === todayISO()) return;
       const got = window.Holidays.nextWorkday(input.value);
       if (!got.moved) return;
       fixing = true;
@@ -1551,7 +1553,7 @@
       r.branch && r.branch.kind === 'branch' ? el('span', { className: 'badge badge-branch', textContent: r.branchKey, title: r.branch.label }) : '',
       r.branch && r.branch.kind === 'common' ? el('span', { className: 'badge badge-branch badge-branch-common', textContent: r.branchKey, title: r.branch.label }) : '',
       r.branch && r.branch.kind === 'shared' ? el('span', { className: 'badge badge-branch badge-branch-common', textContent: '全公司共同區域' }) : '',
-      r.territory === '優先區域' ? el('span', { className: 'badge badge-priority', textContent: '優先區域' }) : '',
+      // 「優先區域」拿掉：新莊一帶幾乎每筆都是，標了等於沒標，只是讓卡片更擠
       r.territory === '範圍外' ? el('span', { className: 'badge badge-outside', textContent: '範圍外·需協銷' }) : '',
       r.blocked ? el('span', { className: 'badge badge-blocked', textContent: '禁止推廣' }) : '',
       r.remindAt ? el('span', { className: `badge badge-remind ${r.remindAt <= Date.now() ? 'is-due' : ''}`, textContent: `⏰ ${whenLabel(r.remindAt)} 回撥` }) : '',
@@ -1906,11 +1908,15 @@
           el('dd', { className: 'muted', textContent: `${reg.city}${reg.district} 不在劃分表上（登記地址）` }));
       }
     }
-    if (r.territory) {
+    /*
+     * 只有「範圍外」才列出來。
+     *
+     * 使用者說「優先區域」「服務範圍」用不到，一整頁都是這種每筆都一樣的標示反而雜。
+     * 範圍外不一樣：那是要走協銷的規範提醒，漏掉會踩到規則，所以留著。
+     */
+    if (r.territory === '範圍外') {
       dl.append(el('dt', { textContent: '服務區域' }),
-        el('dd', { textContent: r.territory === '範圍外'
-          ? '範圍外——依【一般組】行銷規範第(三)項應採協銷辦理'
-          : r.territory }));
+        el('dd', { textContent: '範圍外——依【一般組】行銷規範第(三)項應採協銷辦理' }));
     }
     const addrRow = (label, value, note) => {
       if (!value) return;
