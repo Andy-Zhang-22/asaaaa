@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-131';
+  const APP_VERSION = '20260920-132';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1124,11 +1124,138 @@
     search.style.width = "100%";
     search.oninput = () => paintList(search.value.toLowerCase());
 
+    /*
+     * 用商工登記找同一個負責人名下的公司。
+     *
+     * 原本只能從「已經在名單裡的公司」勾——可是關係企業常常根本不在名單上（那家
+     * 沒有出現在任何一份開發名單裡），所以要嘛連不到，要嘛得先自己手動新增一筆。
+     * 用登記的負責人姓名去查，名單外的也找得到，勾了就一起加進名單。
+     *
+     * 一律不自動連結：同名同姓的人很多，統編、地址、資本額都列出來讓使用者自己判斷。
+     * 這跟當初決定不用負責人「猜」關係企業是同一個理由；差別是這次姓名來自商工登記，
+     * 而且最後還是人來勾。
+     */
+    const newPicks = new Map();          // 名單外要一起加進來的：統編或名稱 → 登記資料
+    const regBox = el('div', { className: 'group-registry' });
+    const regNote = el('p', { className: 'rule-note' });
+    const regList = el('div', { className: 'group-list' });
+    const ownerInput = el('input', {
+      type: 'search', className: 'paste-box', value: r.owner || '',
+      placeholder: '負責人姓名（商工登記上的寫法）',
+    });
+    const regBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '用商工登記找同負責人的公司' });
+
+    const sameAsListed = (c) => state.records.find((x) => sameCompany(x, { company: c.name, taxId: c.taxId }));
+    const regRow = (c) => {
+      const already = sameAsListed(c);
+      const key = String(c.taxId || c.name);
+      const cb = el('input', { type: 'checkbox' });
+      if (already) cb.checked = picked.has(already.id) || already.id === r.id;
+      else cb.checked = newPicks.has(key);
+      cb.disabled = !!(already && already.id === r.id);
+      cb.onchange = () => {
+        if (already) {
+          if (cb.checked) picked.add(already.id); else picked.delete(already.id);
+          paintChosen();
+          paintList(search.value.toLowerCase());
+        } else if (cb.checked) newPicks.set(key, c);
+        else newPicks.delete(key);
+      };
+      const bits = [
+        c.taxId && `統編 ${c.taxId}`,
+        c.capital && `資本總額 ${c.capital} 仟元`,
+        c.status,
+        c.address,
+      ].filter(Boolean).join('　');
+      const tag = already
+        ? (already.id === r.id ? '就是這一家' : `已在名單（${already.source}）`)
+        : '名單裡沒有，勾了會一起加進來';
+      return el('label', { className: 'group-row' }, [cb,
+        el('span', {}, [
+          el('strong', { textContent: c.name || '（無名稱）' }),
+          el('small', { className: 'muted', textContent: bits }),
+          el('small', { className: 'muted', textContent: tag }),
+        ])]);
+    };
+
+    regBtn.onclick = async () => {
+      const who = ownerInput.value.trim();
+      regList.textContent = '';
+      newPicks.clear();
+      if (!who) { regNote.className = 'rule-verdict is-fail'; regNote.textContent = '請先填負責人姓名。'; return; }
+      regBtn.disabled = true;
+      const wasLabel = regBtn.textContent;
+      regBtn.textContent = '查詢中…';
+      regNote.className = 'rule-note';
+      regNote.textContent = `正在用「${who}」查商工登記…`;
+      let res;
+      try {
+        res = await window.Registry.lookupByOwner(who);
+      } catch (err) {
+        res = { ok: false, reason: err && err.message ? err.message : String(err), attempts: [] };
+      }
+      regBtn.disabled = false;
+      regBtn.textContent = wasLabel;
+      if (!res.ok) {
+        regNote.className = 'rule-verdict is-fail';
+        // 每一種寫法的結果都列出來：查不到可能是姓名不對，也可能是這支資料集不吃
+        // 負責人當條件，兩件事處理方式完全不一樣，不講清楚會亂試一通
+        regNote.textContent = `查不到：${res.reason}`;
+        return;
+      }
+      regNote.className = 'rule-note';
+      regNote.textContent = `${res.label} 找到 ${res.companies.length} 家`
+        + (res.loose ? '（沒有姓名完全一樣的，以下是相近的，請自己確認）' : '')
+        + '。同名同姓的人很多，請看統編與地址確認是同一個人再勾。';
+      res.companies.forEach((c) => regList.append(regRow(c)));
+      if (!res.companies.length) regList.append(el('p', { className: 'rule-note', textContent: '這個姓名名下只有這一家。' }));
+    };
+    regBox.append(el('p', { className: 'muted', textContent: '名單外的關係企業：' }),
+      el('div', { className: 'row' }, [ownerInput, regBtn]), regNote, regList);
+
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存連結' });
     const cancel = el('button', { className: 'btn', type: 'button', textContent: '取消' });
     const unlink = el('button', { className: 'btn', type: 'button', textContent: '解除這家的連結' });
     unlink.hidden = !r.group;
     save.onclick = async () => {
+      /*
+       * 名單外的關係企業先加進名單，才有 id 可以連結。
+       *
+       * 來源寫「商工登記」，跟匯入的名單分得開；一樣要吃排除名單，不然
+       * 一家自己刪掉的公司會從這裡溜回來。
+       */
+      if (newPicks.size) {
+        const today = todayISO();
+        const fresh = [...newPicks.values()].map((c) => {
+          const taxId = String(c.taxId || '').replace(/\D/g, '');
+          const rec = {
+            id: window.Normalize.makeId('商工登記', c.name, taxId), source: '商工登記',
+            company: c.name, aliases: [], taxId,
+            grade: '', founded: c.founded || '', capital: c.capital || '', capitalPaid: c.capitalPaid || '',
+            regChanged: c.regChanged || '',
+            phoneRaw: '', phones: [], owner: c.owner || ownerInput.value.trim(), keyman: '', industry: '',
+            nextDate: null, lastDate: null, addedDate: today, country: '台灣',
+            address: c.address || '', addressActual: c.address || '',
+            notesRaw: '', timeline: [], outcome: 'new', importedAt: Date.now(), regAt: Date.now(),
+          };
+          Object.assign(rec, window.Normalize.parseAddressAny('', rec.address));
+          return rec;
+        });
+        const gone = await dropDeletedCompanies(fresh);
+        if (gone.keep.length) {
+          try {
+            await window.Store.saveRecords(gone.keep);
+            await reload();
+          } catch (err) {
+            console.error('加入關係企業失敗', err);
+            toast(`名單外那幾家加不進去：${err && err.message ? err.message : err}。視窗留著，再按一次試試看。`);
+            return;
+          }
+          gone.keep.forEach((x) => picked.add(x.id));
+        }
+        if (gone.dropped.length) toast(`略過 ${gone.dropped.length} 家你先前刪掉的公司`);
+        newPicks.clear();
+      }
       const ids = [r.id, ...picked];
       // 把原本同組但這次沒勾的移出去
       const dropped = members.filter((m) => !picked.has(m.id)).map((m) => m.id);
@@ -1176,7 +1303,7 @@
     };
     cancel.onclick = () => { $('#editor').hidden = true; };
 
-    host.append(el('p', { className: 'muted', textContent: '目前選的：' }), chosenBox, search, listBox,
+    host.append(el('p', { className: 'muted', textContent: '目前選的：' }), chosenBox, search, listBox, regBox,
       el('div', { className: 'card-actions' }, [save, unlink, cancel]));
     paintChosen();
     paintList('');
@@ -3095,6 +3222,7 @@ export default {
 
   // 這幾個設定要跟著雲端同步：在電腦上設定好，手機打開也要能用
   const SYNCED_PREFS = new Set(['registry-proxy-url', 'registry-dataset-url', 'registry-dataset-taxid-url',
+    'registry-dataset-owner-url',
     'registry-mirror', 'registry-auto', 'registry-auto-last', 'registry-auto-summary',
     // 欄位改版的記號也同步：某台已經重查完、資料也同步過來了，另一台就不用再查一次
     'registry-fields-rev', 'my-branch', 'my-unit']);
@@ -3472,6 +3600,29 @@ export default {
       if (t.ok && t.url) datasetTax.value = t.url;
     };
     host.append(datasetTaxNote);
+
+    /*
+     * 用負責人查的資料集另外一欄：預設沿用關鍵字查詢那一支（它確定會回 Responsible_Name），
+     * 但它接不接受拿 Responsible_Name 當 $filter 條件，開發環境連不上政府網站驗不了。
+     * 真的不吃就在這裡換一支，不用等改版。
+     */
+    const datasetOwner = el('input', {
+      id: 'datasetOwnerUrl', type: 'url', className: 'paste-box',
+      placeholder: window.Registry.DEFAULT_BASE,
+      value: window.Registry.getOwnerBase() === window.Registry.DEFAULT_BASE ? '' : window.Registry.getOwnerBase(),
+    });
+    host.append(el('label', { className: 'rule-field' }, [
+      el('span', { textContent: '用負責人查的資料集網址（找關係企業用；留空沿用「用名稱查」那一支）' }), datasetOwner,
+    ]));
+    const datasetOwnerNote = el('p', { className: 'rule-note' });
+    datasetOwner.onchange = () => {
+      const t = window.Registry.setOwnerBase(datasetOwner.value);
+      if (t.ok) syncRegistrySetting('registry-dataset-owner-url', t.url);
+      datasetOwnerNote.textContent = t.ok ? (t.url && t.url !== datasetOwner.value.trim() ? `已整理成：${t.url}` : '') : t.message;
+      datasetOwnerNote.className = t.ok ? 'rule-note' : 'rule-verdict is-fail';
+      if (t.ok && t.url) datasetOwner.value = t.url;
+    };
+    host.append(datasetOwnerNote);
 
     const proxy = el('input', {
       id: 'proxyUrl', type: 'url', className: 'paste-box', placeholder: 'https://你的-worker.workers.dev/（選填）',
