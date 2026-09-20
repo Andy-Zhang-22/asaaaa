@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-132';
+  const APP_VERSION = '20260920-133';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1125,25 +1125,29 @@
     search.oninput = () => paintList(search.value.toLowerCase());
 
     /*
-     * 用商工登記找同一個負責人名下的公司。
+     * 打關係企業的公司名，從商工登記把它抓進名單再連結。
      *
-     * 原本只能從「已經在名單裡的公司」勾——可是關係企業常常根本不在名單上（那家
-     * 沒有出現在任何一份開發名單裡），所以要嘛連不到，要嘛得先自己手動新增一筆。
-     * 用登記的負責人姓名去查，名單外的也找得到，勾了就一起加進名單。
+     * 原本只能從「已經在名單裡的公司」勾——可是關係企業常常根本不在名單上（那家沒有
+     * 出現在任何一份開發名單裡），所以要嘛連不到，要嘛得先自己切出去手動新增一筆、
+     * 統編地址一個一個打，再回來連。
      *
-     * 一律不自動連結：同名同姓的人很多，統編、地址、資本額都列出來讓使用者自己判斷。
-     * 這跟當初決定不用負責人「猜」關係企業是同一個理由；差別是這次姓名來自商工登記，
-     * 而且最後還是人來勾。
+     * 這裡不猜、也不幫忙找：是使用者自己知道那家是關企才打名字進來的。網站要做的只是
+     * 照名字去商工登記把統編、負責人、資本總額、地址抓回來，省下手打，並且確保抓到的
+     * 是登記上的正確資料。查法就是網站每天在用的那條「用名稱查」（Company_Name like，
+     * 台／臺兩種寫法都試），確定通。
+     *
+     * 仍然列出查到的每一家讓使用者按一下確認：同名或名字相近的公司是有的，
+     * 統編、負責人、地址擺出來，勾哪一家由人決定。
      */
     const newPicks = new Map();          // 名單外要一起加進來的：統編或名稱 → 登記資料
     const regBox = el('div', { className: 'group-registry' });
     const regNote = el('p', { className: 'rule-note' });
     const regList = el('div', { className: 'group-list' });
-    const ownerInput = el('input', {
-      type: 'search', className: 'paste-box', value: r.owner || '',
-      placeholder: '負責人姓名（商工登記上的寫法）',
+    const kwInput = el('input', {
+      type: 'search', className: 'paste-box',
+      placeholder: '關係企業的公司名稱（打得出幾個字就好）',
     });
-    const regBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '用商工登記找同負責人的公司' });
+    const regBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '查商工登記並加入' });
 
     const sameAsListed = (c) => state.records.find((x) => sameCompany(x, { company: c.name, taxId: c.taxId }));
     const regRow = (c) => {
@@ -1163,6 +1167,7 @@
       };
       const bits = [
         c.taxId && `統編 ${c.taxId}`,
+        c.owner && `負責人 ${c.owner}`,
         c.capital && `資本總額 ${c.capital} 仟元`,
         c.status,
         c.address,
@@ -1179,39 +1184,41 @@
     };
 
     regBtn.onclick = async () => {
-      const who = ownerInput.value.trim();
+      const kw = kwInput.value.trim();
       regList.textContent = '';
       newPicks.clear();
-      if (!who) { regNote.className = 'rule-verdict is-fail'; regNote.textContent = '請先填負責人姓名。'; return; }
+      if (!kw) { regNote.className = 'rule-verdict is-fail'; regNote.textContent = '請先填關係企業的公司名稱。'; return; }
       regBtn.disabled = true;
       const wasLabel = regBtn.textContent;
       regBtn.textContent = '查詢中…';
       regNote.className = 'rule-note';
-      regNote.textContent = `正在用「${who}」查商工登記…`;
+      regNote.textContent = `正在用「${kw}」查商工登記…`;
       let res;
       try {
-        res = await window.Registry.lookupByOwner(who);
+        res = await window.Registry.lookupByKeyword(kw);
       } catch (err) {
         res = { ok: false, reason: err && err.message ? err.message : String(err), attempts: [] };
       }
       regBtn.disabled = false;
       regBtn.textContent = wasLabel;
       if (!res.ok) {
+        // 每一種寫法的結果都照實列出來：關鍵字不對、代理不通、資料集有問題，
+        // 三件事處理方式完全不一樣，不講清楚只會亂試一通
         regNote.className = 'rule-verdict is-fail';
-        // 每一種寫法的結果都列出來：查不到可能是姓名不對，也可能是這支資料集不吃
-        // 負責人當條件，兩件事處理方式完全不一樣，不講清楚會亂試一通
         regNote.textContent = `查不到：${res.reason}`;
         return;
       }
       regNote.className = 'rule-note';
-      regNote.textContent = `${res.label} 找到 ${res.companies.length} 家`
-        + (res.loose ? '（沒有姓名完全一樣的，以下是相近的，請自己確認）' : '')
-        + '。同名同姓的人很多，請看統編與地址確認是同一個人再勾。';
+      regNote.textContent = `${res.label} 找到 ${res.companies.length} 家名稱含「${kw}」的公司。`
+        + '勾你要的那一家，存檔時會連同統編、負責人、資本總額、地址一起加進名單並連結。';
       res.companies.forEach((c) => regList.append(regRow(c)));
-      if (!res.companies.length) regList.append(el('p', { className: 'rule-note', textContent: '這個姓名名下只有這一家。' }));
+      if (!res.companies.length) regList.append(el('p', { className: 'rule-note', textContent: '商工登記上查不到這個名字，換個寫法或少打幾個字再試。' }));
     };
-    regBox.append(el('p', { className: 'muted', textContent: '名單外的關係企業：' }),
-      el('div', { className: 'row' }, [ownerInput, regBtn]), regNote, regList);
+    regBox.append(
+      el('p', { className: 'muted', textContent: '名單外的關係企業：知道是哪一家就直接打名字，商工登記的資料會一起帶進來。' }),
+      el('div', { className: 'row' }, [kwInput, regBtn]), regNote, regList);
+    // Enter 直接查，不用再去按按鈕
+    kwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); regBtn.click(); } });
 
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存連結' });
     const cancel = el('button', { className: 'btn', type: 'button', textContent: '取消' });
@@ -1233,7 +1240,7 @@
             company: c.name, aliases: [], taxId,
             grade: '', founded: c.founded || '', capital: c.capital || '', capitalPaid: c.capitalPaid || '',
             regChanged: c.regChanged || '',
-            phoneRaw: '', phones: [], owner: c.owner || ownerInput.value.trim(), keyman: '', industry: '',
+            phoneRaw: '', phones: [], owner: c.owner || '', keyman: '', industry: '',
             nextDate: null, lastDate: null, addedDate: today, country: '台灣',
             address: c.address || '', addressActual: c.address || '',
             notesRaw: '', timeline: [], outcome: 'new', importedAt: Date.now(), regAt: Date.now(),
@@ -3222,7 +3229,6 @@ export default {
 
   // 這幾個設定要跟著雲端同步：在電腦上設定好，手機打開也要能用
   const SYNCED_PREFS = new Set(['registry-proxy-url', 'registry-dataset-url', 'registry-dataset-taxid-url',
-    'registry-dataset-owner-url',
     'registry-mirror', 'registry-auto', 'registry-auto-last', 'registry-auto-summary',
     // 欄位改版的記號也同步：某台已經重查完、資料也同步過來了，另一台就不用再查一次
     'registry-fields-rev', 'my-branch', 'my-unit']);
@@ -3600,29 +3606,6 @@ export default {
       if (t.ok && t.url) datasetTax.value = t.url;
     };
     host.append(datasetTaxNote);
-
-    /*
-     * 用負責人查的資料集另外一欄：預設沿用關鍵字查詢那一支（它確定會回 Responsible_Name），
-     * 但它接不接受拿 Responsible_Name 當 $filter 條件，開發環境連不上政府網站驗不了。
-     * 真的不吃就在這裡換一支，不用等改版。
-     */
-    const datasetOwner = el('input', {
-      id: 'datasetOwnerUrl', type: 'url', className: 'paste-box',
-      placeholder: window.Registry.DEFAULT_BASE,
-      value: window.Registry.getOwnerBase() === window.Registry.DEFAULT_BASE ? '' : window.Registry.getOwnerBase(),
-    });
-    host.append(el('label', { className: 'rule-field' }, [
-      el('span', { textContent: '用負責人查的資料集網址（找關係企業用；留空沿用「用名稱查」那一支）' }), datasetOwner,
-    ]));
-    const datasetOwnerNote = el('p', { className: 'rule-note' });
-    datasetOwner.onchange = () => {
-      const t = window.Registry.setOwnerBase(datasetOwner.value);
-      if (t.ok) syncRegistrySetting('registry-dataset-owner-url', t.url);
-      datasetOwnerNote.textContent = t.ok ? (t.url && t.url !== datasetOwner.value.trim() ? `已整理成：${t.url}` : '') : t.message;
-      datasetOwnerNote.className = t.ok ? 'rule-note' : 'rule-verdict is-fail';
-      if (t.ok && t.url) datasetOwner.value = t.url;
-    };
-    host.append(datasetOwnerNote);
 
     const proxy = el('input', {
       id: 'proxyUrl', type: 'url', className: 'paste-box', placeholder: 'https://你的-worker.workers.dev/（選填）',
