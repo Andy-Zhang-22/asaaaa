@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-125';
+  const APP_VERSION = '20260920-127';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -526,6 +526,14 @@
    *
    * 提示裡把會一起消失的東西講清楚（通話紀錄、編輯內容），因為這個動作救不回來。
    */
+  /** 同一家公司：有統編就比統編，沒有就比公司名稱（去掉空白）。 */
+  function sameCompany(a, b) {
+    const tax = (x) => String(x.taxId || '').replace(/\D/g, '');
+    if (tax(a) && tax(b)) return tax(a) === tax(b);
+    const name = (x) => String(x.company || '').replace(/\s/g, '');
+    return !!name(a) && name(a) === name(b);
+  }
+
   function deleteBtn(r) {
     const btn = el('button', { className: 'btn btn-tiny danger', type: 'button', textContent: '刪除這筆' });
     btn.onclick = async () => {
@@ -539,11 +547,40 @@
         + '\n這個動作救不回來，其他裝置同步後也會一起消失。'
         + '\n（之後重新匯入同一份 PDF 的話，這筆會再出現）');
       if (!ok) return;
-      await window.Store.deleteRecord(r.id);
+
+      /*
+       * 同一家公司可能在好幾份名單裡各有一筆。
+       *
+       * 客戶的 id 是「檔名＋公司名＋統編」算出來的，所以同一家出現在兩份名單就是
+       * 兩筆各自獨立的卡片。只刪掉眼前這一筆，另一份名單那筆還在，看起來就像
+       * 「刪掉又自己跑回來」——使用者實際回報的就是這個。
+       * 有重複就問一次要不要一起刪，並且把是哪幾份名單講出來。
+       */
+      const twins = state.records.filter((x) => x.id !== r.id && sameCompany(x, r));
+      let alsoIds = [];
+      if (twins.length) {
+        const where = [...new Set(twins.map((x) => x.source))].join('、');
+        if (confirm(`名單裡還有 ${twins.length} 筆同一家公司（來源：${where}）。\n\n`
+          + '要一起刪掉嗎？\n按「確定」全部刪掉；按「取消」只刪剛才那一筆。')) {
+          alsoIds = twins.map((x) => x.id);
+        }
+      }
+
+      // 刪不掉要講出來：以前沒有 try，失敗就是一個沒人看得到的錯誤
+      try {
+        for (const id of [r.id, ...alsoIds]) await window.Store.deleteRecord(id);
+        const left = await window.Store.allRecords();
+        const stuck = [r.id, ...alsoIds].filter((id) => left.some((x) => x.id === id));
+        if (stuck.length) throw new Error('刪掉了但還讀得到');
+      } catch (err) {
+        console.error('刪除客戶失敗', err);
+        toast(`刪不掉：${err && err.message ? err.message : err}。請重新整理再試一次。`);
+        return;
+      }
       await reload();
       closeOverlays();
       render();
-      toast(`已刪除「${r.company}」`);
+      toast(alsoIds.length ? `已刪除「${r.company}」共 ${alsoIds.length + 1} 筆` : `已刪除「${r.company}」`);
       scheduleSync();
     };
     return btn;
@@ -882,12 +919,30 @@
       const ids = [r.id, ...picked];
       // 把原本同組但這次沒勾的移出去
       const dropped = members.filter((m) => !picked.has(m.id)).map((m) => m.id);
-      if (dropped.length) await setGroup(dropped, '');
-      if (picked.size) {
-        const group = r.group || `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-        await setGroup(ids, group);
-      } else if (r.group) {
-        await setGroup([r.id], '');
+      const group = picked.size
+        ? (r.group || `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`)
+        : '';
+      /*
+       * 寫完讀回來確認每一家都連上了。
+       *
+       * 連結是靠每一家各自存一個 group 欄位串起來的，少存到一家就等於沒連上，
+       * 而且以前這裡沒有 try——寫入被瀏覽器擋下來時畫面完全沒反應，使用者會
+       * 以為自己沒按到，實際上是白做一次。失敗就把視窗留著、講出原因。
+       */
+      try {
+        if (dropped.length) await setGroup(dropped, '');
+        if (picked.size) await setGroup(ids, group);
+        else if (r.group) await setGroup([r.id], '');
+        const states = await window.Store.allStates();
+        const groupOf = (id) => (states.find((x) => x.recordId === id) || {}).group || '';
+        const ok = picked.size
+          ? ids.every((id) => groupOf(id) === group)
+          : !groupOf(r.id);
+        if (!ok) throw new Error('寫進去了但讀不回來');
+      } catch (err) {
+        console.error('儲存關係企業連結失敗', err);
+        toast(`連結沒存起來：${err && err.message ? err.message : err}。視窗留著，再按一次試試看。`);
+        return;
       }
       $('#editor').hidden = true;
       toast(picked.size ? `已連結 ${picked.size + 1} 家公司` : '已解除連結');
@@ -4375,6 +4430,18 @@ export default {
       await showSyncTime();
       runSync({ quiet: true });          // 背景靜默同步，失敗就等使用者自己按
     }
+    /*
+     * 沒人接住的失敗至少要讓使用者看到。
+     *
+     * 這個網站所有的寫入都是 async，只要某條路忘了 try，失敗就變成一個沒人看得到的
+     * unhandled rejection：畫面沒反應、東西沒存到，使用者只會以為自己沒按到。
+     * 逐一補 try 是對的，但漏掉一條就再來一次，所以這裡再加一層網子。
+     */
+    window.addEventListener('unhandledrejection', (e) => {
+      const why = (e && e.reason && (e.reason.message || e.reason)) || '不明原因';
+      console.error('有動作沒完成', e && e.reason);
+      toast(`有個動作沒完成：${String(why).slice(0, 60)}。請重新整理再試一次。`);
+    });
     prebuildRules();
     checkForUpdate(false);
     dropOldDossierDb();
