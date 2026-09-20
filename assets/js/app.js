@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-129';
+  const APP_VERSION = '20260920-130';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -159,6 +159,107 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { t.hidden = true; }, 2600);
   }
+
+  /*
+   * 自己畫的確認框，取代瀏覽器的 confirm()。
+   *
+   * 使用者回報「我剛刪除這筆，但為什麼還讀得到他的資訊」：畫面上那筆還開著、
+   * 刪除鈕還留著點過的外框，就是沒刪掉。原因不在資料庫——Chrome 只要在同一個
+   * 頁面連續跳出兩次對話框，就會多一個「不要再讓這個網頁建立對話方塊」的勾選，
+   * 使用者（或手機瀏覽器自己）勾下去之後，後面每一次 confirm() 都直接回傳
+   * false，不會有任何畫面。對刪除來說就是「按了沒反應」，而且完全無聲無息。
+   *
+   * 刪除同一家公司的重複那筆時會連問兩次，正好踩在這個條件上。
+   * 改成自己畫的框就沒有這件事：它是頁面裡的一個 div，瀏覽器管不到，
+   * 手機上也比原生對話框好按，還能把重點字放大。
+   *
+   * 回傳 Promise<boolean>，所以呼叫端一律要 await。
+   */
+  function askConfirm(message, opts) {
+    const o = opts || {};
+    const okText = o.okText || '確定';
+    const cancelText = o.cancelText || '取消';
+    return new Promise((resolve) => {
+      const box = el('div', { className: 'ask-box' });
+      const text = el('div', { className: 'ask-text', textContent: String(message) });
+      const cancel = el('button', { className: 'btn', type: 'button', textContent: cancelText });
+      const ok = el('button', { className: o.danger ? 'btn btn-primary danger' : 'btn btn-primary', type: 'button', textContent: okText });
+      box.append(text, el('div', { className: 'ask-actions' }, [cancel, ok]));
+      const overlay = el('div', { className: 'ask-overlay', 'aria-modal': 'true' }, [box]);
+      overlay.setAttribute('role', 'dialog');
+
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        resolve(value);
+      };
+      // 攔在 capture 階段並且擋掉冒泡：Esc 只關這個框，不要順手把後面的詳細頁也關掉
+      function onKey(e) {
+        if (e.key !== 'Escape' && e.key !== 'Enter') return;
+        e.preventDefault();
+        e.stopPropagation();
+        finish(e.key === 'Enter');
+      }
+      ok.onclick = () => finish(true);
+      cancel.onclick = () => finish(false);
+      // 點框外當作取消，跟原生對話框一樣不會誤按到「確定」
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+      document.addEventListener('keydown', onKey, true);
+      document.body.append(overlay);
+      ok.focus();
+    });
+  }
+  window.askConfirm = askConfirm;
+
+  /*
+   * 從幾個選項裡挑一個，同樣不用瀏覽器的 prompt()。
+   *
+   * 「管理已匯入名單」原本要使用者把檔名一字不差打出來，打錯就當作取消，
+   * 而且 prompt() 跟 confirm() 一樣會被瀏覽器的「不要再建立對話方塊」關掉。
+   * 直接列成按鈕：少一個出錯的地方，也少一個會靜靜失效的地方。
+   *
+   * 回傳 Promise<string|null>，取消是 null。
+   */
+  function askPick(message, options) {
+    return new Promise((resolve) => {
+      const box = el('div', { className: 'ask-box' });
+      const list = el('div', { className: 'ask-list' });
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        resolve(value);
+      };
+      function onKey(e) {
+        if (e.key !== 'Escape') return;
+        e.preventDefault(); e.stopPropagation(); finish(null);
+      }
+      (options || []).forEach((opt) => {
+        const b = el('button', { className: 'btn', type: 'button', textContent: opt });
+        b.onclick = () => finish(opt);
+        list.append(b);
+      });
+      const cancel = el('button', { className: 'btn', type: 'button', textContent: '取消' });
+      cancel.onclick = () => finish(null);
+      box.append(
+        el('div', { className: 'ask-text', textContent: String(message) }),
+        list,
+        el('div', { className: 'ask-actions' }, [cancel]),
+      );
+      const overlay = el('div', { className: 'ask-overlay', 'aria-modal': 'true' }, [box]);
+      overlay.setAttribute('role', 'dialog');
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+      document.addEventListener('keydown', onKey, true);
+      document.body.append(overlay);
+      cancel.focus();
+    });
+  }
+  window.askPick = askPick;
   /** 時間戳 → 「11:05」 */
   const timeLabel = (ts) => {
     const d = new Date(ts);
@@ -534,6 +635,101 @@
     return !!name(a) && name(a) === name(b);
   }
 
+  /*
+   * 把「以前自己刪掉的公司」從要匯入的名單裡剔除。
+   *
+   * 使用者的名單是一份一份拿到的，同一家公司會在好幾份裡重複出現。
+   * 刪掉一次之後，下一份名單又把它帶回來，等於每個月都要重刪一次。
+   *
+   * 刪除時已經記下公司本身的墓碑（統編＋公司名，見 store.deleteRecord），
+   * 這裡拿來比對：只要中一個鍵就是同一家，直接不匯入。
+   *
+   * 只用在整份匯入的路徑。手動一筆一筆新增不走這裡——那是使用者明講要這家，
+   * 擋下來只會讓人覺得網站壞了（那邊反而會把墓碑清掉）。
+   */
+  /*
+   * 在「記公司墓碑」這版之前刪掉的，只留下 id 墓碑，而 id 是雜湊，反推不出公司名。
+   * 但可以正推：id = makeId(來源檔名, 公司名, 統編)，公司名和統編就在眼前這一列上，
+   * 來源檔名則是使用者手上有過的那幾份。全部算一次，對得上舊墓碑就是同一家。
+   * 使用者不必為了新功能把早上刪掉的那些重刪一次。
+   *
+   * 統編有兩種可能：舊名單有、新名單沒有（或相反），所以帶統編和不帶各算一次。
+   */
+  function deletedBeforeChecker(all) {
+    const oldIds = all.records || {};
+    const knownSources = [...new Set([
+      ...state.records.map((r) => r.source),
+      ...Object.keys(all.sources || {}),
+    ])].filter(Boolean);
+    if (!Object.keys(oldIds).length || !knownSources.length) return null;
+    return (r) => {
+      const tax = String(r.taxId || '').replace(/\D/g, '');
+      return knownSources.some((src) => (
+        oldIds[window.Normalize.makeId(src, r.company, tax)] !== undefined
+        || (tax && oldIds[window.Normalize.makeId(src, r.company, '')] !== undefined)
+      ));
+    };
+  }
+
+  async function dropDeletedCompanies(records) {
+    let all = { companies: {}, records: {}, sources: {} };
+    try { all = await window.Store.getTombstones(); } catch (e) { return { keep: records, dropped: [] }; }
+    const tombs = all.companies || {};
+    const checkOld = deletedBeforeChecker(all);
+    const deletedBefore = (r) => !!checkOld && checkOld(r);
+
+    if (!Object.keys(tombs).length && !checkOld) return { keep: records, dropped: [] };
+    const keep = [];
+    const dropped = [];
+    const upgrade = [];
+    records.forEach((r) => {
+      const keys = window.Normalize.companyKeys(r);
+      // 收回過就不再擋，連舊的 id 墓碑也不算——那正是使用者說「這家我還是要」的意思
+      if (keys.some((k) => tombs[k] && tombs[k].lifted)) { keep.push(r); return; }
+      if (keys.some((k) => tombs[k] !== undefined)) { dropped.push(r); return; }
+      // 舊墓碑對上了就順手補一張公司墓碑：下次不用再重算，也才列得進「管理已排除的公司」
+      if (deletedBefore(r)) { dropped.push(r); upgrade.push(r); return; }
+      keep.push(r);
+    });
+    if (upgrade.length) {
+      const rows = [];
+      upgrade.forEach((r) => {
+        window.Normalize.companyKeys(r).forEach((key) => rows.push({ key, company: r.company, taxId: r.taxId || '' }));
+      });
+      try { await window.Store.addCompanyTombstones(rows); } catch (e) { /* 補不上不影響這次剔除 */ }
+    }
+    return { keep, dropped };
+  }
+
+  /** 「排除了 3 筆你先前刪掉的公司（甲、乙…）」——一定要講，不然又變成無聲失效。 */
+  function droppedNote(dropped) {
+    if (!dropped.length) return '';
+    const names = dropped.slice(0, 3).map((r) => r.company).join('、');
+    return `，排除 ${dropped.length} 筆你先前刪掉的公司（${names}${dropped.length > 3 ? '…' : ''}）`;
+  }
+
+  /*
+   * 使用者明確要這家公司：收回排除，不然下次匯入又被自己的墓碑擋住。
+   *
+   * 舊版刪掉的只有 id 墓碑，沒有公司墓碑可以收回——但匯入時那張舊墓碑一樣擋得住，
+   * 所以對得上舊墓碑的也要留下「已收回」標記，否則手動加回來的公司下次匯入又消失。
+   */
+  async function unDropCompanies(records) {
+    let all;
+    try { all = await window.Store.getTombstones(); } catch (e) { return; }
+    const tombs = all.companies || {};
+    const checkOld = deletedBeforeChecker(all);
+    for (const r of records) {
+      const keys = window.Normalize.companyKeys(r);
+      if (!keys.length) continue;
+      const known = keys.some((k) => tombs[k] !== undefined);
+      if (!known && !(checkOld && checkOld(r))) continue;
+      try {
+        await window.Store.liftCompanyTombstones(keys, { company: r.company, taxId: r.taxId || '' }, { force: true });
+      } catch (e) { /* 不影響新增 */ }
+    }
+  }
+
   function deleteBtn(r) {
     const btn = el('button', { className: 'btn btn-tiny danger', type: 'button', textContent: '刪除這筆' });
     btn.onclick = async () => {
@@ -542,10 +738,10 @@
         logCount ? `${logCount} 則通話紀錄` : '',
         r.edited ? '你改過的欄位內容' : '',
       ].filter(Boolean).join('、');
-      const ok = confirm(`確定要從名單刪掉「${r.company}」嗎？\n`
+      const ok = await askConfirm(`確定要從名單刪掉「${r.company}」嗎？\n`
         + (extra ? `\n連同${extra}會一起刪掉。\n` : '')
         + '\n這個動作救不回來，其他裝置同步後也會一起消失。'
-        + '\n（之後重新匯入同一份 PDF 的話，這筆會再出現）');
+        + '\n（之後重新匯入同一份 PDF 的話，這筆會再出現）', { danger: true, okText: '刪掉' });
       if (!ok) return;
 
       /*
@@ -560,8 +756,8 @@
       let alsoIds = [];
       if (twins.length) {
         const where = [...new Set(twins.map((x) => x.source))].join('、');
-        if (confirm(`名單裡還有 ${twins.length} 筆同一家公司（來源：${where}）。\n\n`
-          + '要一起刪掉嗎？\n按「確定」全部刪掉；按「取消」只刪剛才那一筆。')) {
+        if (await askConfirm(`名單裡還有 ${twins.length} 筆同一家公司（來源：${where}）。\n\n`
+          + '要一起刪掉嗎？', { danger: true, okText: '全部刪掉', cancelText: '只刪這一筆' })) {
           alsoIds = twins.map((x) => x.id);
         }
       }
@@ -2319,7 +2515,7 @@
           };
 
           del.onclick = async () => {
-            if (!confirm('確定刪除這則紀錄嗎？')) return;
+            if (!await askConfirm('確定刪除這則紀錄嗎？', { danger: true, okText: '刪除' })) return;
             try {
               await window.Store.deleteLog(e.logId);
               state.logs = await window.Store.allLogs();
@@ -2691,7 +2887,7 @@
         const d = view(dup);
         const bits = [`來源：${dup.source}`, d.lastDate ? `最近聯絡 ${dateLabel(d.lastDate)}` : '',
           d.nextDate ? `下次 ${dateLabel(d.nextDate)}` : ''].filter(Boolean).join('　');
-        const open = confirm(`「${dup.company}」已經在名單裡了。\n${bits}\n\n`
+        const open = await askConfirm(`「${dup.company}」已經在名單裡了。\n${bits}\n\n`
           + '不會再新增一筆。要打開既有的那一筆嗎？\n'
           + '按「確定」打開；按「取消」留在這裡繼續改。');
         if (open) { closeOverlays(); render(); openDetail(dup.id); }
@@ -2709,6 +2905,9 @@
       };
       Object.assign(record, window.Normalize.parseAddressAny(v.addressActual, v.address));
       await window.Store.saveRecords([record]);
+      // 一筆一筆手動打進來就是明講要這家，把先前的排除記錄清掉，
+      // 不然下次匯入名單時又被自己的墓碑擋住
+      await unDropCompanies([record]);
       await reload();
       closeOverlays();
       render();
@@ -3448,11 +3647,11 @@ export default {
       const blanksOnly = scope.value === 'blank';
       const all = scopeTargets();
       if (!all.length) {
-        alert(blanksOnly ? '名單裡沒有欄位空白的客戶。' : '名單是空的。');
+        toast(blanksOnly ? '名單裡沒有欄位空白的客戶。' : '名單是空的。');
         return;
       }
       if (registryJob.running) { toast('已經在更新了，進度在畫面下方'); return; }
-      if (!confirm(`要查 ${all.length} 筆嗎？\n\n`
+      if (!await askConfirm(`要查 ${all.length} 筆嗎？\n\n`
         + '會在背景一筆一筆送出（每筆間隔 0.3 秒，避免對政府網站造成負擔），'
         + '這個視窗會自動收起來，你可以繼續打電話；進度在畫面下方，隨時可以按停止。\n\n'
         + '查到跟登記不一致的欄位（統編、資本總額、實收資本額、負責人、登記地址、成立年、最近核准變更日期）會直接更新，'
@@ -3556,16 +3755,21 @@ export default {
        * 貼一整批進來時最容易重複——整批裡也可能自己重複，所以一邊過濾一邊記下來。
        * 同 id 的不算重複：那是同一張卡片的更新，不是多開一筆。
        */
+      const gone = await dropDeletedCompanies(parsed.records);
+      if (!gone.keep.length) {
+        toast(`這 ${gone.dropped.length} 筆都是你先前刪掉的公司，沒有新增`);
+        return;
+      }
       const keep = [];
       const skipped = [];
-      parsed.records.forEach((r) => {
+      gone.keep.forEach((r) => {
         const twin = state.records.find((x) => x.id !== r.id && sameCompany(x, r))
           || keep.find((x) => x.id !== r.id && sameCompany(x, r));
         if (twin) skipped.push(`${r.company}（已在${twin.source || '名單'}）`);
         else keep.push(r);
       });
       if (!keep.length) {
-        toast(`這 ${parsed.records.length} 筆都已經在名單裡了，沒有新增`);
+        toast(`這 ${gone.keep.length} 筆都已經在名單裡了，沒有新增`);
         return;
       }
       const existing = new Set(state.records.map((r) => r.id));
@@ -3576,7 +3780,8 @@ export default {
       render();
       if (keep.length === 1) openDetail(keep[0].id);
       toast(`已新增 ${added} 筆${keep.length - added ? `、更新 ${keep.length - added} 筆` : ''}`
-        + (skipped.length ? `，略過 ${skipped.length} 筆已經在名單裡的（${skipped.slice(0, 3).join('、')}${skipped.length > 3 ? '…' : ''}）` : ''));
+        + (skipped.length ? `，略過 ${skipped.length} 筆已經在名單裡的（${skipped.slice(0, 3).join('、')}${skipped.length > 3 ? '…' : ''}）` : '')
+        + droppedNote(gone.dropped));
       scheduleSync();
       checkNewRecords(keep.map((r) => r.id));
     };
@@ -3920,13 +4125,18 @@ export default {
       }).filter((r) => r.company);
       if (!records.length) { toast('沒有可加入的公司（公司名稱是空的）'); return; }
 
-      let toSave = records;
+      const gone = await dropDeletedCompanies(records);
+      if (!gone.keep.length) {
+        toast(`這 ${gone.dropped.length} 筆都是你先前刪掉的公司，沒有新增`);
+        return;
+      }
+      let toSave = gone.keep;
       // 來源名稱傳空字串：跟名單上「所有」公司比對，包括之前同一天截圖加進來的
-      const hits = findImportDuplicates(records, '');
+      const hits = findImportDuplicates(gone.keep, '');
       if (hits.length) {
         const policy = await askDuplicatePolicy('104 截圖', hits);
         if (!policy) { open104Preview(companies); return; }
-        if (policy === 'skip') toSave = records.filter((r) => !hits.some((h) => h.incoming === r));
+        if (policy === 'skip') toSave = gone.keep.filter((r) => !hits.some((h) => h.incoming === r));
         else if (policy === 'overwrite') {
           hits.forEach(({ incoming, old }) => { incoming.id = old.id; incoming.source = old.source; });
           await window.Store.deleteRecordsById(hits.map(({ old }) => old.id));
@@ -3941,7 +4151,7 @@ export default {
       $('#editor').hidden = true;
       closeOverlays();
       render();
-      toast(`已加入 ${toSave.length} 家公司`);
+      toast(`已加入 ${toSave.length} 家公司${droppedNote(gone.dropped)}`);
       if (toSave.length === 1) openDetail(toSave[0].id);
       scheduleSync();
       checkNewRecords(toSave.map((r) => r.id));
@@ -3997,7 +4207,7 @@ export default {
           const found = window.Normalize.detectHeader(rows);
           if (found && window.Normalize.capitalLooksLikeYuan(rows, found.map)) {
             const sample = String((rows[found.index + 1] || [])[found.map.capital] || '');
-            const yes = confirm(`${file.name} 的資本額看起來是「元」（例如 ${sample}），`
+            const yes = await askConfirm(`${file.name} 的資本額看起來是「元」（例如 ${sample}），`
               + '但名單用的是「仟元」。\n\n要換算成仟元再匯入嗎？\n（選取消 = 照原值匯入）');
             if (yes) {
               const n = window.Normalize.convertCapitalToThousands(rows, found.map);
@@ -4019,11 +4229,28 @@ export default {
         records.forEach((r) => { r.importedAt = importedAt; });
 
         /*
+         * 先剔除以前自己刪掉的公司，再去比對重複。
+         * 順序反過來的話會拿已經確定不要的那幾家去問「要覆蓋還是略過」，
+         * 等於為了不存在的東西打斷使用者。
+         */
+        const gone = await dropDeletedCompanies(records);
+        const dropped = gone.dropped;
+        // 先複製再清空：沒有任何墓碑時 gone.keep 就是 records 本人，
+        // 直接 records.length = 0 會連要留的那份一起清掉
+        const kept = gone.keep.slice();
+        records.length = 0;
+        records.push(...kept);
+        if (!records.length) {
+          logLine(`${file.name}：${dropped.length} 筆都是你先前刪掉的公司，沒有匯入。`);
+          continue;
+        }
+
+        /*
          * 重複處理要在刪掉同名來源之前比對：比對的對象是「現在名單上的其他來源」，
          * 順序反過來的話會把剛刪掉的也算進去。
          */
         let toSave = records;
-        let dupNote = '';
+        let dupNote = droppedNote(dropped);
         const hits = findImportDuplicates(records, file.name);
         if (hits.length) {
           const policy = await askDuplicatePolicy(file.name, hits);
@@ -4031,7 +4258,7 @@ export default {
           const byIncoming = new Map(hits.map((h) => [h.incoming, h]));
           if (policy === 'skip') {
             toSave = records.filter((r) => !byIncoming.has(r));
-            dupNote = `，略過 ${hits.length} 筆重複`;
+            dupNote += `，略過 ${hits.length} 筆重複`;
           } else if (policy === 'overwrite') {
             // 沿用舊的 id，通話紀錄才會繼續掛在同一筆上
             hits.forEach(({ incoming, old }) => { incoming.id = old.id; });
@@ -4042,9 +4269,9 @@ export default {
               const st = state.userStates.get(id);
               if (st && st.edits) await saveState(id, { edits: undefined, editsAt: Date.now() });
             }
-            dupNote = `，覆蓋 ${hits.length} 筆重複`;
+            dupNote += `，覆蓋 ${hits.length} 筆重複`;
           } else {
-            dupNote = `，另外新增 ${hits.length} 筆重複的公司`;
+            dupNote += `，另外新增 ${hits.length} 筆重複的公司`;
           }
         }
 
@@ -4413,26 +4640,55 @@ export default {
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }
-        const name = prompt(`目前已匯入：\n${sources.join('\n')}\n\n輸入要刪除的檔名（留空取消）：`);
-        if (name && sources.includes(name.trim())) {
-          const n = await window.Store.deleteSource(name.trim());
+        const name = await askPick('要刪除哪一份名單？（整份的客戶都會刪掉）', sources);
+        if (name) {
+          const n = await window.Store.deleteSource(name);
           await reload(); render();
-          toast(`已刪除 ${name.trim()}（${n} 筆）`);
+          toast(`已刪除 ${name}（${n} 筆）`);
         }
+      }
+      /*
+       * 排除名單要看得到也收得回來。
+       *
+       * 自動剔除很好用，但只要使用者哪天想重新接觸某家公司，就會變成
+       * 「匯進去卻沒出現」——這種無聲的擋掉比不擋還糟。列出來、一鍵收回。
+       * 同一家公司會有統編和公司名兩個鍵，收回時要一起拿掉。
+       */
+      if (act === 'excluded') {
+        const tombs = (await window.Store.getTombstones()).companies || {};
+        // 收回過的不算，否則清單會一直留著已經收回的公司
+        const keys = Object.keys(tombs).filter((k) => !(tombs[k] && tombs[k].lifted));
+        if (!keys.length) { toast('目前沒有排除任何公司'); return; }
+        const byName = new Map();
+        keys.forEach((k) => {
+          const info = tombs[k];
+          const label = (info && typeof info === 'object' && info.company) || k.replace(/^(tax|name):/, '');
+          if (!byName.has(label)) byName.set(label, []);
+          byName.get(label).push(k);
+        });
+        const picked = await askPick(
+          `這些公司匯入名單時會自動剔除（共 ${byName.size} 家）。\n選一家就把它收回，之後匯入會照常出現。`,
+          [...byName.keys()],
+        );
+        if (!picked) return;
+        await window.Store.liftCompanyTombstones(byName.get(picked), { company: picked });
+        toast(`已收回「${picked}」，之後匯入名單會再出現`);
+        scheduleSync();
+        return;
       }
       if (act === 'wipe') {
         const synced = window.DriveSync.isConfigured();
         const total = state.records.length;
         const logs = state.logs.length;
         if (!total && !logs) { toast('名單已經是空的'); return; }
-        const ok1 = confirm(`確定要清空所有名單嗎？\n\n共 ${total} 筆客戶、${logs} 則通話紀錄。`
+        const ok1 = await askConfirm(`確定要清空所有名單嗎？\n\n共 ${total} 筆客戶、${logs} 則通話紀錄。`
           + (synced ? '\n\n你有開雲端同步：清除會傳到所有裝置，雲端那份也會一起清掉。' : '')
           + '\n\n此動作無法復原。按確定後會先自動下載一份備份。');
         if (!ok1) return;
         // 不可逆又會傳到所有裝置的動作，先留一份備份再動手
         download(`電話推廣名單備份_清空前_${todayISO()}.json`,
           JSON.stringify(await window.Store.exportAll()), 'application/json');
-        const ok2 = confirm('備份已開始下載。\n\n再確認一次：真的要清空全部名單嗎？');
+        const ok2 = await askConfirm('備份已開始下載。\n\n再確認一次：真的要清空全部名單嗎？', { danger: true, okText: '清空' });
         if (!ok2) return;
         const gone = await window.Store.wipe();
         await reload(); render();

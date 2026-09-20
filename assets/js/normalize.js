@@ -1549,7 +1549,28 @@
     return { name: best.name, reason: best.weight >= 9 ? '訪談明講' : '依訪談稱謂判讀', snippet: best.snippet };
   }
 
+  /*
+   * 一家公司的識別鍵，用來記「這家被刪掉過」。
+   *
+   * 客戶的 id 是「檔名＋公司名＋統編」算出來的，所以同一家公司在不同名單裡是
+   * 不同的 id。用 id 記刪除，下次匯入別份名單時完全對不上——使用者刪掉的公司
+   * 又整批回來了，這就是他實際遇到的狀況。
+   *
+   * 改成記公司本身：有統編記統編，另外再記一次公司名稱（去掉空白）。
+   * 兩個都記是因為同一家公司可能這份名單有統編、那份沒有，只記一種就漏掉。
+   * 比對時只要中一個就算同一家，跟 sameCompany 的判斷一致。
+   */
+  function companyKeys(rec) {
+    const keys = [];
+    const tax = String((rec && rec.taxId) || '').replace(/\D/g, '');
+    if (tax) keys.push(`tax:${tax}`);
+    const name = String((rec && rec.company) || '').replace(/\s/g, '');
+    if (name) keys.push(`name:${name}`);
+    return keys;
+  }
+
   global.Normalize = {
+    companyKeys,
     detectVisit, VISIT_LABEL, detectKeyman,
     parseKeyValue,
     toRecords, detectHeader, parseDate, extractPhones, phoneRows, serializePhones, parseNotes, splitCompanyNames,
