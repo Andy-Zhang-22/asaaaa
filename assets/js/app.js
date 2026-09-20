@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-122';
+  const APP_VERSION = '20260920-123';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1018,6 +1018,30 @@
           m.phoneKind = 'yes';
         });
       }
+
+      /*
+       * 往來情形整組一致。
+       *
+       * 每一家都是拿「自己＋同組」的訪談合起來判讀，但判讀只看最新一則，而合起來的
+       * 順序是自己的排前面——同一天兩家各記一則時，甲看到甲那則、乙看到乙那則，
+       * 同一組就會一家寫「有跟中租往來」、另一家寫「沒有」。使用者看到的就是
+       * 「關係企業的往來狀態沒有連動」。
+       *
+       * 改成整組取判讀日期最新的那一家；同一天就以「有往來」為準——本餘是事實，
+       * 另一家沒提到不代表整組沒往來。判讀來自哪一家會寫在詳細頁上。
+       */
+      const dealLead = members.reduce((a, b) => {
+        const da = (a.dealing && a.dealing.date) || '';
+        const db = (b.dealing && b.dealing.date) || '';
+        if (db !== da) return db > da ? b : a;
+        return (b.dealingKind === 'active' && a.dealingKind !== 'active') ? b : a;
+      });
+      members.forEach((m) => {
+        if (m.id === dealLead.id || m.dealingKind === dealLead.dealingKind) return;
+        m.dealing = dealLead.dealing;
+        m.dealingKind = dealLead.dealingKind;
+        m.dealingFrom = dealLead.company;
+      });
 
       /*
        * 有沒有機會共享：整組取最後標的那一次。
@@ -2115,6 +2139,9 @@
           ? `（最新一期${r.dealing.date ? ` ${r.dealing.date} ` : ''}有提到本餘或還在跟中租往來）`
           : `（最新一期${r.dealing.ended ? '寫到合作已結束' : '沒提到本餘或跟中租往來'}）` }),
       ]));
+      if (r.dealingFrom) {
+        sec.append(el('p', { className: 'muted', textContent: `這是整組一起算的，判讀來自同老闆的「${r.dealingFrom}」。` }));
+      }
       if (r.dealing.snippet) {
         sec.append(el('p', { className: 'relation-snippet', textContent: `「…${r.dealing.snippet}…」` }));
       }
