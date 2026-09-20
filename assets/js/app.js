@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-133';
+  const APP_VERSION = '20260920-134';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1145,7 +1145,7 @@
     const regList = el('div', { className: 'group-list' });
     const kwInput = el('input', {
       type: 'search', className: 'paste-box',
-      placeholder: '關係企業的公司名稱（打得出幾個字就好）',
+      placeholder: '公司名稱或統一編號',
     });
     const regBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '查商工登記並加入' });
 
@@ -1187,7 +1187,7 @@
       const kw = kwInput.value.trim();
       regList.textContent = '';
       newPicks.clear();
-      if (!kw) { regNote.className = 'rule-verdict is-fail'; regNote.textContent = '請先填關係企業的公司名稱。'; return; }
+      if (!kw) { regNote.className = 'rule-verdict is-fail'; regNote.textContent = '請先填公司名稱或統一編號。'; return; }
       regBtn.disabled = true;
       const wasLabel = regBtn.textContent;
       regBtn.textContent = '查詢中…';
@@ -1205,17 +1205,21 @@
         // 每一種寫法的結果都照實列出來：關鍵字不對、代理不通、資料集有問題，
         // 三件事處理方式完全不一樣，不講清楚只會亂試一通
         regNote.className = 'rule-verdict is-fail';
-        regNote.textContent = `查不到：${res.reason}`;
+        // 名稱一字之差就查不到，所以「查無資料」要順便講怎麼改，不然使用者只會一直按
+        regNote.textContent = `查不到：${res.reason}`
+          + (/查無資料/.test(res.reason)
+            ? '　登記上的寫法可能跟你打的不一樣：少打幾個字（例如只打「方舟國際」），或改用統一編號。'
+            : '');
         return;
       }
       regNote.className = 'rule-note';
-      regNote.textContent = `${res.label} 找到 ${res.companies.length} 家名稱含「${kw}」的公司。`
+      regNote.textContent = `${res.label} 找到 ${res.companies.length} 家。`
         + '勾你要的那一家，存檔時會連同統編、負責人、資本總額、地址一起加進名單並連結。';
       res.companies.forEach((c) => regList.append(regRow(c)));
-      if (!res.companies.length) regList.append(el('p', { className: 'rule-note', textContent: '商工登記上查不到這個名字，換個寫法或少打幾個字再試。' }));
+      if (!res.companies.length) regList.append(el('p', { className: 'rule-note', textContent: '查不到。登記上的寫法可能不一樣，少打幾個字（例如只打「方舟國際」）或改用統一編號再試。' }));
     };
     regBox.append(
-      el('p', { className: 'muted', textContent: '名單外的關係企業：知道是哪一家就直接打名字，商工登記的資料會一起帶進來。' }),
+      el('p', { className: 'muted', textContent: '名單外的關係企業：知道是哪一家就直接打公司名（或統編），商工登記的資料會一起帶進來。' }),
       el('div', { className: 'row' }, [kwInput, regBtn]), regNote, regList);
     // Enter 直接查，不用再去按按鈕
     kwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); regBtn.click(); } });

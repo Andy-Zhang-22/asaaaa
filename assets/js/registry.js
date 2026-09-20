@@ -175,21 +175,17 @@
       label: '商工行政資料開放平臺（官方）',
       byTaxId: officialByTaxId,
       byName: officialByName,
-      byKeyword: officialByKeyword,
     },
     g0v: {
       label: 'g0v 公司登記資料（社群鏡像）',
       // 網域是 company.g0v.ronny.tw（實測 company.g0v.tw 根本不存在，DNS 查不到）
       byTaxId: (taxId) => [`https://company.g0v.ronny.tw/api/show/${encodeURIComponent(taxId)}`],
       byName: (name) => [`https://company.g0v.ronny.tw/api/search/${encodeURIComponent(name)}`],
-      // g0v 的搜尋本來就是查公司名，關鍵字這條它幫得上忙（查負責人那條它沒有）
-      byKeyword: (kw) => [`https://company.g0v.ronny.tw/api/search/${encodeURIComponent(kw)}`],
     },
     proxy: {
       label: '自架代理',
       byTaxId: (taxId) => officialByTaxId(taxId).map(viaProxy),
       byName: (name) => officialByName(name).map(viaProxy),
-      byKeyword: (kw) => officialByKeyword(kw).map(viaProxy),
     },
   };
 
@@ -521,59 +517,27 @@
   };
 
   /*
-   * 用公司名查一串公司（連結關係企業用）。
+   * 連結關係企業時用的查詢：照使用者打的公司名（或統編）去查。
    *
-   * 跟 lookupCompany 不一樣的地方：那套是為了把「一家」公司的欄位拼完整，欄位不齊
-   * 就換下一個資料集補；這裡要的是符合這個名字的每一家，拼不起來，所以另外寫。
-   */
-  async function lookupByKeyword(keyword, opts) {
-    const clean = String(keyword || '').replace(/\s/g, '');
-    if (!clean) return { ok: false, reason: '沒有公司名可以查', attempts: [] };
-    const attempts = [];
-    const usable = activeSources(opts).filter((key) => SOURCES[key].byKeyword);
-    if (!usable.length) return { ok: false, attempts, reason: '沒有可用的查詢來源' };
-    for (const key of usable) {
-      const src = SOURCES[key];
-      const urls = src.byKeyword(clean);
-      for (let i = 0; i < urls.length; i++) {
-        const tag = urls.length > 1 ? `${src.label}（寫法 ${i + 1}）` : src.label;
-        try {
-          const rows = await request(urls[i]);
-          if (!rows.length) {
-            attempts.push({ source: key, label: tag, reason: '查無資料', url: urls[i], upstream: upstreamOf(urls[i]) });
-            continue;
-          }
-          const companies = rows.map(mapRow).filter((c) => c && (c.taxId || c.name));
-          return {
-            ok: true, source: key, label: tag, url: urls[i], upstream: upstreamOf(urls[i]),
-            companies, attempts,
-          };
-        } catch (err) {
-          attempts.push({ source: key, label: tag, reason: explain(err, key), body: err.body, url: urls[i], upstream: upstreamOf(urls[i]) });
-          if (err instanceof TypeError) break;   // 跨網域被擋是整個來源的問題，換寫法沒意義
-        }
-      }
-    }
-    return {
-      ok: false, attempts,
-      reason: attempts.length ? attempts.map((a) => `${a.label}：${a.reason}`).join('\n') : '沒有可用的查詢來源',
-    };
-  }
-
-  /*
-   * 連結關係企業時用的查詢網址：照公司名去找。
+   * 這裡**不自己組查詢網址**，直接用 lookupByName／lookupByTaxId——網站每天在用、
+   * 確定通的那兩條。上一版自己組了一份幾乎一樣但 $top=50 的網址，結果代理回「查無資料」，
+   * 而同一台裝置的商工登記更新明明是好的：差別就在那個自己加的參數。
+   * 查同一份資料就該走同一條路，不要為了「想多拿幾筆」另外開一條沒人驗過的。
    *
-   * 走的就是「用名稱查」那一支資料集與 Company_Name like 的寫法——網站每天在用、
-   * 確定通的那條路，台／臺兩種寫法都試。跟查單一公司的差別只有兩個：$top 開大
-   * （使用者可能只打得出前幾個字，要把符合的都列出來讓他挑），以及回全部不只第一筆。
+   * 回傳把 candidates 攤成 companies，讓呼叫端不用管這兩支函式的形狀差異。
    */
-  function officialByKeyword(keyword) {
-    const urls = [];
-    for (const variant of nameVariants(keyword)) {
-      urls.push(odata(getBase(), `Company_Name like ${variant} and Company_Status eq 01`, 50));
-      urls.push(odata(getBase(), `Company_Name like ${variant}`, 50));
-    }
-    return urls;
+  async function lookupByKeyword(text, opts) {
+    const clean = String(text || '').trim();
+    if (!clean) return { ok: false, reason: '請先填公司名稱或統一編號', attempts: [] };
+    // 純數字 8 碼當統編查：使用者手上有統編時這條最準，也省得名稱一字之差查不到
+    const digits = clean.replace(/\D/g, '');
+    const res = (digits.length === 8 && digits === clean.replace(/[\s-]/g, ''))
+      ? await lookupByTaxId(digits, opts)
+      : await lookupByName(clean, opts);
+    if (!res.ok) return { ...res, companies: [] };
+    const companies = (res.candidates && res.candidates.length ? res.candidates : [res.data])
+      .filter((c) => c && (c.taxId || c.name));
+    return { ...res, companies };
   }
 
   /**
@@ -611,7 +575,7 @@
 
   global.Registry = {
     lookupByTaxId, lookupByName, lookupByKeyword, lookupCompany, mapRow, toThousands, tidyDate,
-    FULL_TAXID_BASE, LEGACY_TAXID_BASE, officialByKeyword,
+    FULL_TAXID_BASE, LEGACY_TAXID_BASE,
     SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, nameVariants,
     getBase, setBase, DEFAULT_BASE, getTaxIdBase, setTaxIdBase, DEFAULT_TAXID_BASE, FIELD_CANDIDATES,
     officialByTaxId, officialByName, upstreamOf, PROBE_TAXID, tidyDatasetUrl,
