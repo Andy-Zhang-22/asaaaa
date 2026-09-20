@@ -686,3 +686,9 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 .ask-list .btn { justify-content: flex-start; text-align: left; white-space: normal; word-break: break-all; }
 /* 刪除類的主要按鈕：要一眼看出按下去會少東西 */
 .ask-actions .btn-primary.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+/* 存檔失敗的原因：toast 兩秒多就消失，錯過就不知道發生什麼事，所以留在表單上 */
+.save-err {
+  margin: 8px 0 0; padding: 8px 10px; font-size: 13px; line-height: 1.6;
+  color: var(--danger); background: var(--surface-2);
+  border: 1px solid var(--danger); border-radius: 8px;
+}

@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-130';
+  const APP_VERSION = '20260920-131';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -45,6 +45,9 @@
     (children || []).forEach((c) => node.append(c));
     return node;
   };
+
+  // 打到一半的通話紀錄（每家各一份）。localStorage 失效時靠這個撐過詳細頁重畫。
+  const logDrafts = new Map();
 
   const state = {
     records: [],
@@ -2278,17 +2281,37 @@
      * 每打一個字就存，回到這家自動填回來，存好紀錄才清掉。
      */
     const DRAFT_KEY = `log-draft:${r.id}`;
-    const readDraft = () => { try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { return null; } };
+    /*
+     * 草稿存兩份：localStorage 一份、記憶體一份。
+     *
+     * localStorage 會失效（無痕模式、空間滿了、隱私設定），而它一失效就完全無聲，
+     * 打到一半的字在下一次重畫就沒了。記憶體那份至少撐得過同一次開著網站的期間，
+     * 而詳細頁重畫正是最常把字弄丟的時候。
+     */
+    const readDraft = () => {
+      try {
+        const raw = localStorage.getItem(DRAFT_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch (e) { /* 無痕模式 */ }
+      return logDrafts.get(r.id) || null;
+    };
     const writeDraft = () => {
       const d = { text: memo.value, outcome: outcomeSel.value, nextDate: nextInput.value, at: Date.now() };
+      const keep = d.text.trim() || d.nextDate !== (r.nextDate || '');
+      if (keep) logDrafts.set(r.id, d); else logDrafts.delete(r.id);
       try {
-        if (d.text.trim() || d.nextDate !== (r.nextDate || '')) localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+        if (keep) localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
         else localStorage.removeItem(DRAFT_KEY);
       } catch (e) { /* 無痕模式 */ }
       draftNote.hidden = !memo.value.trim();
     };
-    const clearDraft = () => { try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* 無痕模式 */ } };
+    const clearDraft = () => {
+      logDrafts.delete(r.id);
+      try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* 無痕模式 */ }
+    };
     const draftNote = el('p', { className: 'muted draft-note', hidden: true });
+    // 存檔失敗的原因要留在畫面上，不能只靠兩秒就消失的 toast
+    const saveErr = el('p', { className: 'save-err', hidden: true });
     const draft = readDraft();
     if (draft && (draft.text || draft.nextDate)) {
       memo.value = draft.text || '';
@@ -2318,6 +2341,7 @@
     });
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存紀錄' });
     save.onclick = async () => {
+      saveErr.hidden = true;            // 上一次失敗的原因先收起來，不然會分不清是哪一次
       const text = memo.value.trim();
       // 禁止推廣不需要內容或下次聯絡日：判定了就是判定了，之後也不會再打
       const blocking = outcomeSel.value === 'blocked';
@@ -2351,26 +2375,53 @@
        * 失敗時內容與草稿都留著，並且把原因講出來。
        */
       const createdAt = Date.now();
+      /*
+       * 兩次寫入分開報。
+       *
+       * 紀錄本身（logs）和追蹤狀態（outcome／下次聯絡日）是兩次寫入。以前包在同一個
+       * try 裡，第二次失敗也講「存不進去」——但那時紀錄其實已經存好了，使用者照著
+       * 訊息重打一次就變成兩則一模一樣的紀錄。所以要分開講。
+       */
+      save.disabled = true;               // 存的時候連點兩下會變成兩則一樣的紀錄
+      const wasLabel = save.textContent;
+      save.textContent = '儲存中…';
+      const fail = (err, what) => {
+        console.error(what, err);
+        const why = err && err.message ? err.message : String(err);
+        // toast 兩秒多就消失，錯過就不知道發生什麼事，所以錯誤要留在表單上
+        saveErr.textContent = `${what}：${why}。你打的內容還留著，直接再按一次「儲存紀錄」就好。`;
+        saveErr.hidden = false;
+        toast(`${what}：${why}`);
+      };
       try {
         // 只寫這一家：同組其他家靠訪談互通與日期、狀態連動看得到同一通電話，不用各寫一則
         await window.Store.addLog({
           recordId: r.id, date: today, text, outcome: outcomeSel.value, createdAt,
-        });
-        await saveState(r.id, {
-          outcome: outcomeSel.value,
-          nextDate: picked || null,
-          lastDate: today,
         });
         state.logs = await window.Store.allLogs();
         if (!state.logs.some((l) => l.recordId === r.id && l.createdAt === createdAt)) {
           throw new Error('寫得進去卻讀不回來');
         }
       } catch (err) {
-        console.error('儲存通話紀錄失敗', err);
-        toast(`存不進去：${err && err.message ? err.message : err}。內容還留著，先複製起來，重新整理再試一次。`);
+        fail(err, '通話紀錄存不進去');
+        save.disabled = false; save.textContent = wasLabel;
         return;
       }
+      // 紀錄已經進去了：草稿可以清掉，再按一次也不會變兩則
       clearDraft();
+      try {
+        await saveState(r.id, {
+          outcome: outcomeSel.value,
+          nextDate: picked || null,
+          lastDate: today,
+        });
+      } catch (err) {
+        fail(err, '紀錄已存好，但結果與下次聯絡日沒寫進去');
+        save.disabled = false; save.textContent = wasLabel;
+        render();
+        return;
+      }
+      save.disabled = false; save.textContent = wasLabel;
       const extra = members.length ? `（同老闆的 ${members.length} 家一起看得到）` : '';
       const autoNote = auto
         ? `已儲存${extra}，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}`
@@ -2381,7 +2432,7 @@
       openDetail(r.id);
       scheduleSync();
     };
-    form.append(memo, draftNote, el('div', { className: 'row' }, [
+    form.append(memo, draftNote, saveErr, el('div', { className: 'row' }, [
       el('span', { className: 'muted', textContent: '結果' }), outcomeSel,
       el('span', { className: 'muted', textContent: '下次聯絡' }), withDateHint(nextInput, true), save,
     ]));
@@ -2904,10 +2955,26 @@
         importedAt: Date.now(),
       };
       Object.assign(record, window.Normalize.parseAddressAny(v.addressActual, v.address));
+
+      /*
+       * 手動新增也要吃排除名單。
+       *
+       * 自己刪掉的公司，打字打進來一樣要擋——不然排除名單只擋得住匯入那條路，
+       * 一家已經決定不要的公司還是會從這裡溜回名單上。
+       *
+       * 但不能悶著不動：使用者是一個字一個字打進來的，什麼都沒發生只會以為壞了。
+       * 講清楚是「先前刪掉、已經設成排除」，預設不新增；真的要就按「還是要新增」，
+       * 那時才把排除收回（不收回的話下次匯入又會被自己的墓碑擋掉）。
+       */
+      const excluded = (await dropDeletedCompanies([record])).dropped.length > 0;
+      if (excluded) {
+        const go = await askConfirm(`「${v.company}」你先前從名單刪掉了，已經設成排除。\n\n`
+          + '排除中的公司匯入名單時會自動剔除。還是要新增嗎？',
+          { okText: '還是要新增', cancelText: '不要新增' });
+        if (!go) { toast(`沒有新增「${v.company}」（維持排除）`); return; }
+        await unDropCompanies([record]);
+      }
       await window.Store.saveRecords([record]);
-      // 一筆一筆手動打進來就是明講要這家，把先前的排除記錄清掉，
-      // 不然下次匯入名單時又被自己的墓碑擋住
-      await unDropCompanies([record]);
       await reload();
       closeOverlays();
       render();
