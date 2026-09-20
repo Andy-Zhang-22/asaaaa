@@ -23,14 +23,19 @@
     return m;
   };
 
+  // 墓碑的值可能是時間戳，也可能是 { at, ... } 這種帶資訊的（公司墓碑要顯示公司名）
+  const tombAt = (v) => (v && typeof v === 'object' ? (v.at || 0) : (v || 0));
+
   function mergeTombstones(a, b) {
-    const out = { logs: {}, sources: {}, records: {} };
-    ['logs', 'sources', 'records'].forEach((kind) => {
+    const out = { logs: {}, sources: {}, records: {}, companies: {} };
+    // companies：在這台刪掉的公司，別台匯入名單時也要一起擋，所以要跟著同步
+    ['logs', 'sources', 'records', 'companies'].forEach((kind) => {
       const left = (a && a[kind]) || {};
       const right = (b && b[kind]) || {};
       Object.keys(left).forEach((k) => { out[kind][k] = left[k]; });
       Object.keys(right).forEach((k) => {
-        out[kind][k] = Math.max(out[kind][k] || 0, right[k]);
+        const seen = out[kind][k];
+        if (seen === undefined || tombAt(right[k]) >= tombAt(seen)) out[kind][k] = right[k];
       });
     });
     return out;

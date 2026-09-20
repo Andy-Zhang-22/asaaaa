@@ -659,3 +659,30 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 .date-hint.is-holiday { color: var(--warn); font-weight: 600; white-space: normal; }
 .date-hint:empty { display: none; }
 /* 聯絡時程的自選區間：兩個日期框並排，塞不下就換行 */
+
+/*
+ * 自己畫的確認框。
+ *
+ * 原生 confirm() 被 Chrome 的「不要再讓這個網頁建立對話方塊」關掉之後會靜靜
+ * 回傳 false，按刪除等於沒反應；這個框是頁面裡的元素，不會被瀏覽器關掉。
+ * z-index 要比 toast（90）高，刪除失敗的提示才不會蓋在上面看不到選項。
+ */
+.ask-overlay {
+  position: fixed; inset: 0; z-index: 120;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.ask-box {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow);
+  padding: 20px; max-width: 420px; width: 100%;
+}
+/* 訊息裡的換行是刻意排版的（哪些東西會一起刪掉），要照原樣顯示 */
+.ask-text { white-space: pre-line; font-size: 15px; line-height: 1.6; color: var(--text); }
+.ask-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+/* 手機上按鈕太小會誤按，這裡的誤按是刪掉客戶，所以放大 */
+.ask-actions .btn { min-width: 84px; padding: 9px 16px; font-size: 15px; }
+/* 挑名單用的選項清單：一份一行，檔名長也不會被切掉 */
+.ask-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.ask-list .btn { justify-content: flex-start; text-align: left; white-space: normal; word-break: break-all; }
+/* 刪除類的主要按鈕：要一眼看出按下去會少東西 */
+.ask-actions .btn-primary.danger { background: var(--danger); border-color: var(--danger); color: #fff; }

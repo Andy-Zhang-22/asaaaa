@@ -118,8 +118,24 @@
       return ids.length;
     },
 
+    /*
+     * 刪掉一家客戶。
+     *
+     * 除了本來的 id 墓碑，再記一次「這家公司」的墓碑（統編＋公司名）。
+     * id 墓碑只擋得住同一份名單裡的同一筆；使用者主動刪掉的公司，下次匯入
+     * 另一份名單時會換一個 id，照樣整批回來。記公司本身才擋得住。
+     *
+     * 只在這裡記——deleteRecordsById（重匯覆蓋）跟 wipe（清空）都不記，
+     * 那兩個不是「不要這家公司」的意思。
+     */
     async deleteRecord(id) {
+      const before = await tx('records', 'readonly', (store) => req2promise(store.get(id)));
       await tx('records', 'readwrite', (store) => store.delete(id));
+      if (before) {
+        for (const key of window.Normalize.companyKeys(before)) {
+          await api.addTombstone('companies', key, { company: before.company, taxId: before.taxId || '' });
+        }
+      }
 
       const logs = await api.allLogs();
       const mine = logs.filter((l) => l.recordId === id);
@@ -192,19 +208,72 @@
       return row ? row.value : undefined;
     },
 
-    async addTombstone(kind, key) {
+    /*
+     * meta 值除了時間戳也可以帶一點資訊（info）。公司墓碑要能列出「你排除了哪幾家」
+     * 讓使用者看得懂並且能收回，只存時間戳的話畫面上只剩 name:某某公司 這種鍵。
+     * 舊資料是純數字，讀的地方都要能接受兩種形狀。
+     */
+    async addTombstone(kind, key, info) {
       const all = (await api.getMeta('tombstones')) || { logs: {}, sources: {}, records: {} };
       all[kind] = all[kind] || {};
-      all[kind][key] = Date.now();
+      all[kind][key] = info ? { at: Date.now(), ...info } : Date.now();
       await api.setMeta('tombstones', all);
       return all;
+    },
+
+    /*
+     * 一次補上多家公司的墓碑。
+     *
+     * addTombstone 一次只寫一個鍵，而每一次都要把整包 tombstones 讀出來再寫回去。
+     * 經濟部的登記清冊一次四千多筆，靠舊墓碑認出好幾百家時就是好幾百趟
+     * IndexedDB 來回，畫面會卡住。整包只讀一次、寫一次。
+     */
+    async addCompanyTombstones(list) {
+      if (!list || !list.length) return 0;
+      const all = (await api.getMeta('tombstones')) || {};
+      all.companies = all.companies || {};
+      const now = Date.now();
+      let n = 0;
+      list.forEach(({ key, company, taxId }) => {
+        if (!key) return;
+        all.companies[key] = { at: now, company: company || '', taxId: taxId || '' };
+        n += 1;
+      });
+      if (n) await api.setMeta('tombstones', all);
+      return n;
+    },
+
+    /*
+     * 收回一家公司的排除（使用者明確表示還是要這家）。
+     *
+     * 不能直接把鍵刪掉：墓碑同步是「聯集」合併，這台刪掉之後下一次同步
+     * 雲端那份又會把它加回來，收回等於沒收回，而且是無聲的。
+     * 改成留著鍵、寫一筆比較新的「已收回」標記，合併時取新的就會贏。
+     */
+    async liftCompanyTombstones(keys, info, opts) {
+      const all = (await api.getMeta('tombstones')) || {};
+      all.companies = all.companies || {};
+      const force = !!(opts && opts.force);
+      let n = 0;
+      keys.forEach((k) => {
+        // force：舊版刪掉的沒有公司墓碑可以收回，但那張 id 墓碑照樣擋得住匯入，
+        // 所以要主動留下「已收回」標記，比對時才蓋得過去
+        if (!force && all.companies[k] === undefined) return;
+        all.companies[k] = { at: Date.now(), lifted: true, ...(info || {}) };
+        n += 1;
+      });
+      if (n) await api.setMeta('tombstones', all);
+      return n;
     },
 
     async getTombstones() {
       const all = (await api.getMeta('tombstones')) || {};
       // 每加一種墓碑都要記得列在這裡。漏掉的話墓碑存得進去卻永遠傳不出去，
       // 刪除在本機看起來成功，同步一次就被另一台原封不動地救回來。
-      return { logs: all.logs || {}, sources: all.sources || {}, records: all.records || {} };
+      return {
+        logs: all.logs || {}, sources: all.sources || {}, records: all.records || {},
+        companies: all.companies || {},
+      };
     },
 
     /** 直接覆寫成合併後的結果（同步用），不留墓碑。 */
