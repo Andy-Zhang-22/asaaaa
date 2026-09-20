@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-135';
+  const APP_VERSION = '20260920-136';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1228,8 +1228,31 @@
         });
         regList.append(el('p', { className: 'rule-note',
           textContent: '點開任何一個網址：那是你的瀏覽器直接連政府網站，不受跨網域限制。'
-            + '看到 JSON 就是查詢語法對了、代理那段有問題；看到空白就是這個名稱在登記上查不到，'
-            + '改用統一編號最準。' }));
+            + '看到 JSON 就是查詢語法對了、代理那段有問題；看到空白就是這個名稱在登記上查不到。' }));
+
+        /*
+         * 自己判斷是「這個名字比不到」還是「用名稱查整條路不通」。
+         *
+         * 使用者卡住的正是這個：統編更新天天成功（那是另一支資料集），名稱卻一直
+         * 查無資料，畫面上分不出來。拿一家一定存在的公司用同一條路試一次就分得出來，
+         * 不用叫使用者自己去點網址看 JSON。
+         */
+        const verdict = el('p', { className: 'rule-note', textContent: `正在確認「用公司名查」這條路通不通（拿${window.Registry.PROBE_NAME}試）…` });
+        regList.append(verdict);
+        let probe;
+        try { probe = await window.Registry.probeNameQuery(); } catch (e) { probe = { ok: false }; }
+        if (probe.ok) {
+          verdict.className = 'rule-note';
+          verdict.textContent = `用公司名查是通的（拿${probe.name}試有查到）。`
+            + `所以是「${kw}」這個寫法在商工登記上比不到——登記全名可能多幾個字，`
+            + '或這家的登記狀態不是「核准設立」。改用統一編號最準。';
+        } else {
+          verdict.className = 'rule-verdict is-fail';
+          verdict.textContent = `用公司名查整條路不通：連${window.Registry.PROBE_NAME}都查不到。`
+            + '（你的商工登記更新走的是用統編查的另一支資料集，那支是好的。）'
+            + '先用統一編號加這一家；要修名稱這條，到 ⋯ 選單 →「從商工登記更新公司資料」→'
+            + '「用名稱查的資料集網址」換一支資料集。';
+        }
         return;
       }
       regNote.className = 'rule-note';
