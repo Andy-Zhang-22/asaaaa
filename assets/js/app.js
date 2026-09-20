@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-138';
+  const APP_VERSION = '20260920-140';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1145,7 +1145,7 @@
     const regList = el('div', { className: 'group-list' });
     const kwInput = el('input', {
       type: 'search', className: 'paste-box',
-      placeholder: '公司名稱或統一編號',
+      placeholder: '登記全名或統一編號（簡稱查不到；兩個一起貼也可以）',
     });
     const regBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '查商工登記並加入' });
 
@@ -1205,8 +1205,10 @@
         regNote.className = 'rule-verdict is-fail';
         regNote.textContent = '每一種寫法都查不到。'
           + (/查無資料/.test(res.reason || '')
-            ? '登記上的寫法可能跟你打的不一樣，或是這家的登記狀態不是「核准設立」。'
+            // 簡稱查不到是最常見的原因，而且使用者不會想到——登記比對的是全名
+            ? '登記比對的是全名，簡稱查不到（像「台積電」要打「台灣積體電路製造股份有限公司」）。'
             : '');
+        if (res.triedTaxId) regNote.textContent += `（你貼的統編 ${res.triedTaxId} 也查過了，一樣沒有）`;
         /*
          * 先做結論，再排版。
          *
@@ -1214,18 +1216,20 @@
          * 他要的是「那我現在該按哪裡」。所以先跑探測拿到結論，把真的可行的那條
          * （g0v 鏡像、或改用統編）放在最前面，一長串嘗試明細收到後面去。
          */
-        const verdict = el('p', { className: 'rule-note', textContent: `正在確認「用公司名查」這條路通不通（拿${window.Registry.PROBE_NAME}試）…` });
+        const verdict = el('p', { className: 'rule-note', textContent: '正在確認「用公司名查」這條路通不通…' });
         regList.append(verdict);
         let probe;
         try { probe = await window.Registry.probeNameQuery(); } catch (e) { probe = { ok: false }; }
         if (probe.ok) {
           verdict.className = 'rule-note';
-          verdict.textContent = `用公司名查是通的（拿${probe.name}試有查到）。`
-            + `所以是「${kw}」這個寫法在商工登記上比不到——登記全名可能多幾個字，`
-            + '或這家的登記狀態不是「核准設立」。改用統一編號最準。';
+          verdict.textContent = `用公司名查是通的（拿「${probe.name}」試有查到）。`
+            + `所以是「${kw}」這個寫法在商工登記上比不到。`
+            + '最常見的原因是打了簡稱——登記比對的是全名，'
+            + '像「台積電」就查不到，要打「台灣積體電路製造股份有限公司」。'
+            + '也可能是登記全名多幾個字，或這家的登記狀態不是「核准設立」。改用統一編號最準。';
         } else {
           verdict.className = 'rule-verdict is-fail';
-          verdict.textContent = `用公司名查整條路不通：連${window.Registry.PROBE_NAME}都查不到，`
+          verdict.textContent = `用公司名查整條路不通：連「${window.Registry.PROBE_NAME}」都查不到，`
             + '換幾個名字都一樣。（你的商工登記更新走的是用統編查的另一支資料集，那支是好的。）'
             + '兩條路可以走：按下面的 g0v 鏡像，或改用統一編號。';
         }
@@ -1288,7 +1292,7 @@
           const lines = [
             `查「${kw}」`,
             `版本 ${APP_VERSION}`,
-            `用公司名查這條路：${probe.ok ? '通（台積電查得到）' : '不通（連台積電都查不到）'}`,
+            `用公司名查這條路：${probe.ok ? `通（${window.Registry.PROBE_NAME} 查得到）` : `不通（連 ${window.Registry.PROBE_NAME} 都查不到）`}`,
             ...(res.attempts || []).map((a) => `${a.label}：${a.reason}${a.body ? `｜實際收到：${a.body}` : ''}`),
           ];
           try {

@@ -446,7 +446,15 @@
    * 拿一家一定存在的公司（台積電）用同一條路試：有資料就是路通、是名字的問題；
    * 空白就是這條路本身不通（資料集停用、或這支不吃名稱當條件），那要換資料集。
    */
-  const PROBE_NAME = '台積電';
+  /*
+   * 探路用的公司名一定要是**登記上的全名**。
+   *
+   * 本來寫「台積電」——那是簡稱，登記上叫「台灣積體電路製造股份有限公司」，
+   * 資料庫裡根本沒有哪一家的名稱含「台積電」三個字。拿它去比對必然查無資料，
+   * 於是探測每次都回「不通」，畫面就跟著下了「用公司名查整條路不通」這個假結論，
+   * 害使用者以為要去換資料集。探路的東西本身查不到，測出來的就只有它自己。
+   */
+  const PROBE_NAME = '台灣積體電路製造股份有限公司';
   async function probeNameQuery(opts) {
     const res = await lookupByName(PROBE_NAME, opts);
     return {
@@ -583,17 +591,37 @@
     const clean = String(text || '').trim();
     if (!clean) return { ok: false, reason: '請先填公司名稱或統一編號', attempts: [] };
 
-    // 純數字 8 碼當統編查：使用者手上有統編時這條最準，也省得名稱一字之差查不到
-    const digits = clean.replace(/\D/g, '');
-    if (digits.length === 8 && digits === clean.replace(/[\s-]/g, '')) {
-      const res = await lookupByTaxId(digits, opts);
-      return res.ok ? { ...res, companies: pickCompanies(res), used: digits } : { ...res, companies: [] };
+    const attempts = [];
+    /*
+     * 統編從輸入裡「挑出來」，不要求整串只有數字。
+     *
+     * 原本的條件是「整串扣掉空白和 - 之後剛好 8 碼數字」，結果使用者把公司名跟統編
+     * 一起貼進來（「台灣積體電路製造股份有限公司22099131」）就整串被當成公司名去查，
+     * 當然查無資料——而那串裡明明就有一個可以直接查到的統編。
+     * 從試算表複製、或照著畫面提示「登記全名或統一編號」一起打，都會長這樣。
+     *
+     * 所以：先把 8 碼數字挑出來用統編查（最準），剩下的字才當公司名。
+     */
+    const compact = clean.replace(/[\s\u3000]/g, '');
+    const taxId = (compact.match(/\d{8}/) || [])[0] || '';
+    if (taxId) {
+      const res = await lookupByTaxId(taxId, opts);
+      (res.attempts || []).forEach((a) => attempts.push({ ...a, label: `${a.label}／查統編 ${taxId}` }));
+      if (res.ok) return { ...res, companies: pickCompanies(res), attempts, used: taxId };
     }
 
-    const attempts = [];
-    const names = [clean];
-    const stem = companyStem(clean);
-    if (stem && stem !== clean && stem.length >= 2) names.push(stem);
+    // 統編那段拿掉，剩下的才是公司名；順手把黏在頭尾的分隔符號去掉
+    const nameOnly = (taxId ? compact.replace(taxId, '') : compact)
+      .replace(/^[,，、/／|｜-]+|[,，、/／|｜-]+$/g, '');
+    if (!nameOnly) {
+      return {
+        ok: false, attempts, companies: [], triedTaxId: taxId,
+        reason: attempts.length ? attempts.map((a) => `${a.label}：${a.reason}`).join('\n') : `統編 ${taxId} 查不到`,
+      };
+    }
+    const names = [nameOnly];
+    const stem = companyStem(nameOnly);
+    if (stem && stem !== nameOnly && stem.length >= 2) names.push(stem);
     for (const name of names) {
       const res = await lookupByName(name, opts);
       (res.attempts || []).forEach((a) => attempts.push({ ...a, label: `${a.label}／查「${name}」` }));
@@ -608,7 +636,7 @@
     }
 
     return {
-      ok: false, attempts, companies: [],
+      ok: false, attempts, companies: [], triedTaxId: taxId,
       reason: attempts.length ? attempts.map((a) => `${a.label}：${a.reason}`).join('\n') : '沒有可用的查詢來源',
     };
   }
