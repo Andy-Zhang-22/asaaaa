@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-120';
+  const APP_VERSION = '20260920-121';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1472,6 +1472,23 @@
   }
 
   /**
+   * 詳細頁的公司名稱：有統編就做成連到 g0v 公司資料的連結。
+   *
+   * 送出去的只有統編（本來就是公開資訊），跟「用 g0v 鏡像查登記」是同一個取捨。
+   */
+  function companyTitle(r) {
+    if (!r.taxId) return document.createTextNode(r.company);
+    return el('a', {
+      className: 'company-link',
+      href: `https://company.g0v.ronny.tw/id/${encodeURIComponent(r.taxId)}`,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      title: `在 g0v 公司資料看「${r.company}」的登記內容（開新分頁）`,
+      textContent: r.company,
+    });
+  }
+
+  /**
    * 一顆灰點的複製鈕。
    * @param {string} text 要複製的內容
    * @param {string} label 滑鼠提示與讀螢幕用的說明
@@ -1771,8 +1788,16 @@
       return b;
     };
     body.append(el('div', { className: 'detail-head' }, [
-      // 複製鈕放在 h2 裡面，字級才跟著公司名稱走（點＝那行字的一半）
-      el('div', { className: 'detail-title' }, [el('h2', {}, [document.createTextNode(r.company), copyName])]),
+      /*
+       * 公司名稱按下去＝開 g0v 公司資料（新分頁）。
+       *
+       * 要看登記細節（資本總額、實收、所營事業、歷次變更）時，本來得自己複製名稱
+       * 再去查；現在點一下就到。網址用統編那一種（/id/統編）——那是唯一不會認錯
+       * 公司的鍵，同名公司很多。沒統編的就不連，寧可不連也不要連到錯的公司。
+       *
+       * 複製鈕放在 h2 裡面，字級才跟著公司名稱走（點＝那行字的一半）。
+       */
+      el('div', { className: 'detail-title' }, [el('h2', {}, [companyTitle(r), copyName])]),
       r.aliases.length ? el('p', { className: 'detail-alias', textContent: `關係企業：${r.aliases.join('、')}` }) : '',
       el('div', { className: 'detail-badges' }, [
         outcomeBadge(r),
