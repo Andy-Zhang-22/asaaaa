@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-136';
+  const APP_VERSION = '20260920-137';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1237,6 +1237,35 @@
          * 查無資料，畫面上分不出來。拿一家一定存在的公司用同一條路試一次就分得出來，
          * 不用叫使用者自己去點網址看 JSON。
          */
+        /*
+         * g0v 鏡像是另一條完全不同的路（不是 OData、有自己的搜尋），官方那支名稱
+         * 查詢不管用的時候它常常查得到。但它是第三方，照既有的做法不預設偷偷送出去——
+         * 給一顆按鈕讓使用者自己決定，並且講明會送什麼出去。
+         */
+        const mirrorBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '改用 g0v 社群鏡像再查一次' });
+        mirrorBtn.onclick = async () => {
+          mirrorBtn.disabled = true;
+          mirrorBtn.textContent = '查詢中…';
+          let m;
+          try { m = await window.Registry.lookupByKeyword(kw, { useMirror: true }); } catch (e) { m = { ok: false, reason: String(e) }; }
+          mirrorBtn.disabled = false;
+          mirrorBtn.textContent = '改用 g0v 社群鏡像再查一次';
+          if (!m.ok || !m.companies.length) {
+            regList.append(el('p', { className: 'rule-verdict is-fail', textContent: `g0v 鏡像也查不到：${m.reason || '查無資料'}` }));
+            return;
+          }
+          regList.textContent = '';
+          regNote.className = 'rule-note';
+          regNote.textContent = `g0v 社群鏡像找到 ${m.companies.length} 家`
+            + (m.used && m.used !== kw ? `（用「${m.used}」查到的）` : '')
+            + '。資料來自社群鏡像、不是政府即時資料，勾之前看一下統編對不對。';
+          m.companies.forEach((c) => regList.append(regRow(c)));
+        };
+        regList.append(el('p', { className: 'rule-note',
+          textContent: 'g0v 鏡像是另一條路（社群維護的同一份登記資料，不是 OData）。'
+            + '官方那支名稱查詢不通時它常常查得到，但它是第三方，要按才會送出——送出去的只有公司名。' }));
+        regList.append(el('div', { className: 'card-actions' }, [mirrorBtn]));
+
         const verdict = el('p', { className: 'rule-note', textContent: `正在確認「用公司名查」這條路通不通（拿${window.Registry.PROBE_NAME}試）…` });
         regList.append(verdict);
         let probe;
