@@ -523,16 +523,34 @@ button, input, select { font: inherit; color: inherit; }
 }
 
 /* ---------- 電話：撥號 + 複製 ---------- */
-.tel-group { display: inline-flex; align-items: stretch; }
-.tel-group .tel { border-radius: 999px 0 0 999px; border-right: 0; }
-.tel-copy {
-  border: 1px solid var(--border);
-  border-radius: 0 999px 999px 0;
-  background: var(--surface-2); color: var(--muted);
-  padding: 5px 12px; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+.tel-group { display: inline-flex; align-items: center; gap: 2px; }
+
+/*
+ * 複製鈕＝一顆綠點。
+ *
+ * 「複製」兩個字比電話號碼本身還搶眼，而且每張卡片都跟著一顆。綠點只佔一個字的
+ * 寬度，按的範圍仍然是 26px 見方——手指按得到，不是只有那 10px 的點。
+ */
+.copy-dot {
+  width: 26px; height: 26px; padding: 0; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: none; cursor: pointer; border-radius: 999px;
+  vertical-align: middle;
 }
-.tel-copy:hover { color: var(--primary); border-color: var(--primary); background: var(--surface); }
-.tel-copy:active { background: var(--primary); color: var(--primary-ink); }
+.copy-dot::before {
+  content: ''; width: 10px; height: 10px; border-radius: 999px;
+  background: var(--ok); transition: transform .12s ease, box-shadow .12s ease;
+}
+.copy-dot:hover::before { transform: scale(1.25); }
+.copy-dot:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.copy-dot:active::before { transform: scale(.85); }
+/* 複製成功：點自己擴一圈再收回來，不然按下去畫面完全沒反應 */
+.copy-dot.is-copied::before { animation: copied .7s ease; }
+@keyframes copied {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 var(--ok); }
+  40% { transform: scale(1.5); box-shadow: 0 0 0 5px rgba(22, 163, 74, .18); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+}
 
 /* ---------- 有新版本時的提示列 ---------- */
 .update-bar {
