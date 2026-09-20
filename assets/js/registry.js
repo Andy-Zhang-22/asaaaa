@@ -488,6 +488,43 @@
     };
   }
 
+  /*
+   * 分辨「名稱查詢的資料集是死的」還是「這支資料集活著但中文名稱比不到」。
+   *
+   * 這是卡了很多輪之後才做對的一件事。前面試過的探測都分不出這兩件事：
+   *   - probeDataset 拿統編去試，但它打的是「用統編查」那幾支資料集，
+   *     那幾支本來就是好的，所以它永遠回答「通」。
+   *   - probeNameQuery 拿公司名去試，失敗時分不出是資料集死了還是查詢條件的問題。
+   *
+   * 這支改成：用**名稱查詢那支資料集**（getBase()），但條件換成**統編**（純數字）。
+   * 資料集一樣、代理一樣、只有「值是數字還是中文」不同，所以結果直接指出兇手：
+   *   - 查得到 → 資料集活著、篩選也能用，問題就在中文名稱這個條件
+   *   - 查不到 → 這支資料集本身不通，要換一支
+   */
+  async function probeBaseWithTaxId(opts) {
+    const attempts = [];
+    const filters = [
+      `Business_Accounting_NO eq ${PROBE_TAXID} and Company_Status eq 01`,
+      `Business_Accounting_NO eq ${PROBE_TAXID}`,
+    ];
+    for (const key of activeSources(opts)) {
+      if (key === 'g0v') continue;                  // g0v 不是 OData，測不到這件事
+      const wrap = key === 'proxy' ? viaProxy : ((u) => u);
+      for (const filter of filters) {
+        const url = wrap(odata(getBase(), filter, 1));
+        try {
+          const rows = await request(url);
+          if (rows.length) return { ok: true, label: SOURCES[key].label, url, upstream: upstreamOf(url), attempts };
+          attempts.push({ source: key, label: SOURCES[key].label, reason: '查無資料', body: rows.info, url, upstream: upstreamOf(url) });
+        } catch (err) {
+          attempts.push({ source: key, label: SOURCES[key].label, reason: explain(err, key), body: err.body, url, upstream: upstreamOf(url) });
+          if (err instanceof TypeError) break;
+        }
+      }
+    }
+    return { ok: false, attempts };
+  }
+
   async function probeDataset() {
     const tried = [];
     for (const { label, url } of bareUrls()) {
@@ -732,7 +769,7 @@
   global.Registry = {
     lookupByTaxId, lookupByName, lookupByKeyword, companyStem, lookupCompany, mapRow, toThousands, tidyDate,
     FULL_TAXID_BASE, LEGACY_TAXID_BASE,
-    SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, probeNameQuery, PROBE_NAME, nameVariants,
+    SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, probeNameQuery, probeBaseWithTaxId, PROBE_NAME, nameVariants,
     getBase, setBase, DEFAULT_BASE, getTaxIdBase, setTaxIdBase, DEFAULT_TAXID_BASE, FIELD_CANDIDATES,
     officialByTaxId, officialByName, upstreamOf, PROBE_TAXID, tidyDatasetUrl,
   };
