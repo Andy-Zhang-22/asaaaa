@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-141';
+  const APP_VERSION = '20260920-142';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1228,10 +1228,33 @@
             + '像「台積電」就查不到，要打「台灣積體電路製造股份有限公司」。'
             + '也可能是登記全名多幾個字，或這家的登記狀態不是「核准設立」。改用統一編號最準。';
         } else {
+          /*
+           * 再問一次，才分得出兇手是誰。
+           *
+           * 「用公司名查不到」有兩個完全不同的原因，而前面的探測都分不出來：
+           * 這支資料集本身不通，還是它活著、只是中文名稱這個條件比不到。
+           * 拿**同一支資料集**配**統編**（純數字）去試——資料集一樣、代理一樣，
+           * 只有「值是數字還是中文」不同，結果就直接指出是哪一個。
+           */
           verdict.className = 'rule-verdict is-fail';
-          verdict.textContent = `用公司名查整條路不通：連「${window.Registry.PROBE_NAME}」都查不到，`
-            + '換幾個名字都一樣。（你的商工登記更新走的是用統編查的另一支資料集，那支是好的。）'
-            + '兩條路可以走：按下面的 g0v 鏡像，或改用統一編號。';
+          verdict.textContent = '用公司名查不到，正在確認是資料集的問題還是查詢條件的問題…';
+          let base;
+          try { base = await window.Registry.probeBaseWithTaxId(); } catch (e) { base = { ok: false }; }
+          if (base.ok) {
+            verdict.textContent = '查出來了：「用名稱查的資料集」本身是通的'
+              + `（同一支資料集用統編查得到，經由${base.label}），`
+              + '但換成中文公司名就一律查無資料。也就是這支資料集不吃「用公司名查」這個條件。'
+              + '這不是你打錯名字，換幾個名字都一樣。'
+              + '現在可行的：① 直接貼統一編號（那條一直是好的）② 按下面的 g0v 鏡像。'
+              + '要修名稱這條，得換一支支援名稱查詢的資料集：⋯ 選單 →「從商工登記更新公司資料」→'
+              + '「用名稱查的資料集網址」。';
+          } else {
+            verdict.textContent = '查出來了：「用名稱查的資料集」整支都不通'
+              + `（連用統編查同一支資料集都查不到，統編 ${window.Registry.PROBE_TAXID}）。`
+              + '這支資料集的編號可能已經失效。你的每日更新走的是另一支（用統編查的），所以沒受影響。'
+              + '現在可行的：① 直接貼統一編號 ② 按下面的 g0v 鏡像。'
+              + '要修就到 ⋯ 選單 →「從商工登記更新公司資料」→「用名稱查的資料集網址」換一支。';
+          }
         }
         const details = el('details', { className: 'proxy-guide' }, [
           el('summary', { textContent: `查詢明細（${(res.attempts || []).length} 次嘗試）` }),
@@ -1276,6 +1299,32 @@
             + '。資料來自社群鏡像、不是政府即時資料，勾之前看一下統編對不對。';
           m.companies.forEach((c) => regList.append(regRow(c)));
         };
+        /*
+         * 查不到也不要把人卡住。
+         *
+         * 使用者知道那家是關企、名字就在眼前，只是商工登記查不到而已。與其要他切出去
+         * 手動新增一筆再回來連，不如就用他打的名字建一筆、直接連上——統編、資本額
+         * 之後補（手動編輯，或哪天名稱查詢修好了再更新）。
+         * 少了登記資料的那一筆，總比連不起來好。
+         */
+        const rawAdd = el('button', { className: 'btn btn-tiny', type: 'button', textContent: `直接用「${kw}」加入並連結` });
+        rawAdd.onclick = () => {
+          const taxId = (kw.replace(/[\s\u3000]/g, '').match(/\d{8}/) || [])[0] || '';
+          const name = (taxId ? kw.replace(taxId, '') : kw).replace(/[\s\u3000]/g, '')
+            .replace(/^[,，、/／|｜-]+|[,，、/／|｜-]+$/g, '');
+          if (!name) { toast('只有統編沒有公司名，沒辦法直接加入'); return; }
+          newPicks.set(taxId || name, { name, taxId, owner: '', address: '', capital: '' });
+          regList.textContent = '';
+          regNote.className = 'rule-note';
+          regNote.textContent = `會用「${name}」建一筆並連結（沒有商工登記的資料，統編與資本額之後可以自己補）。`
+            + '按下面的「儲存連結」完成。';
+          rawAdd.disabled = true;
+        };
+        regList.append(el('p', { className: 'rule-note',
+          textContent: '查不到也不用卡在這裡：可以直接用你打的名字建一筆並連結，'
+            + '商工登記的欄位之後自己補就好。' }));
+        regList.append(el('div', { className: 'card-actions' }, [rawAdd]));
+
         regList.append(el('p', { className: 'rule-note',
           textContent: 'g0v 鏡像是另一條路（社群維護的同一份登記資料，不是 OData）。'
             + '官方那支名稱查詢不通時它常常查得到，但它是第三方，要按才會送出——送出去的只有公司名。' }));
