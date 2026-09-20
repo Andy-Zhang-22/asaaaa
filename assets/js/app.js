@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260920-118';
+  const APP_VERSION = '20260920-119';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -2006,16 +2006,34 @@
           picked = auto.iso;
         }
       }
-      // 只寫這一家：同組其他家靠訪談互通與日期、狀態連動看得到同一通電話，不用各寫一則
-      await window.Store.addLog({
-        recordId: r.id, date: today, text, outcome: outcomeSel.value, createdAt: Date.now(),
-      });
-      await saveState(r.id, {
-        outcome: outcomeSel.value,
-        nextDate: picked || null,
-        lastDate: today,
-      });
-      state.logs = await window.Store.allLogs();
+      /*
+       * 寫進去之後要讀回來確認。
+       *
+       * 存不進去的情況是有的（瀏覽器空間滿了、無痕模式、另一個分頁正在升級資料庫），
+       * 以前這裡沒有 try，寫入失敗就是一個沒人看得到的 unhandled rejection：
+       * 畫面沒有任何訊息、輸入框被清掉、紀錄也沒存到，使用者只會以為自己沒按到。
+       * 失敗時內容與草稿都留著，並且把原因講出來。
+       */
+      const createdAt = Date.now();
+      try {
+        // 只寫這一家：同組其他家靠訪談互通與日期、狀態連動看得到同一通電話，不用各寫一則
+        await window.Store.addLog({
+          recordId: r.id, date: today, text, outcome: outcomeSel.value, createdAt,
+        });
+        await saveState(r.id, {
+          outcome: outcomeSel.value,
+          nextDate: picked || null,
+          lastDate: today,
+        });
+        state.logs = await window.Store.allLogs();
+        if (!state.logs.some((l) => l.recordId === r.id && l.createdAt === createdAt)) {
+          throw new Error('寫得進去卻讀不回來');
+        }
+      } catch (err) {
+        console.error('儲存通話紀錄失敗', err);
+        toast(`存不進去：${err && err.message ? err.message : err}。內容還留著，先複製起來，重新整理再試一次。`);
+        return;
+      }
       clearDraft();
       const extra = members.length ? `（同老闆的 ${members.length} 家一起看得到）` : '';
       const autoNote = auto
@@ -2132,8 +2150,15 @@
             cancel.onclick = () => { li.replaceChild(actions, editor); };
             ok.onclick = async () => {
               const text = box.value.trim();
-              await window.Store.updateLog(e.logId, { text, date: when.value || e.date });
-              state.logs = await window.Store.allLogs();
+              // 跟新增一樣：存不進去要講出來，不要靜悄悄地把修改吃掉
+              try {
+                await window.Store.updateLog(e.logId, { text, date: when.value || e.date });
+                state.logs = await window.Store.allLogs();
+              } catch (err) {
+                console.error('修改通話紀錄失敗', err);
+                toast(`改不進去：${err && err.message ? err.message : err}。內容還在上面，先複製起來再重新整理。`);
+                return;
+              }
               // 下次聯絡日：有改就照改的；沒填的話從內容找「約10/20再拜訪」這種寫法
               let next = nextEdit.value || null;
               let auto = null;
@@ -2152,8 +2177,14 @@
 
           del.onclick = async () => {
             if (!confirm('確定刪除這則紀錄嗎？')) return;
-            await window.Store.deleteLog(e.logId);
-            state.logs = await window.Store.allLogs();
+            try {
+              await window.Store.deleteLog(e.logId);
+              state.logs = await window.Store.allLogs();
+            } catch (err) {
+              console.error('刪除通話紀錄失敗', err);
+              toast(`刪不掉：${err && err.message ? err.message : err}`);
+              return;
+            }
             touch();
             render();
             openDetail(r.id);
