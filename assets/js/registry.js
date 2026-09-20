@@ -131,6 +131,10 @@
     for (const variant of nameVariants(name)) {
       urls.push(odata(getBase(), `Company_Name like ${variant} and Company_Status eq 01`, 5));
       urls.push(odata(getBase(), `Company_Name like ${variant}`, 5));
+      // 上面的註解一直寫著「like 找不到再試 eq」，但程式裡沒有——兩個寫法都是 like。
+      // 萬一這支資料集的 like 不吃中文或已經不支援，eq 是另一條路，補上不吃虧。
+      urls.push(odata(getBase(), `Company_Name eq ${variant} and Company_Status eq 01`, 5));
+      urls.push(odata(getBase(), `Company_Name eq ${variant}`, 5));
     }
     return urls;
   };
@@ -421,6 +425,28 @@
     return urls;
   }
 
+  /*
+   * 「用公司名查」這條路本身通不通。
+   *
+   * probeDataset 是拿統編去試的，而統編走的是另一支資料集——所以它永遠說「通」，
+   * 對「名稱查不到」這件事完全幫不上忙。使用者卡住的正是這個：統編更新天天成功，
+   * 名稱卻一直查無資料，從畫面上分不出是「這個名字在登記上比不到」還是
+   * 「名稱查詢整條路壞了」。
+   *
+   * 拿一家一定存在的公司（台積電）用同一條路試：有資料就是路通、是名字的問題；
+   * 空白就是這條路本身不通（資料集停用、或這支不吃名稱當條件），那要換資料集。
+   */
+  const PROBE_NAME = '台積電';
+  async function probeNameQuery(opts) {
+    const res = await lookupByName(PROBE_NAME, opts);
+    return {
+      ok: !!res.ok,
+      name: PROBE_NAME,
+      label: res.label || '',
+      attempts: res.attempts || [],
+    };
+  }
+
   async function probeDataset() {
     const tried = [];
     for (const { label, url } of bareUrls()) {
@@ -639,7 +665,7 @@
   global.Registry = {
     lookupByTaxId, lookupByName, lookupByKeyword, companyStem, lookupCompany, mapRow, toThousands, tidyDate,
     FULL_TAXID_BASE, LEGACY_TAXID_BASE,
-    SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, nameVariants,
+    SOURCES, activeSources, getProxy, setProxy, checkProxy, probeDataset, probeNameQuery, PROBE_NAME, nameVariants,
     getBase, setBase, DEFAULT_BASE, getTaxIdBase, setTaxIdBase, DEFAULT_TAXID_BASE, FIELD_CANDIDATES,
     officialByTaxId, officialByName, upstreamOf, PROBE_TAXID, tidyDatasetUrl,
   };
