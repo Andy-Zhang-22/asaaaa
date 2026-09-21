@@ -7,7 +7,7 @@
 <meta name="description" content="把電話推廣名單 PDF 轉成可搜尋、可撥號、可追蹤的工作台。資料只存在本機瀏覽器。">
 <meta name="theme-color" content="#0f172a">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>">
-<link rel="stylesheet" href="assets/css/app.css?v=20260920-145">
+<link rel="stylesheet" href="assets/css/app.css?v=20260920-146">
 </head>
 <body data-theme="auto">
 
@@ -41,6 +41,8 @@
       <button data-act="theme">切換深色／淺色</button>
       <button data-act="registry">從商工登記更新公司資料</button>
       <button data-act="check-names">檢查公司名稱</button>
+      <button data-act="spread-due">把今天要聯絡的分散到未來 15 個工作天</button>
+      <button data-act="spread-undo" hidden>復原剛才的分散</button>
       <button data-act="manage">管理已匯入名單</button>
       <button data-act="excluded">管理已排除的公司</button>
       <button data-act="wipe" class="danger">清除所有資料</button>
@@ -261,17 +263,17 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="assets/vendor/pdfjs/pdf.min.js?v=20260920-145"></script>
-<script src="assets/vendor/xlsx/xlsx.min.js?v=20260920-145"></script>
+<script src="assets/vendor/pdfjs/pdf.min.js?v=20260920-146"></script>
+<script src="assets/vendor/xlsx/xlsx.min.js?v=20260920-146"></script>
 <script src="assets/vendor/tesseract/tesseract.min.js"></script>
-<script src="assets/js/pdf-table.js?v=20260920-145"></script>
-<script src="assets/js/normalize.js?v=20260920-145"></script>
-<script src="assets/js/holidays.js?v=20260920-145"></script>
-<script src="assets/js/registry.js?v=20260920-145"></script>
-<script src="assets/js/ocr.js?v=20260920-145"></script>
-<script src="assets/js/rules.js?v=20260920-145"></script>
-<script src="assets/js/store.js?v=20260920-145"></script>
-<script src="assets/js/sync.js?v=20260920-145"></script>
-<script src="assets/js/app.js?v=20260920-145"></script>
+<script src="assets/js/pdf-table.js?v=20260920-146"></script>
+<script src="assets/js/normalize.js?v=20260920-146"></script>
+<script src="assets/js/holidays.js?v=20260920-146"></script>
+<script src="assets/js/registry.js?v=20260920-146"></script>
+<script src="assets/js/ocr.js?v=20260920-146"></script>
+<script src="assets/js/rules.js?v=20260920-146"></script>
+<script src="assets/js/store.js?v=20260920-146"></script>
+<script src="assets/js/sync.js?v=20260920-146"></script>
+<script src="assets/js/app.js?v=20260920-146"></script>
 </body>
 </html>
