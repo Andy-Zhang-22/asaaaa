@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260921-151';
+  const APP_VERSION = '20260921-153';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -308,7 +308,8 @@
   const DUE_NOTIFIED_KEY = 'due-notified';
   function dueToday() {
     const today = todayISO();
-    return allViews().filter((r) => r.nextDate === today && !r.blocked)
+    // 今天已經在提醒列按過「完成」的就不再列——按掉了又跳回來是使用者最不能接受的
+    return allViews().filter((r) => r.nextDate === today && !r.blocked && r.dueDoneOn !== today)
       .sort((a, b) => a.company.localeCompare(b.company, 'zh-Hant'));
   }
   function checkDueToday() {
@@ -422,13 +423,36 @@
       const p = r.phones && r.phones[0];
       if (p) main.append(el('a', { className: 'remind-tel', href: `tel:${p.dial || p.digits}`, textContent: `📞 ${p.display || p.digits}` }));
       const actions = el('div', { className: 'remind-actions' });
+      /*
+       * 「完成」是把這一列處理掉，不是只取消那個鬧鐘。
+       *
+       * 原本只清掉 remindAt，但同一家的「下次聯絡日」常常就是今天——清掉之後它
+       * 立刻以「今天要打」的身分又出現在同一條列上，使用者看到的就是「按掉又跳回來」。
+       * 所以一併記下「今天處理過了」（dueDoneOn），當天就不再列。
+       * 下次聯絡日本身不動：那是使用者自己排的計畫，卡片上照樣看得到。
+       */
+      const doneToday = async () => {
+        const patch = { dueDoneOn: todayISO() };
+        if (kind === 'timed') Object.assign(patch, { remindAt: null, remindNote: '', remindSetAt: Date.now() });
+        try {
+          await saveState(r.id, patch);
+        } catch (err) {
+          console.error('完成提醒失敗', err);
+          toast(`存不進去：${err && err.message ? err.message : err}。請重新整理再試一次。`);
+          return;
+        }
+        scheduleSync();
+        render();
+        toast(`「${r.company}」今天不再提醒`);
+      };
+      const done = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '完成', title: '今天不再提醒這一家（下次聯絡日不變）' });
+      done.onclick = doneToday;
+      actions.append(done);
       if (kind === 'timed') {
-        const done = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '完成', title: '取消這個提醒' });
-        done.onclick = () => setReminder(r.id, null);
         const later = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '延 15 分' });
         // 同樣在按下去的那一刻才算：從「現在」和「原訂時間」取晚的那個再加 15 分
         later.onclick = () => setReminder(r.id, Math.max(Date.now(), r.remindAt) + 15 * 60000, r.remindNote);
-        actions.append(done, later);
+        actions.append(later);
       }
       row.append(time, main, actions);
       list.append(row);
@@ -643,6 +667,8 @@
         : (reg.city ? '不在劃分表上' : '無登記地址');
     }
     out.remindAt = (mine && mine.remindAt) || 0;
+    // 提醒列上按過「完成」的那一天，當天就不再列出來（見 remindItems）
+    out.dueDoneOn = (mine && mine.dueDoneOn) || '';
     out.remindNote = (mine && mine.remindNote) || '';
     out.regKinds = out.regChange && out.regChange.kinds && out.regChange.kinds.length
       ? out.regChange.kinds
@@ -773,40 +799,47 @@
   function deleteBtn(r) {
     const btn = el('button', { className: 'btn btn-tiny danger', type: 'button', textContent: '刪除這筆' });
     btn.onclick = async () => {
-      const logCount = state.logs.filter((l) => l.recordId === r.id).length;
+      /*
+       * 連結在一起的關係企業一起刪。
+       *
+       * 使用者的要求很直接：「刪除有關聯企業的客戶時，請將全部跟他有連結在一起的公司
+       * 都刪除」。合理——會連起來就是因為那是同一個老闆、同一個案子，判斷不打了是整組
+       * 一起不打；留下半組在名單上只會每天看到它、又不知道為什麼只剩這幾家。
+       *
+       * 同一家公司在別份名單裡的重複（twins）也要一起收掉，而且是整組每一家各自的
+       * 重複都要，不然刪完還會有漏網的跑回來。
+       */
+      const members = groupMembers(r);
+      const core = [r, ...members];
+      const coreIds = new Set(core.map((x) => x.id));
+      const twins = state.records.filter((x) => !coreIds.has(x.id) && core.some((c) => sameCompany(x, c)));
+      const all = [...core.map((x) => x.id), ...twins.map((x) => x.id)];
+
+      const logCount = state.logs.filter((l) => all.includes(l.recordId)).length;
       const extra = [
         logCount ? `${logCount} 則通話紀錄` : '',
-        r.edited ? '你改過的欄位內容' : '',
+        core.some((x) => x.edited) ? '你改過的欄位內容' : '',
       ].filter(Boolean).join('、');
+      // 要刪掉哪幾家一定要講名字：一次刪好幾筆，看不到名單就等於閉著眼睛按
+      const names = members.length
+        ? `\n同老闆連結在一起的 ${members.length} 家也會一起刪掉：\n${members.map((m) => `・${m.company}`).join('\n')}\n`
+        : '';
+      const dupNote = twins.length
+        ? `\n另外名單裡還有 ${twins.length} 筆同一家公司（來源：${[...new Set(twins.map((x) => x.source))].join('、')}），一起刪掉。\n`
+        : '';
       const ok = await askConfirm(`確定要從名單刪掉「${r.company}」嗎？\n`
+        + names + dupNote
         + (extra ? `\n連同${extra}會一起刪掉。\n` : '')
-        + '\n這個動作救不回來，其他裝置同步後也會一起消失。'
-        + '\n（之後重新匯入同一份 PDF 的話，這筆會再出現）', { danger: true, okText: '刪掉' });
+        + `\n總共 ${all.length} 筆。這個動作救不回來，其他裝置同步後也會一起消失。`
+        + '\n（之後重新匯入同一份 PDF 的話，這些會再出現）',
+      { danger: true, okText: all.length > 1 ? `全部刪掉（${all.length} 筆）` : '刪掉' });
       if (!ok) return;
-
-      /*
-       * 同一家公司可能在好幾份名單裡各有一筆。
-       *
-       * 客戶的 id 是「檔名＋公司名＋統編」算出來的，所以同一家出現在兩份名單就是
-       * 兩筆各自獨立的卡片。只刪掉眼前這一筆，另一份名單那筆還在，看起來就像
-       * 「刪掉又自己跑回來」——使用者實際回報的就是這個。
-       * 有重複就問一次要不要一起刪，並且把是哪幾份名單講出來。
-       */
-      const twins = state.records.filter((x) => x.id !== r.id && sameCompany(x, r));
-      let alsoIds = [];
-      if (twins.length) {
-        const where = [...new Set(twins.map((x) => x.source))].join('、');
-        if (await askConfirm(`名單裡還有 ${twins.length} 筆同一家公司（來源：${where}）。\n\n`
-          + '要一起刪掉嗎？', { danger: true, okText: '全部刪掉', cancelText: '只刪這一筆' })) {
-          alsoIds = twins.map((x) => x.id);
-        }
-      }
 
       // 刪不掉要講出來：以前沒有 try，失敗就是一個沒人看得到的錯誤
       try {
-        for (const id of [r.id, ...alsoIds]) await window.Store.deleteRecord(id);
+        for (const id of all) await window.Store.deleteRecord(id);
         const left = await window.Store.allRecords();
-        const stuck = [r.id, ...alsoIds].filter((id) => left.some((x) => x.id === id));
+        const stuck = all.filter((id) => left.some((x) => x.id === id));
         if (stuck.length) throw new Error('刪掉了但還讀得到');
       } catch (err) {
         console.error('刪除客戶失敗', err);
@@ -816,7 +849,7 @@
       await reload();
       closeOverlays();
       render();
-      toast(alsoIds.length ? `已刪除「${r.company}」共 ${alsoIds.length + 1} 筆` : `已刪除「${r.company}」`);
+      toast(all.length > 1 ? `已刪除「${r.company}」等共 ${all.length} 筆` : `已刪除「${r.company}」`);
       scheduleSync();
     };
     return btn;
