@@ -704,3 +704,30 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 /* 查到的那一列：說明在左、動作按鈕在右，按一下就完成，不用捲到視窗最底 */
 .group-row.is-action { justify-content: space-between; gap: 12px; cursor: default; }
 .group-row.is-action .btn { flex: none; white-space: nowrap; }
+
+/*
+ * 密碼鎖。網站是私人的工作工具，網址分享出去就收不回來，所以進站前先擋一道。
+ * 樣式獨立於其他元件：鎖住時整個 body 只剩這一塊。
+ */
+.lock-gate {
+  position: fixed; inset: 0; z-index: 200; display: flex;
+  align-items: center; justify-content: center; padding: 24px;
+  background: var(--bg);
+}
+.lock-box {
+  width: 100%; max-width: 360px; text-align: center;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; box-shadow: var(--shadow); padding: 28px 22px;
+}
+.lock-box h1 { margin: 0 0 6px; font-size: 19px; }
+.lock-box p { margin: 0 0 16px; font-size: 14px; color: var(--muted); line-height: 1.6; }
+.lock-box form { display: flex; flex-direction: column; gap: 10px; }
+/* 手機上字級小於 16px 會被 Safari 自動放大，整個版面就歪了 */
+.lock-box input {
+  width: 100%; padding: 11px 12px; font-size: 16px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg); color: var(--text);
+}
+.lock-box .btn { padding: 11px 16px; font-size: 16px; justify-content: center; }
+.lock-msg { margin: 14px 0 0; color: var(--danger); font-size: 14px; }
+.lock-note { margin: 14px 0 0; font-size: 13px; }
