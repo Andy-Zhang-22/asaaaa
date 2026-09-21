@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260921-149';
+  const APP_VERSION = '20260921-150';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -4847,11 +4847,33 @@ export default {
     if (!list.length) { toast('沒有可以匯出的客戶'); return; }
     const rows = [EXPORT_HEAD];
     list.forEach((r) => {
-      const mine = state.logs.filter((l) => l.recordId === r.id)
-        .sort((a, b) => b.createdAt - a.createdAt)
-        .map((l) => `${l.date ? rocSlash(l.date) : ''}${l.createdAt ? ` ${timeLabel(l.createdAt)}` : ''} [${window.Normalize.outcomeLabel(l.outcome)}] ${l.text}`.trim());
-      const notes = [...mine, r.notesRaw || ''].filter(Boolean).join('\n');
-      rows.push([r.company, r.taxId, r.grade, r.founded, r.capital, r.phoneRaw, r.owner, r.keyman, r.industry,
+      /*
+       * 訪談內容要跟畫面一致：同老闆的公司訪談互通，時間軸上看得到的是整組合起來的。
+       *
+       * 原本只收這一筆自己的紀錄，結果像「星彩實業」這種自己沒記過、訪談都記在同組
+       * 「星焱實業」上的公司，匯出來訪談內容整格是空的——使用者看到的畫面明明有。
+       * 借來的那幾則標上是哪一家的：一來知道那通電話是打給誰，二來這個檔案可以再拖回
+       * 網站，不標的話別家的紀錄會變成這家自己的。
+       */
+      const bundle = notesBundle(r);
+      const lines = bundle.logs
+        .map((l) => `${l.date ? rocSlash(l.date) : ''}${l.createdAt ? ` ${timeLabel(l.createdAt)}` : ''}`
+          + ` [${window.Normalize.outcomeLabel(l.outcome)}]${l.company ? `（${l.company}）` : ''} ${l.text}`.replace(/\s+$/, ''))
+        .filter((line) => line.replace(/^[\d/:\s]*\[[^\]]*\]\s*/, '').trim());
+      const peerNotes = bundle.peers
+        .map((id) => state.records.find((x) => x.id === id))
+        .filter((x) => x && x.notesRaw)
+        .map((x) => `（${x.company}）${x.notesRaw}`);
+      const notes = [...lines, r.notesRaw || '', ...peerNotes].filter(Boolean).join('\n');
+      /*
+       * 電話同理：自己沒號碼時畫面上顯示的是同組借來的那支，匯出也要帶，
+       * 並標明是哪一家的——業務照著打過去才不會講錯公司名。
+       */
+      const phone = r.phoneRaw
+        || (r.phones && r.phones.length
+          ? `${r.phones.map((p) => p.display).filter(Boolean).join('\n')}${r.phonesFrom ? `（${r.phonesFrom}）` : ''}`
+          : '');
+      rows.push([r.company, r.taxId, r.grade, r.founded, r.capital, phone, r.owner, r.keyman, r.industry,
         r.nextDate ? ymdShort(r.nextDate) : '', r.lastDate ? ymdShort(r.lastDate) : '', notes,
         r.addressRegistered, r.addedDate ? ymdShort(r.addedDate) : '', r.country || '台灣',
         r.addressActual === r.addressRegistered ? '' : r.addressActual]);
