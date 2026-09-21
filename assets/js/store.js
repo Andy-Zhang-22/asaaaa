@@ -202,20 +202,48 @@
      * 換掉的話別台裝置會當成新的一筆，結果變兩則。改動時間另外記在 updatedAt，
      * 讓同步端知道哪一邊比較新。
      */
-    async updateLog(logId, patch) {
-      const row = await tx('logs', 'readonly', (store) => req2promise(store.get(logId)));
-      if (!row) return null;
+    /*
+     * 找出那一則紀錄：先用 logId，找不到再用 uid。
+     *
+     * logId 是 IndexedDB 的自動編號，**同步過後會重新編號**（replaceAll 會把 logId
+     * 拿掉讓本機重配，避免兩台裝置撞號）。所以畫面上拿在手裡的 logId 可能已經對不到
+     * 任何一列了——使用者回報的「無法更新訪談紀錄」就是這個。
+     * uid 才是跨裝置穩定的身分，logId 對不到就改用它。
+     */
+    async findLog(logId, uid) {
+      if (logId !== undefined && logId !== null) {
+        const row = await tx('logs', 'readonly', (store) => req2promise(store.get(logId)));
+        if (row) return row;
+      }
+      if (!uid) return null;
+      const all = await api.allLogs();
+      return all.find((l) => l.uid === uid) || null;
+    },
+
+    /*
+     * 找不到就丟錯，不要回 null。
+     *
+     * 原本是 return null 靜靜結束——呼叫端的 try/catch 不會觸發，畫面照樣跳
+     * 「已更新這則紀錄」，但內容根本沒變。使用者看到的就是「改了，可是沒改到」。
+     * 寫完再讀回來對一次，確定真的寫進去了。
+     */
+    async updateLog(logId, patch, uid) {
+      const row = await api.findLog(logId, uid);
+      if (!row) throw new Error('找不到這則紀錄（可能剛同步過，編號變了），請重新整理再試一次');
       const next = { ...row, ...patch, logId: row.logId, uid: row.uid,
         createdAt: row.createdAt, updatedAt: Date.now() };
       await tx('logs', 'readwrite', (store) => store.put(next));
+      const back = await tx('logs', 'readonly', (store) => req2promise(store.get(row.logId)));
+      if (!back || back.text !== next.text) throw new Error('寫得進去卻讀不回來');
       return next;
     },
 
-    async deleteLog(logId) {
-      const row = await tx('logs', 'readonly', (store) => req2promise(store.get(logId)));
-      await tx('logs', 'readwrite', (store) => store.delete(logId));
+    async deleteLog(logId, uid) {
+      const row = await api.findLog(logId, uid);
+      if (!row) throw new Error('找不到這則紀錄（可能剛同步過，編號變了），請重新整理再試一次');
+      await tx('logs', 'readwrite', (store) => store.delete(row.logId));
       // 留下墓碑，否則下次同步會把它從別台裝置救回來
-      if (row && row.uid) await api.addTombstone('logs', row.uid);
+      if (row.uid) await api.addTombstone('logs', row.uid);
     },
 
     allLogs() {

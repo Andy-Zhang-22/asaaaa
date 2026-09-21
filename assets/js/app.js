@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260921-150';
+  const APP_VERSION = '20260921-151';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -2930,7 +2930,8 @@
     // 時間軸：本機紀錄 + PDF 原始訪談內容
     const bundle = notesBundle(r);
     const mineLogs = bundle.logs
-      .map((l) => ({ date: l.date, time: l.createdAt ? timeLabel(l.createdAt) : '', text: l.text || `（${window.Normalize.outcomeLabel(l.outcome)}）`, mine: true, logId: l.logId, company: l.company, own: !l.company }));
+      // uid 也要帶：logId 同步過後會重新編號，改／刪時要靠 uid 才找得回那一則
+      .map((l) => ({ date: l.date, time: l.createdAt ? timeLabel(l.createdAt) : '', text: l.text || `（${window.Normalize.outcomeLabel(l.outcome)}）`, mine: true, logId: l.logId, uid: l.uid, company: l.company, own: !l.company }));
     // 同組其他家名單檔裡的訪談內容也列進來，標出是哪一家的
     const peerEntries = bundle.peers.flatMap((id) => {
       const x = state.records.find((y) => y.id === id);
@@ -2981,7 +2982,8 @@
               const text = box.value.trim();
               // 跟新增一樣：存不進去要講出來，不要靜悄悄地把修改吃掉
               try {
-                await window.Store.updateLog(e.logId, { text, date: when.value || e.date });
+                // uid 一起傳：logId 同步過後會重新編號，對不到就靠 uid 找
+                await window.Store.updateLog(e.logId, { text, date: when.value || e.date }, e.uid);
                 state.logs = await window.Store.allLogs();
               } catch (err) {
                 console.error('修改通話紀錄失敗', err);
@@ -3007,7 +3009,7 @@
           del.onclick = async () => {
             if (!await askConfirm('確定刪除這則紀錄嗎？', { danger: true, okText: '刪除' })) return;
             try {
-              await window.Store.deleteLog(e.logId);
+              await window.Store.deleteLog(e.logId, e.uid);
               state.logs = await window.Store.allLogs();
             } catch (err) {
               console.error('刪除通話紀錄失敗', err);
