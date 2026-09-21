@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260921-148';
+  const APP_VERSION = '20260921-149';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -2489,6 +2489,9 @@
     editBtn.onclick = () => openEditor(r.id);
     const dealBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '承作檢核' });
     dealBtn.onclick = () => openDealCheck(r.id);
+    // 單筆匯出：要把一家的資料交出去時，不必整份匯出再自己刪剩一列
+    const xlsxBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '匯出 Excel' });
+    xlsxBtn.onclick = () => exportOneXlsx(r.id);
     // 公司名稱旁一顆複製：查商工登記、找 104、貼進系統都要打公司名，打字容易錯
     const copyName = copyDot(r.company, `複製公司名稱 ${r.company}`, `已複製：${r.company}`,
       '這個瀏覽器不讓網頁複製，請長按公司名稱手動複製');
@@ -2535,6 +2538,7 @@
         chanceBtn('no'),
         editBtn,
         dealBtn,
+        xlsxBtn,
         deleteBtn(r),
       ].filter(Boolean)),
       r.chanceFrom ? el('p', { className: 'muted', textContent: `${r.chance === 'yes' ? '有機會' : '無機會'} 是跟著同老闆的「${r.chanceFrom}」，整組一起算。在這裡按也可以，會以最後按的為準。` }) : '',
@@ -4829,10 +4833,20 @@ export default {
   const rocSlash = (iso) => { const [y, m, d] = String(iso).split('-'); return `${+y - 1911}/${m}/${d}`; };
   const ymdShort = (iso) => { const [y, m, d] = String(iso).split('-'); return `${y}/${+m}/${+d}`; };
 
-  function exportXlsx() {
+  /** 把檔名裡不能用的字換掉，不然某些系統存不了檔（公司名常有括號、斜線）。 */
+  const safeFileName = (name) => String(name || '').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+
+  /*
+   * views 不給就是整份名單；給了就只匯那幾筆。
+   * 單筆匯出走的是同一個函式，所以格式（欄位、樣式、民國年、列高）跟整份的一模一樣——
+   * 不另外寫一份，免得兩邊哪天走鐘。
+   */
+  function exportXlsx(views, filename) {
     if (!window.XLSX) { toast('Excel 元件沒有載入，請重新整理頁面再試'); return; }
+    const list = views || allViews();
+    if (!list.length) { toast('沒有可以匯出的客戶'); return; }
     const rows = [EXPORT_HEAD];
-    allViews().forEach((r) => {
+    list.forEach((r) => {
       const mine = state.logs.filter((l) => l.recordId === r.id)
         .sort((a, b) => b.createdAt - a.createdAt)
         .map((l) => `${l.date ? rocSlash(l.date) : ''}${l.createdAt ? ` ${timeLabel(l.createdAt)}` : ''} [${window.Normalize.outcomeLabel(l.outcome)}] ${l.text}`.trim());
@@ -4873,8 +4887,22 @@ export default {
     const wb = window.XLSX.utils.book_new();
     window.XLSX.utils.book_append_sheet(wb, ws, '名單');
     const out = window.XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-    download(`電話推廣名單_${todayISO()}.xlsx`, out,
+    download(filename || `電話推廣名單_${todayISO()}.xlsx`, out,
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  }
+
+  /*
+   * 單筆匯出。
+   *
+   * 要把一家客戶的資料交出去（給主管、給徵信、貼進別的表）時，整份名單匯出來再自己
+   * 刪剩一列很花時間，而且容易連別家客戶的資料一起送出去。
+   * 格式沿用整份匯出那一套，所以拿到的檔案跟平常的母檔長得一樣，改完還能直接拖回網站。
+   */
+  function exportOneXlsx(id) {
+    const r = allViews().find((x) => x.id === id);
+    if (!r) { toast('找不到這筆客戶'); return; }
+    exportXlsx([r], `${safeFileName(r.company) || '客戶'}_${todayISO()}.xlsx`);
+    toast(`已匯出「${r.company}」`);
   }
 
   /* ---------------- 雲端同步 ---------------- */
