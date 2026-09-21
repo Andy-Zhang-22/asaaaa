@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260921-147';
+  const APP_VERSION = '20260921-148';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -285,9 +285,18 @@
    */
   const NOTIFIED_KEY = 'remind-notified';
   async function setReminder(recordId, remindAt, note) {
-    await saveState(recordId, { remindAt: remindAt || null, remindNote: remindAt ? (note || '') : '', remindSetAt: Date.now() });
+    // 存不進去要講出來：以前沒有 try，失敗就是一個沒人看得到的錯誤，
+    // 畫面上的提醒時間動都不動，使用者只會覺得「調整一直失敗」
+    try {
+      await saveState(recordId, { remindAt: remindAt || null, remindNote: remindAt ? (note || '') : '', remindSetAt: Date.now() });
+    } catch (err) {
+      console.error('設定回撥提醒失敗', err);
+      toast(`提醒存不進去：${err && err.message ? err.message : err}。請重新整理再試一次。`);
+      return false;
+    }
     scheduleSync();
     render();
+    return true;
   }
   function reminders() {
     return allViews().filter((r) => r.remindAt).sort((a, b) => a.remindAt - b.remindAt);
@@ -417,6 +426,7 @@
         const done = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '完成', title: '取消這個提醒' });
         done.onclick = () => setReminder(r.id, null);
         const later = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '延 15 分' });
+        // 同樣在按下去的那一刻才算：從「現在」和「原訂時間」取晚的那個再加 15 分
         later.onclick = () => setReminder(r.id, Math.max(Date.now(), r.remindAt) + 15 * 60000, r.remindNote);
         actions.append(done, later);
       }
@@ -459,19 +469,44 @@
     }
     const note = el('input', { type: 'text', className: 'remind-note', placeholder: '備註（例如：找財務長、老闆 3 點開完會）', value: r.remindNote || '' });
     const quick = el('div', { className: 'card-actions' });
-    const at = (ts) => async () => { await setReminder(r.id, ts, note.value.trim()); openDetail(r.id); toast(`已設提醒：${whenLabel(ts)} 回撥 ${r.company}`); };
+    const at = async (ts) => {
+      if (!(await setReminder(r.id, ts, note.value.trim()))) return;
+      openDetail(r.id);
+      toast(`已設提醒：${whenLabel(ts)} 回撥 ${r.company}`);
+    };
+    /*
+     * 時間一律在「按下去的那一刻」才算，不是畫面畫出來的那一刻。
+     *
+     * 原本是 b.onclick = at(Date.now() + 60 分鐘)——那個時間戳在 render 時就定下來了。
+     * 實際使用是：打開詳細頁、講電話、講完才按「1 小時後」，於是設進去的是「開頁面
+     * 之後一小時」，早就過了；畫面照樣顯示「該回撥了」，看起來就是「調整一直失敗」。
+     * 整點按鈕更明顯：清單是 render 當下過濾的，頁面開著放到 11 點之後，11:00 還在
+     * 那裡可以按，按了就設進一個過去的時間。
+     */
     [['30 分鐘後', 30], ['1 小時後', 60], ['2 小時後', 120]].forEach(([label, mins]) => {
       const b = el('button', { className: 'btn btn-tiny', type: 'button', textContent: label });
-      b.onclick = at(Date.now() + mins * 60000);
+      b.onclick = () => at(Date.now() + mins * 60000);
       quick.append(b);
     });
-    // 今天的整點：過了的就不列（列了也沒意義）
+    // 今天的整點。已經過了的不列；但頁面開著會放到過期，所以按下去時還要再確認一次
     const today = new Date();
     [9, 10, 11, 13, 14, 15, 16, 17].forEach((h) => {
       const ts = new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, 0, 0, 0).getTime();
       if (ts <= Date.now()) return;
       const b = el('button', { className: 'btn btn-tiny', type: 'button', textContent: `${h}:00` });
-      b.onclick = at(ts);
+      b.onclick = async () => {
+        const now = Date.now();
+        if (ts > now) { await at(ts); return; }
+        // 已經過了：設進去只會變成「該回撥了」，等於白按。改設明天同一個時間並講明
+        const d = new Date(ts + 24 * 3600 * 1000);
+        const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const got = window.Holidays ? window.Holidays.nextWorkday(iso) : { iso, moved: false };
+        const [y, m, day] = got.iso.split('-').map(Number);
+        const next = new Date(y, m - 1, day, h, 0, 0, 0).getTime();
+        if (!(await setReminder(r.id, next, note.value.trim()))) return;
+        openDetail(r.id);
+        toast(`今天 ${h}:00 已經過了，改設 ${whenLabel(next)} 回撥`);
+      };
       quick.append(b);
     });
     const custom = el('input', { type: 'datetime-local', className: 'remind-custom' });
@@ -479,6 +514,8 @@
     customBtn.onclick = async () => {
       const ts = custom.value ? new Date(custom.value).getTime() : NaN;
       if (!ts) { toast('請先選日期時間'); return; }
+      // 選到已經過去的時間，設進去馬上就是「該回撥了」，跟沒設一樣——直接擋掉並講明
+      if (ts <= Date.now()) { toast(`${whenLabel(ts)} 已經過了，請選一個之後的時間`); return; }
       /*
        * 撞到國定假日或週末就順延到下一個上班日，時間點（幾點幾分）照留。
        * 連假整串會一起跳過，因為是一天一天往後找的。
@@ -486,10 +523,10 @@
       const d = new Date(ts);
       const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       const got = window.Holidays ? window.Holidays.nextWorkday(iso) : { iso, moved: false };
-      if (!got.moved) { await at(ts)(); return; }
+      if (!got.moved) { await at(ts); return; }
       const [y, m, day] = got.iso.split('-').map(Number);
       const moved = new Date(y, m - 1, day, d.getHours(), d.getMinutes(), 0, 0).getTime();
-      await at(moved)();
+      await at(moved);
       toast(`${dateLabel(got.from)} 是${got.reason}，提醒順延到 ${whenLabel(moved)}`);
     };
     sec.append(note, quick, el('div', { className: 'card-actions' }, [custom, customBtn]));
