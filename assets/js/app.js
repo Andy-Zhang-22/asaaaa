@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260921-153';
+  const APP_VERSION = '20260921-154';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -464,14 +464,34 @@
    * 完整清單還是在下面的「變更登記」，這裡只求一眼看完。
    */
   function regChangeBrief(r) {
-    if (!r.regChange || !r.regKinds || !r.regKinds.length) return '';
-    if (r.regKinds[0] === 'none' || r.regKinds[0] === 'unchecked') return '';
-    const kinds = r.regKinds.map((k) => REG_KIND_LABEL[k]).join('、');
-    const bits = Object.entries(r.regChange.changes || {}).map(([key, ch]) => {
-      const label = (REGISTRY_FIELDS.find(([k]) => k === key) || [, key])[1];
-      return `${label} ${ch.from || '（空）'} → ${ch.to}`;
-    });
-    return bits.length ? `查到${kinds}：${bits.join('、')}` : `查到${kinds}`;
+    const hist = r.regChanges || [];
+    if (!hist.length) return '';
+    // 每次一段「種類＋日期」，欄位前後值留給下面的變更登記那一列，這裡塞不下
+    const bits = hist.slice(0, 3).map((c) => `${(c.kinds || []).map((k) => REG_KIND_LABEL[k]).join('、')} ${dateLabel(c.date)}`);
+    const more = hist.length > bits.length ? `，另外還有 ${hist.length - bits.length} 次` : '';
+    return `查到${bits.join('；')}${more}`;
+  }
+
+  /*
+   * 卡片上的變更登記標記要帶日期。
+   *
+   * 只寫「增資」看不出是這禮拜還是三月的事——而且變更只要查到就一直留著，
+   * 不會自己過期，沒有日期就等於把半年前的當成新的在打。
+   * 標記很窄，所以今年的只寫月日，跨年才補年份：舊的絕不能看起來像新的。
+   */
+  const regKindDateLabel = (iso) => {
+    const [y, m, d] = String(iso || '').split('-');
+    if (!y) return '';
+    return y === todayISO().slice(0, 4) ? `${+m}/${+d}` : `${y}/${+m}/${+d}`;
+  };
+  function regBadgeText(r) {
+    return r.regKinds
+      .filter((k) => k !== 'none' && k !== 'unchecked')
+      .map((k) => {
+        const at = regKindDateLabel(r.regKindDate && r.regKindDate[k]);
+        return at ? `${REG_KIND_LABEL[k]} ${at}` : REG_KIND_LABEL[k];
+      })
+      .join('、');
   }
 
   /** 詳細頁的「回撥提醒」區塊 */
@@ -652,8 +672,15 @@
     // 有沒有統編：欄位裡有數字就算有（編輯過的以編輯後為準）
     out.taxKind = /\d/.test(String(out.taxId || '')) ? 'yes' : 'no';
     out.phoneKind = (out.phones && out.phones.length) ? 'yes' : 'no';
-    // 變更登記：最近一次查到異動的種類；查過但從沒異動＝無變更；沒查過＝未查核
-    out.regChange = (mine && mine.regChange) || null;
+    /*
+     * 變更登記：歷次查到的異動，新到舊。
+     *
+     * 以前只留最後一次，9/16 查到增資、10/8 查到變更地址，增資那件事就被蓋掉了——
+     * 篩「增資」撈不到這家，詳細頁也看不出他增過資。現在整串留著。
+     * regChange 仍然是最近那一次，給舊版與只要看一眼的地方用。
+     */
+    out.regChanges = window.DriveSync.regHistoryOf(mine);
+    out.regChange = out.regChanges[0] || null;
     out.regAt = (mine && mine.regAt) || 0;
     out.regError = (mine && mine.regError) || '';
     // 歸屬分公司：依規範用「公司登記地址」對劃分表；卡片標示與篩選都用這個
@@ -670,9 +697,22 @@
     // 提醒列上按過「完成」的那一天，當天就不再列出來（見 remindItems）
     out.dueDoneOn = (mine && mine.dueDoneOn) || '';
     out.remindNote = (mine && mine.remindNote) || '';
-    out.regKinds = out.regChange && out.regChange.kinds && out.regChange.kinds.length
-      ? out.regChange.kinds
-      : (out.regAt && !out.regError ? ['none'] : ['unchecked']);
+    /*
+     * 篩選要撈得到每一次查到的變更：9/16 增資、10/8 變更地址，兩個籤都該有這家。
+     * regKindDate 記每一種最近那次的日期，卡片標記才寫得出「增資 9/16」。
+     */
+    {
+      const kinds = [];
+      const dates = {};
+      out.regChanges.forEach((c) => (c.kinds || []).forEach((k) => {
+        if (!kinds.includes(k)) kinds.push(k);
+        if (!dates[k]) dates[k] = c.date;   // regChanges 已經是新到舊，第一個就是最近的
+      }));
+      out.regKindDate = dates;
+      out.regKinds = kinds.length
+        ? REG_KIND_ORDER.filter((k) => kinds.includes(k))
+        : (out.regAt && !out.regError ? ['none'] : ['unchecked']);
+    }
     /*
      * 禁止推廣獨立於 outcome。
      *
@@ -2309,7 +2349,7 @@
       (r.scale || capitalScale(r)) === '微企範疇' ? el('span', { className: 'badge badge-micro', textContent: '微企範疇' }) : '',
       (r.scale || capitalScale(r)) === '大企部範疇' ? el('span', { className: 'badge badge-large', textContent: '大企部範疇' }) : '',
       r.regChange && r.regKinds[0] !== 'none' && r.regKinds[0] !== 'unchecked'
-        ? el('span', { className: 'badge badge-regchange', textContent: r.regKinds.map((k) => REG_KIND_LABEL[k]).join('、') }) : '',
+        ? el('span', { className: 'badge badge-regchange', textContent: regBadgeText(r), title: regChangeBrief(r) }) : '',
       r.branch && r.branch.kind === 'branch' ? el('span', { className: 'badge badge-branch', textContent: r.branchKey, title: r.branch.label }) : '',
       r.branch && r.branch.kind === 'common' ? el('span', { className: 'badge badge-branch badge-branch-common', textContent: r.branchKey, title: r.branch.label }) : '',
       r.branch && r.branch.kind === 'shared' ? el('span', { className: 'badge badge-branch badge-branch-common', textContent: '全公司共同區域' }) : '',
@@ -2699,12 +2739,31 @@
     {
       dl.append(el('dt', { textContent: '變更登記' }));
       const dd = el('dd');
-      if (r.regChange) {
-        dd.append(document.createTextNode(`${r.regKinds.map((k) => REG_KIND_LABEL[k]).join('、')}（${dateLabel(r.regChange.date)} 查到，已套用）`));
-        Object.entries(r.regChange.changes || {}).forEach(([key, ch]) => {
-          const label = (REGISTRY_FIELDS.find(([k]) => k === key) || [, key])[1];
-          dd.append(el('div', { className: 'muted', textContent: `${label}：${ch.from || '（空）'} → ${ch.to}` }));
+      if (r.regChanges && r.regChanges.length) {
+        /*
+         * 歷次變更全部列出來，新到舊。
+         *
+         * 只留最後一次的時候，10/8 查到變更地址就把 9/16 的增資蓋掉了，
+         * 看的人以為這家從來沒增過資。變更是一件一件發生的，就一件一件記。
+         */
+        const ol = el('ol', { className: 'reg-history' });
+        r.regChanges.forEach((c) => {
+          const li = el('li', {}, [
+            el('b', { textContent: `${dateLabel(c.date)}　${(c.kinds || []).map((k) => REG_KIND_LABEL[k]).join('、')}` }),
+          ]);
+          Object.entries(c.changes || {}).forEach(([key, ch]) => {
+            const label = (REGISTRY_FIELDS.find(([k]) => k === key) || [, key])[1];
+            li.append(el('div', { className: 'muted', textContent: `${label}：${ch.from || '（空）'} → ${ch.to}` }));
+          });
+          ol.append(li);
         });
+        dd.append(ol);
+        dd.append(el('div', {
+          className: 'muted',
+          textContent: r.regChanges.length > 1
+            ? `共 ${r.regChanges.length} 次，都已依登記更新上面的欄位。`
+            : '已依登記更新上面的欄位。',
+        }));
       } else {
         if (r.regError) {
           dd.append(document.createTextNode('未查核：查不到'));
@@ -3658,8 +3717,8 @@ export default {
   }
 
   /**
-   * 把這次查核記到每筆的追蹤狀態：regAt＝最近查核時間；有異動的另外記 regChange
-   * （日期、種類、欄位前後值），沒異動的保留上一次的 regChange，篩選才看得到
+   * 把這次查核記到每筆的追蹤狀態：regAt＝最近查核時間；有異動的往 regChanges
+   * 這串歷程加一筆（日期、種類、欄位前後值），沒異動的什麼都不加，篩選才看得到
    * 「這家今年增資過」，不會隔天套用完就變回無變更。
    */
   async function recordRegistryChecks(checked, failures) {
@@ -3676,7 +3735,14 @@ export default {
       if (kinds.length) {
         const kept = {};
         Object.entries(c.changes).forEach(([key, ch]) => { if (String(ch.from || '').trim()) kept[key] = ch; });
-        patch.regChange = { date, kinds, changes: kept };
+        const entry = { date, kinds, changes: kept };
+        /*
+         * 往上加，不是覆蓋：這次查到變更地址，不代表上次查到的增資沒發生過。
+         * 同一天同樣種類算同一次（手動重跑一輪不會多出一筆）。
+         */
+        const prev = window.DriveSync.regHistoryOf(state.userStates.get(c.rec.id));
+        patch.regChanges = window.DriveSync.mergeRegChanges([entry], prev);
+        [patch.regChange] = patch.regChanges;   // 還沒更新的裝置只看得懂這一欄
       }
       await saveState(c.rec.id, patch);
     }
