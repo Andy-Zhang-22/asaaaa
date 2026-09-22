@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260922-155';
+  const APP_VERSION = '20260922-156';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -48,6 +48,15 @@
 
   // 打到一半的通話紀錄（每家各一份）。localStorage 失效時靠這個撐過詳細頁重畫。
   const logDrafts = new Map();
+  /*
+   * 回撥備註的草稿，以及「還沒寫完就要離開」的收尾。
+   *
+   * 備註輸入框原本只有在按時間鈕的那一刻才被讀取，本身什麼都不存：打好備註去按
+   * 「儲存紀錄」，詳細頁一重畫就換回資料庫裡的舊值——使用者說的「紀錄會被洗掉」。
+   * 而且提醒設好之後那個框其實是動不了的，想改備註只能重按時間鈕，連時間一起改。
+   */
+  const remindNoteDrafts = new Map();
+  const remindNoteFlush = new Map();
 
   const state = {
     records: [],
@@ -499,22 +508,99 @@
     const sec = el('div', { className: 'detail-section remind-section' });
     sec.append(el('h3', { textContent: '回撥提醒' }));
     const now = Date.now();
+    // 備註存進去之後，上面那行要立刻跟著變，不然看起來像沒生效
+    let noteEcho = null;
     if (r.remindAt) {
+      noteEcho = el('span', { textContent: r.remindNote ? `　${r.remindNote}` : '' });
       const cur = el('p', { className: `rule-verdict ${r.remindAt <= now ? 'is-fail' : 'is-ok'}` }, [
         el('strong', { textContent: `${r.remindAt <= now ? '該回撥了：' : '約 '}${whenLabel(r.remindAt)}${r.remindAt > now ? ' 回撥' : ''}` }),
-        r.remindNote ? el('span', { textContent: `　${r.remindNote}` }) : null,
-      ].filter(Boolean));
+        noteEcho,
+      ]);
       const cancel = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '完成／取消提醒' });
-      cancel.onclick = async () => { await setReminder(r.id, null); openDetail(r.id); toast('已取消提醒'); };
+      cancel.onclick = async () => {
+        stopNote(); clearNoteDraft();     // 提醒沒了，備註也就沒有意義
+        await setReminder(r.id, null); openDetail(r.id); toast('已取消提醒');
+      };
       cur.append(document.createTextNode('　'), cancel);
       sec.append(cur);
     } else {
       sec.append(el('p', { className: 'muted', textContent: '客戶說晚點再打？按一下時間，名單頁最上面會提醒你。' }));
     }
-    const note = el('input', { type: 'text', className: 'remind-note', placeholder: '備註（例如：找財務長、老闆 3 點開完會）', value: r.remindNote || '' });
+    /*
+     * 備註要自己活下來。
+     *
+     * 草稿存兩份（localStorage 與記憶體），理由跟通話紀錄的草稿一樣：localStorage
+     * 失效的時候完全無聲，打到一半的字會在下一次重畫時消失。
+     */
+    const NOTE_DRAFT_KEY = `remind-note-draft:${r.id}`;
+    const readNoteDraft = () => {
+      try { const v = localStorage.getItem(NOTE_DRAFT_KEY); if (v !== null) return v; } catch (e) { /* 無痕模式 */ }
+      return remindNoteDrafts.has(r.id) ? remindNoteDrafts.get(r.id) : null;
+    };
+    const writeNoteDraft = (v) => {
+      remindNoteDrafts.set(r.id, v);
+      try { localStorage.setItem(NOTE_DRAFT_KEY, v); } catch (e) { /* 無痕模式 */ }
+    };
+    const clearNoteDraft = () => {
+      remindNoteDrafts.delete(r.id);
+      try { localStorage.removeItem(NOTE_DRAFT_KEY); } catch (e) { /* 無痕模式 */ }
+    };
+
+    let savedNote = r.remindNote || '';
+    const draft = readNoteDraft();
+    const note = el('input', { type: 'text', className: 'remind-note', placeholder: '備註（例如：找財務長、老闆 3 點開完會）',
+      value: draft === null ? savedNote : draft });
+    const noteOk = el('span', { className: 'muted note-ok', hidden: true, textContent: '備註已更新' });
+    const noteHint = el('p', { className: 'muted remind-note-hint', hidden: true });
+    /*
+     * 還沒設提醒的備註不寫進追蹤狀態：同步合併時沒有提醒的備註會被丟掉
+     * （`if (!out.remindAt) delete out.remindNote`），寫了只是製造「別台看不到」。
+     * 所以先留本機草稿，並且講明它還不是提醒。
+     */
+    const refreshNoteHint = () => {
+      const pending = !r.remindAt && note.value.trim();
+      noteHint.textContent = pending ? '備註先留著。按上面的時間設成提醒之後，備註才會一起存起來。' : '';
+      noteHint.hidden = !pending;
+    };
+    let noteTimer = 0;
+    const stopNote = () => { clearTimeout(noteTimer); noteTimer = 0; };
+    const commitNote = async () => {
+      stopNote();
+      const v = note.value.trim();
+      if (!r.remindAt) { writeNoteDraft(note.value); refreshNoteHint(); return; }
+      if (v === savedNote) { clearNoteDraft(); return; }
+      try {
+        // 只動備註，不動提醒時間；remindSetAt 要跟著換，雲端合併才知道這邊比較新
+        await saveState(r.id, { remindNote: v, remindSetAt: Date.now() });
+      } catch (err) {
+        console.error('備註存不進去', err);
+        writeNoteDraft(note.value);           // 存不進去至少別讓字消失
+        toast(`備註存不進去：${err && err.message ? err.message : err}。你打的字還留著。`);
+        return;
+      }
+      savedNote = v;
+      clearNoteDraft();
+      if (noteEcho) noteEcho.textContent = v ? `　${v}` : '';
+      noteOk.hidden = false;
+      setTimeout(() => { noteOk.hidden = true; }, 2000);
+      scheduleSync();
+      render();                               // 名單頁的提醒列也要跟著換
+    };
+    remindNoteFlush.set(r.id, commitNote);
+    note.addEventListener('input', () => {
+      writeNoteDraft(note.value);             // 先落地，再慢慢寫進去
+      refreshNoteHint();
+      stopNote();
+      noteTimer = setTimeout(() => { commitNote().catch((e) => console.error(e)); }, 600);
+    });
+    note.addEventListener('blur', () => { commitNote().catch((e) => console.error(e)); });
+    refreshNoteHint();
+
     const quick = el('div', { className: 'card-actions' });
     const at = async (ts) => {
+      stopNote();
       if (!(await setReminder(r.id, ts, note.value.trim()))) return;
+      clearNoteDraft();                       // 已經寫進提醒裡了
       openDetail(r.id);
       toast(`已設提醒：${whenLabel(ts)} 回撥 ${r.company}`);
     };
@@ -547,7 +633,9 @@
         const got = window.Holidays ? window.Holidays.nextWorkday(iso) : { iso, moved: false };
         const [y, m, day] = got.iso.split('-').map(Number);
         const next = new Date(y, m - 1, day, h, 0, 0, 0).getTime();
+        stopNote();
         if (!(await setReminder(r.id, next, note.value.trim()))) return;
+        clearNoteDraft();
         openDetail(r.id);
         toast(`今天 ${h}:00 已經過了，改設 ${whenLabel(next)} 回撥`);
       };
@@ -573,7 +661,8 @@
       await at(moved);
       toast(`${dateLabel(got.from)} 是${got.reason}，提醒順延到 ${whenLabel(moved)}`);
     };
-    sec.append(note, quick, el('div', { className: 'card-actions' }, [custom, customBtn]));
+    sec.append(el('div', { className: 'remind-note-row' }, [note, noteOk]), noteHint,
+      quick, el('div', { className: 'card-actions' }, [custom, customBtn]));
     return sec;
   }
 
@@ -2918,6 +3007,15 @@
       save.disabled = true;               // 存的時候連點兩下會變成兩則一樣的紀錄
       const wasLabel = save.textContent;
       save.textContent = '儲存中…';
+      /*
+       * 先把回撥備註寫完再存紀錄。
+       *
+       * 備註是打完字 600 毫秒後才寫進去的，而這裡存完會重畫詳細頁。兩件事撞在
+       * 一起的話，重畫會把備註換回資料庫裡的舊值——打好的備註就這樣沒了。
+       * commitNote 沒有要寫的東西時是空轉，重複呼叫沒有副作用。
+       */
+      const flushNote = remindNoteFlush.get(r.id);
+      if (flushNote) { try { await flushNote(); } catch (e) { console.error('備註寫入失敗', e); } }
       const fail = (err, what) => {
         console.error(what, err);
         const why = err && err.message ? err.message : String(err);

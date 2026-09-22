@@ -450,6 +450,11 @@ button, input, select { font: inherit; color: inherit; }
 .badge-remind.is-due { border-color: var(--danger); color: var(--danger); font-weight: 600; }
 .draft-note { font-size: 12px; margin: 4px 0 6px; }
 .remind-note { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); margin: 6px 0; }
+.remind-note-row { display: flex; align-items: center; gap: 8px; }
+.remind-note-row .remind-note { flex: 1; min-width: 0; }
+/* 「備註已更新」只閃一下就收起來，不要跟輸入框搶位置 */
+.note-ok { white-space: nowrap; font-size: 12px; }
+.remind-note-hint { margin: 0 0 6px; font-size: 12px; }
 .remind-custom { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); }
 /* 承作檢核 */
 .deal-result h3 { font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
