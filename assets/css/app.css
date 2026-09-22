@@ -701,6 +701,8 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 /* 刪除類的主要按鈕：要一眼看出按下去會少東西 */
 .ask-actions .btn-primary.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 /* 存檔失敗的原因：toast 兩秒多就消失，錯過就不知道發生什麼事，所以留在表單上 */
+/* 存不了的那一支電話要看得出來是哪一支，不能只有下面一行字 */
+.phone-row input.is-bad { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
 .save-err {
   margin: 8px 0 0; padding: 8px 10px; font-size: 13px; line-height: 1.6;
   color: var(--danger); background: var(--surface-2);
