@@ -229,6 +229,15 @@ button, input, select { font: inherit; color: inherit; }
 }
 .detail-grid dt { color: var(--muted); }
 .detail-grid dd { margin: 0; overflow-wrap: anywhere; }
+/*
+ * 變更登記的歷程：一次一列，新到舊。日期靠左對齊，掃一眼就看得出間隔多久，
+ * 不用逐行讀。前面不放數字編號——「第 1 次」是指最新還是最舊會讓人猶豫。
+ */
+.reg-history { list-style: none; margin: 2px 0 6px; padding: 0; }
+.reg-history li { padding: 4px 0 4px 10px; border-left: 2px solid var(--border); }
+.reg-history li + li { margin-top: 2px; }
+.reg-history li:first-child { border-left-color: var(--warn); }
+.reg-history b { font-weight: 600; }
 .detail-section { margin-top: 20px; }
 .detail-section h3 { font-size: 14px; color: var(--muted); margin-bottom: 8px; }
 

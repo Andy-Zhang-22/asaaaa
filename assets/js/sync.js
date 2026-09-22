@@ -41,6 +41,36 @@
     return out;
   }
 
+  /*
+   * 變更登記的歷程是「只會往上加」的紀錄。
+   *
+   * 9/16 查到增資、10/8 查到變更地址是兩件事，不是後面那件取代前面那件。
+   * 兩台裝置各自查到的也都要留著：只取 regAt 比較新的那一份，會把另一台
+   * 查到的那幾次整個弄丟。所以這裡取聯集，同一天同樣種類算同一次。
+   */
+  const REG_HISTORY_MAX = 20;
+  function mergeRegChanges(left, right) {
+    const seen = new Set();
+    const out = [];
+    [...(left || []), ...(right || [])].forEach((e) => {
+      if (!e || !e.date || !(e.kinds || []).length) return;
+      const key = `${e.date}|${e.kinds.join(',')}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(e);
+    });
+    out.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    return out.slice(0, REG_HISTORY_MAX);
+  }
+  /**
+   * 一筆追蹤狀態的變更登記歷程（新到舊）。
+   * 舊版只存單筆 regChange，還沒更新的裝置也只會寫那一欄，所以一併收進來。
+   */
+  function regHistoryOf(st) {
+    if (!st) return [];
+    return mergeRegChanges(st.regChanges, st.regChange ? [st.regChange] : []);
+  }
+
   /** 合併同一筆客戶的兩份追蹤狀態。 */
   function mergeState(a, b) {
     const newer = (b.updatedAt || 0) >= (a.updatedAt || 0) ? b : a;
@@ -59,13 +89,18 @@
       out.groupAt = older.groupAt;
     }
     if (!out.group) { delete out.group; delete out.groupIds; }
-    // 商工登記查核結果（regAt / regChange）也一樣：取查核時間比較新的那份
+    // 商工登記的查核時間與失敗原因：取查核時間比較新的那份
     if ((older.regAt || 0) > (newer.regAt || 0)) {
       out.regAt = older.regAt;
-      out.regChange = older.regChange;
       out.regError = older.regError;
     }
-    if (!out.regChange) delete out.regChange;
+    // 變更登記歷程是兩邊聯集，不是二選一（見 mergeRegChanges）
+    {
+      const hist = mergeRegChanges(regHistoryOf(a), regHistoryOf(b));
+      // regChange 留最新一次：還沒更新的裝置只看得懂這一欄
+      if (hist.length) { out.regChanges = hist; [out.regChange] = hist; }
+      else { delete out.regChanges; delete out.regChange; }
+    }
     // 有機會／無機會：取標記時間比較新的那份（取消標記也算一次）
     if ((older.chanceAt || 0) > (newer.chanceAt || 0)) {
       out.chance = older.chance;
@@ -377,7 +412,7 @@
   }
 
   global.DriveSync = {
-    sync, mergeDumps, diffSummary, mergeTombstones, mergeState,
+    sync, mergeDumps, diffSummary, mergeTombstones, mergeState, mergeRegChanges, regHistoryOf,
     isConfigured, clientId, setClientId, signOut, getToken, describeAuthError,
     FILE_NAME, SCOPE,
   };
