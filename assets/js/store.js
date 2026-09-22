@@ -134,10 +134,51 @@
       return tx('records', 'readonly', (store) => req2promise(store.getAll()));
     },
 
-    async deleteSource(source, { keepTombstone = true } = {}) {
+    /**
+     * 刪掉整份名單。
+     *
+     * @param {string} source 名單檔名
+     * @param {object} [opts]
+     * @param {boolean} [opts.keepTombstone=true] 留「這份名單刪掉了」的墓碑，別台同步後才不會救回來。
+     *   同名重匯是「更新」不是刪除，那時要傳 false。
+     * @param {boolean} [opts.dropTrail=false] 連通話紀錄與追蹤狀態一起清掉。使用者主動刪整份時要開；
+     *   同名重匯不能開——紀錄必須繼續掛在同一個 id 上。
+     * @param {boolean} [opts.exclude=false] 再記一次「這幾家公司」的墓碑，之後別份名單也不要再帶回來。
+     */
+    async deleteSource(source, { keepTombstone = true, dropTrail = false, exclude = false } = {}) {
       const all = await api.allRecords();
-      const ids = all.filter((r) => r.source === source).map((r) => r.id);
+      const mine = all.filter((r) => r.source === source);
+      const ids = mine.map((r) => r.id);
       await tx('records', 'readwrite', (store) => ids.forEach((id) => store.delete(id)));
+      /*
+       * 「這批我都不打了」才記公司墓碑。
+       *
+       * 只記「這份名單刪掉了」擋得住同步，卻擋不住下一份名單——同樣那幾百家
+       * 換個 id 就整批回來，使用者說的「刪除名單後又會跳回來」就是這個。
+       * 但匯錯檔案也是刪整份，那時候那些公司之後還要，所以由呼叫端問清楚再決定。
+       */
+      if (exclude && mine.length) {
+        const rows = [];
+        mine.forEach((r) => {
+          window.Normalize.companyKeys(r).forEach((key) => rows.push({ key, company: r.company, taxId: r.taxId || '' }));
+        });
+        await api.addCompanyTombstones(rows);
+      }
+      /*
+       * 通話紀錄與追蹤狀態也要清掉。
+       *
+       * 留著有兩個後果：變成沒有客戶掛著的孤兒列；以及重新匯入同一份檔案時 id
+       * 會一模一樣，上次記的下次聯絡日、編輯內容整包跑回來——刪掉的東西又自己出現。
+       * 紀錄要各留一張墓碑，不然同步會把它們原封不動地帶回來（客戶靠名單墓碑擋，
+       * 追蹤狀態靠客戶已經不在擋，只有紀錄是各認各的 uid）。
+       */
+      if (dropTrail && ids.length) {
+        const idSet = new Set(ids);
+        const logs = (await api.allLogs()).filter((l) => idSet.has(l.recordId));
+        await tx('logs', 'readwrite', (store) => logs.forEach((l) => store.delete(l.logId)));
+        await api.addTombstones('logs', logs.map((l) => l.uid).filter(Boolean));
+        await tx('state', 'readwrite', (store) => ids.forEach((id) => store.delete(id)));
+      }
       if (keepTombstone && ids.length) await api.addTombstone('sources', source);
       return ids.length;
     },
@@ -290,6 +331,20 @@
       all[kind][key] = info ? { at: Date.now(), ...info } : Date.now();
       await api.setMeta('tombstones', all);
       return all;
+    },
+
+    /*
+     * 一次補上同一種的多個墓碑。理由同 addCompanyTombstones：整份名單一刪就是好幾百筆，
+     * 一筆一趟「讀出整包再寫回去」會把畫面卡住。
+     */
+    async addTombstones(kind, keys) {
+      if (!keys || !keys.length) return 0;
+      const all = (await api.getMeta('tombstones')) || {};
+      all[kind] = all[kind] || {};
+      const now = Date.now();
+      keys.forEach((k) => { if (k) all[kind][k] = now; });
+      await api.setMeta('tombstones', all);
+      return keys.length;
     },
 
     /*

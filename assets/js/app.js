@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260922-155';
+  const APP_VERSION = '20260922-158';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -48,6 +48,15 @@
 
   // 打到一半的通話紀錄（每家各一份）。localStorage 失效時靠這個撐過詳細頁重畫。
   const logDrafts = new Map();
+  /*
+   * 回撥備註的草稿，以及「還沒寫完就要離開」的收尾。
+   *
+   * 備註輸入框原本只有在按時間鈕的那一刻才被讀取，本身什麼都不存：打好備註去按
+   * 「儲存紀錄」，詳細頁一重畫就換回資料庫裡的舊值——使用者說的「紀錄會被洗掉」。
+   * 而且提醒設好之後那個框其實是動不了的，想改備註只能重按時間鈕，連時間一起改。
+   */
+  const remindNoteDrafts = new Map();
+  const remindNoteFlush = new Map();
 
   const state = {
     records: [],
@@ -499,22 +508,99 @@
     const sec = el('div', { className: 'detail-section remind-section' });
     sec.append(el('h3', { textContent: '回撥提醒' }));
     const now = Date.now();
+    // 備註存進去之後，上面那行要立刻跟著變，不然看起來像沒生效
+    let noteEcho = null;
     if (r.remindAt) {
+      noteEcho = el('span', { textContent: r.remindNote ? `　${r.remindNote}` : '' });
       const cur = el('p', { className: `rule-verdict ${r.remindAt <= now ? 'is-fail' : 'is-ok'}` }, [
         el('strong', { textContent: `${r.remindAt <= now ? '該回撥了：' : '約 '}${whenLabel(r.remindAt)}${r.remindAt > now ? ' 回撥' : ''}` }),
-        r.remindNote ? el('span', { textContent: `　${r.remindNote}` }) : null,
-      ].filter(Boolean));
+        noteEcho,
+      ]);
       const cancel = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '完成／取消提醒' });
-      cancel.onclick = async () => { await setReminder(r.id, null); openDetail(r.id); toast('已取消提醒'); };
+      cancel.onclick = async () => {
+        stopNote(); clearNoteDraft();     // 提醒沒了，備註也就沒有意義
+        await setReminder(r.id, null); openDetail(r.id); toast('已取消提醒');
+      };
       cur.append(document.createTextNode('　'), cancel);
       sec.append(cur);
     } else {
       sec.append(el('p', { className: 'muted', textContent: '客戶說晚點再打？按一下時間，名單頁最上面會提醒你。' }));
     }
-    const note = el('input', { type: 'text', className: 'remind-note', placeholder: '備註（例如：找財務長、老闆 3 點開完會）', value: r.remindNote || '' });
+    /*
+     * 備註要自己活下來。
+     *
+     * 草稿存兩份（localStorage 與記憶體），理由跟通話紀錄的草稿一樣：localStorage
+     * 失效的時候完全無聲，打到一半的字會在下一次重畫時消失。
+     */
+    const NOTE_DRAFT_KEY = `remind-note-draft:${r.id}`;
+    const readNoteDraft = () => {
+      try { const v = localStorage.getItem(NOTE_DRAFT_KEY); if (v !== null) return v; } catch (e) { /* 無痕模式 */ }
+      return remindNoteDrafts.has(r.id) ? remindNoteDrafts.get(r.id) : null;
+    };
+    const writeNoteDraft = (v) => {
+      remindNoteDrafts.set(r.id, v);
+      try { localStorage.setItem(NOTE_DRAFT_KEY, v); } catch (e) { /* 無痕模式 */ }
+    };
+    const clearNoteDraft = () => {
+      remindNoteDrafts.delete(r.id);
+      try { localStorage.removeItem(NOTE_DRAFT_KEY); } catch (e) { /* 無痕模式 */ }
+    };
+
+    let savedNote = r.remindNote || '';
+    const draft = readNoteDraft();
+    const note = el('input', { type: 'text', className: 'remind-note', placeholder: '備註（例如：找財務長、老闆 3 點開完會）',
+      value: draft === null ? savedNote : draft });
+    const noteOk = el('span', { className: 'muted note-ok', hidden: true, textContent: '備註已更新' });
+    const noteHint = el('p', { className: 'muted remind-note-hint', hidden: true });
+    /*
+     * 還沒設提醒的備註不寫進追蹤狀態：同步合併時沒有提醒的備註會被丟掉
+     * （`if (!out.remindAt) delete out.remindNote`），寫了只是製造「別台看不到」。
+     * 所以先留本機草稿，並且講明它還不是提醒。
+     */
+    const refreshNoteHint = () => {
+      const pending = !r.remindAt && note.value.trim();
+      noteHint.textContent = pending ? '備註先留著。按上面的時間設成提醒之後，備註才會一起存起來。' : '';
+      noteHint.hidden = !pending;
+    };
+    let noteTimer = 0;
+    const stopNote = () => { clearTimeout(noteTimer); noteTimer = 0; };
+    const commitNote = async () => {
+      stopNote();
+      const v = note.value.trim();
+      if (!r.remindAt) { writeNoteDraft(note.value); refreshNoteHint(); return; }
+      if (v === savedNote) { clearNoteDraft(); return; }
+      try {
+        // 只動備註，不動提醒時間；remindSetAt 要跟著換，雲端合併才知道這邊比較新
+        await saveState(r.id, { remindNote: v, remindSetAt: Date.now() });
+      } catch (err) {
+        console.error('備註存不進去', err);
+        writeNoteDraft(note.value);           // 存不進去至少別讓字消失
+        toast(`備註存不進去：${err && err.message ? err.message : err}。你打的字還留著。`);
+        return;
+      }
+      savedNote = v;
+      clearNoteDraft();
+      if (noteEcho) noteEcho.textContent = v ? `　${v}` : '';
+      noteOk.hidden = false;
+      setTimeout(() => { noteOk.hidden = true; }, 2000);
+      scheduleSync();
+      render();                               // 名單頁的提醒列也要跟著換
+    };
+    remindNoteFlush.set(r.id, commitNote);
+    note.addEventListener('input', () => {
+      writeNoteDraft(note.value);             // 先落地，再慢慢寫進去
+      refreshNoteHint();
+      stopNote();
+      noteTimer = setTimeout(() => { commitNote().catch((e) => console.error(e)); }, 600);
+    });
+    note.addEventListener('blur', () => { commitNote().catch((e) => console.error(e)); });
+    refreshNoteHint();
+
     const quick = el('div', { className: 'card-actions' });
     const at = async (ts) => {
+      stopNote();
       if (!(await setReminder(r.id, ts, note.value.trim()))) return;
+      clearNoteDraft();                       // 已經寫進提醒裡了
       openDetail(r.id);
       toast(`已設提醒：${whenLabel(ts)} 回撥 ${r.company}`);
     };
@@ -547,7 +633,9 @@
         const got = window.Holidays ? window.Holidays.nextWorkday(iso) : { iso, moved: false };
         const [y, m, day] = got.iso.split('-').map(Number);
         const next = new Date(y, m - 1, day, h, 0, 0, 0).getTime();
+        stopNote();
         if (!(await setReminder(r.id, next, note.value.trim()))) return;
+        clearNoteDraft();
         openDetail(r.id);
         toast(`今天 ${h}:00 已經過了，改設 ${whenLabel(next)} 回撥`);
       };
@@ -573,7 +661,8 @@
       await at(moved);
       toast(`${dateLabel(got.from)} 是${got.reason}，提醒順延到 ${whenLabel(moved)}`);
     };
-    sec.append(note, quick, el('div', { className: 'card-actions' }, [custom, customBtn]));
+    sec.append(el('div', { className: 'remind-note-row' }, [note, noteOk]), noteHint,
+      quick, el('div', { className: 'card-actions' }, [custom, customBtn]));
     return sec;
   }
 
@@ -2918,6 +3007,15 @@
       save.disabled = true;               // 存的時候連點兩下會變成兩則一樣的紀錄
       const wasLabel = save.textContent;
       save.textContent = '儲存中…';
+      /*
+       * 先把回撥備註寫完再存紀錄。
+       *
+       * 備註是打完字 600 毫秒後才寫進去的，而這裡存完會重畫詳細頁。兩件事撞在
+       * 一起的話，重畫會把備註換回資料庫裡的舊值——打好的備註就這樣沒了。
+       * commitNote 沒有要寫的東西時是空轉，重複呼叫沒有副作用。
+       */
+      const flushNote = remindNoteFlush.get(r.id);
+      if (flushNote) { try { await flushNote(); } catch (e) { console.error('備註寫入失敗', e); } }
       const fail = (err, what) => {
         console.error(what, err);
         const why = err && err.message ? err.message : String(err);
@@ -3181,9 +3279,20 @@
     add.onclick = () => { addRow({}).number.focus(); };
     set(raw);
     node.append(list, add);
+    /*
+     * 會被默默丟掉的列。
+     *
+     * serializePhones 只收號碼有 8 碼以上的列，其他整列不要。所以「按了加一支電話、
+     * 只打了分機就存」或「號碼少打一碼」，那一列（連同原本好好的號碼）會無聲消失，
+     * 畫面上什麼都沒發生——使用者說的「儲存不了」。存之前要先擋下來並講明哪一列。
+     */
+    const problems = () => rows
+      .map((r, i) => ({ at: i + 1, number: r.number.value.trim(), ext: r.ext.value.trim(), note: r.note.value.trim(), input: r.number }))
+      .filter((r) => (r.number || r.ext || r.note) && r.number.replace(/\D/g, '').length < 8);
     return {
       node,
       set,
+      problems,
       read: () => window.Normalize.serializePhones(rows.map((r) => ({ number: r.number.value, ext: r.ext.value, note: r.note.value }))),
     };
   }
@@ -3218,6 +3327,7 @@
     return {
       node,
       inputs,
+      phoneProblems: () => (phoneEd ? phoneEd.problems() : []),
       read: () => {
         const out = {};
         EDIT_FIELDS.forEach(([key]) => { out[key] = inputs[key].value.trim(); });
@@ -3388,8 +3498,31 @@
       addressActual: r.addressActual === r.addressRegistered ? '' : r.addressActual });
     host.append(form.node);
 
+    // 存不進去的原因要留在畫面上，不能只靠兩秒就消失的 toast
+    const saveErr = el('p', { className: 'save-err', hidden: true });
+    const fail = (text) => { saveErr.textContent = text; saveErr.hidden = false; toast(text); };
+
     const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存' });
     save.onclick = async () => {
+      saveErr.hidden = true;
+      form.node.querySelectorAll('.is-bad').forEach((n) => n.classList.remove('is-bad'));
+      /*
+       * 先擋下會被默默丟掉的電話列。
+       *
+       * 號碼不到 8 碼的列整列不收，包含使用者剛按「加一支電話」還沒填號碼、只打了
+       * 分機的那一列，以及號碼少打一碼的那一列——後者更糟，原本好好的電話會直接
+       * 消失，畫面還說「已儲存修改」。存之前講清楚是哪一支、要補什麼。
+       */
+      const bad = form.phoneProblems();
+      if (bad.length) {
+        bad.forEach((b) => b.input.classList.add('is-bad'));
+        const why = bad.map((b) => (b.number
+          ? `第 ${b.at} 支的「${b.number}」只有 ${b.number.replace(/\D/g, '').length} 碼`
+          : `第 ${b.at} 支只填了${[b.ext ? '分機' : '', b.note ? '備註' : ''].filter(Boolean).join('、')}、號碼還沒填`));
+        fail(`電話還不能存：${why.join('；')}。請補上號碼，或按那一列的「刪除」。`);
+        bad[0].input.focus();
+        return;
+      }
       const values = form.read();
       const nextDate = values.nextDate;
       delete values.nextDate;
@@ -3399,27 +3532,56 @@
         if (value !== (raw[key] || '')) edits[key] = value;
       });
       const existing = state.userStates.get(recordId) || {};
-      await saveState(recordId, {
-        edits: Object.keys(edits).length ? edits : undefined,
-        editsAt: Date.now(),      // 編輯有自己的時間戳，同步時才不會被通話紀錄洗掉
-        nextDate: nextDate || existing.nextDate || null,
-      });
+      const had = Object.keys((existing && existing.edits) || {}).length;
+      const now = Object.keys(edits).length;
+      /*
+       * 寫進去之後要讀回來確認。
+       *
+       * 原本這裡連 try 都沒有：寫入失敗就是一個沒人看得到的 unhandled rejection，
+       * 視窗照樣關掉、改的東西沒了，使用者只會以為自己沒按到——「儲存不了」。
+       */
+      save.disabled = true;
+      const wasLabel = save.textContent;
+      save.textContent = '儲存中…';
+      try {
+        await saveState(recordId, {
+          edits: now ? edits : undefined,
+          editsAt: Date.now(),      // 編輯有自己的時間戳，同步時才不會被通話紀錄洗掉
+          nextDate: nextDate || existing.nextDate || null,
+        });
+        const back = await window.Store.getState(recordId);
+        const saved = Object.keys((back && back.edits) || {}).length;
+        if (saved !== now) throw new Error('寫得進去卻讀不回來');
+      } catch (err) {
+        console.error('儲存編輯失敗', err);
+        fail(`存不進去：${err && err.message ? err.message : err}。你改的內容還在畫面上，直接再按一次「儲存」就好。`);
+        save.disabled = false; save.textContent = wasLabel;
+        return;
+      }
+      save.disabled = false; save.textContent = wasLabel;
       closeOverlays();
       render();
       openDetail(recordId);
-      toast(Object.keys(edits).length ? '已儲存修改' : '已清除先前的修改');
+      // 沒有改到東西就照實講，不要說成「已清除先前的修改」——那是兩件事
+      toast(now ? '已儲存修改' : (had ? '已清除先前的修改' : '內容沒有變動'));
       scheduleSync();
     };
     const revert = el('button', { className: 'btn', type: 'button', textContent: '還原成名單原始內容' });
     revert.onclick = async () => {
-      await saveState(recordId, { edits: undefined, editsAt: Date.now() });
+      try {
+        await saveState(recordId, { edits: undefined, editsAt: Date.now() });
+      } catch (err) {
+        console.error('還原失敗', err);
+        fail(`還原不了：${err && err.message ? err.message : err}。請重新整理再試一次。`);
+        return;
+      }
       closeOverlays();
       render();
       openDetail(recordId);
       toast('已還原為 PDF 原始內容');
       scheduleSync();
     };
-    host.append(el('div', { className: 'card-actions' }, [save, r.edited ? revert : null].filter(Boolean)));
+    host.append(saveErr, el('div', { className: 'card-actions' }, [save, r.edited ? revert : null].filter(Boolean)));
     $('#editor').hidden = false;
   }
 
@@ -5298,11 +5460,38 @@ export default {
         const sources = [...new Set(state.records.map((r) => r.source))];
         if (!sources.length) { toast('目前沒有已匯入的名單'); return; }
         const name = await askPick('要刪除哪一份名單？（整份的客戶都會刪掉）', sources);
-        if (name) {
-          const n = await window.Store.deleteSource(name);
-          await reload(); render();
-          toast(`已刪除 ${name}（${n} 筆）`);
+        if (!name) return;
+        /*
+         * 刪整份名單有兩種意思，不能替使用者猜。
+         *
+         * 「匯錯檔案、重複匯入」的話那些公司之後還要；「這批都不打了」的話就該連公司
+         * 一起排除，不然下一份名單又把同樣那幾百家帶回來——使用者說的「刪除名單後又會
+         * 跳回來」。原本兩種都當成前者，所以永遠會跳回來，而且完全沒得選。
+         */
+        const victims = state.records.filter((r) => r.source === name);
+        const ids = new Set(victims.map((r) => r.id));
+        const logCount = state.logs.filter((l) => ids.has(l.recordId)).length;
+        const EXCLUDE = `連公司一起排除（${victims.length} 家，以後別份名單也不要再帶回來）`;
+        const ONLY = '只刪掉這一份（同一家公司出現在別份名單還是會進來）';
+        const pick = await askPick(
+          `「${name}」的 ${victims.length} 筆客戶${logCount ? `、${logCount} 則通話紀錄` : ''}都會刪掉。\n`
+          + '要連公司一起排除嗎？排除之後可以在選單「管理已排除的公司」收回來。',
+          [EXCLUDE, ONLY],
+        );
+        if (!pick) return;
+        const exclude = pick === EXCLUDE;
+        let n = 0;
+        // 刪不掉要講出來：以前沒有 try，失敗就是一個沒人看得到的錯誤
+        try {
+          n = await window.Store.deleteSource(name, { dropTrail: true, exclude });
+        } catch (err) {
+          console.error('刪除名單失敗', err);
+          toast(`刪不掉：${err && err.message ? err.message : err}。請重新整理再試一次。`);
+          return;
         }
+        await reload(); render();
+        scheduleSync();          // 不推上去的話，別台同步時會把整份救回來
+        toast(`已刪除 ${name}（${n} 筆）${exclude ? `，這 ${victims.length} 家已列入排除` : ''}`);
       }
       /*
        * 排除名單要看得到也收得回來。

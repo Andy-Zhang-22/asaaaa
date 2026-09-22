@@ -450,6 +450,11 @@ button, input, select { font: inherit; color: inherit; }
 .badge-remind.is-due { border-color: var(--danger); color: var(--danger); font-weight: 600; }
 .draft-note { font-size: 12px; margin: 4px 0 6px; }
 .remind-note { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); margin: 6px 0; }
+.remind-note-row { display: flex; align-items: center; gap: 8px; }
+.remind-note-row .remind-note { flex: 1; min-width: 0; }
+/* 「備註已更新」只閃一下就收起來，不要跟輸入框搶位置 */
+.note-ok { white-space: nowrap; font-size: 12px; }
+.remind-note-hint { margin: 0 0 6px; font-size: 12px; }
 .remind-custom { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); }
 /* 承作檢核 */
 .deal-result h3 { font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
@@ -696,6 +701,8 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 /* 刪除類的主要按鈕：要一眼看出按下去會少東西 */
 .ask-actions .btn-primary.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 /* 存檔失敗的原因：toast 兩秒多就消失，錯過就不知道發生什麼事，所以留在表單上 */
+/* 存不了的那一支電話要看得出來是哪一支，不能只有下面一行字 */
+.phone-row input.is-bad { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
 .save-err {
   margin: 8px 0 0; padding: 8px 10px; font-size: 13px; line-height: 1.6;
   color: var(--danger); background: var(--surface-2);
