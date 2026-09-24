@@ -1,37 +1,9 @@
 {
  "periods": {
   "11508": {
-   "generatedAt": "2026-09-24T23:11:51.880Z",
+   "generatedAt": "2026-09-24T23:19:25.034Z",
    "period": "11508",
    "files": [
-    {
-     "city": "新北市",
-     "type": "change",
-     "path": "11508/新北市-change.csv",
-     "rows": 2529,
-     "capitalUp": 244
-    },
-    {
-     "city": "新北市",
-     "type": "setup",
-     "path": "11508/新北市-setup.csv",
-     "rows": 507,
-     "capitalUp": 0
-    },
-    {
-     "city": "臺北市",
-     "type": "change",
-     "path": "11508/臺北市-change.csv",
-     "rows": 4203,
-     "capitalUp": 348
-    },
-    {
-     "city": "臺北市",
-     "type": "setup",
-     "path": "11508/臺北市-setup.csv",
-     "rows": 454,
-     "capitalUp": 0
-    },
     {
      "city": "桃園市",
      "type": "change",
@@ -40,64 +12,15 @@
      "capitalUp": 169
     },
     {
-     "city": "基隆市",
-     "type": "change",
-     "path": "11508/基隆市-change.csv",
-     "rows": 82,
-     "capitalUp": 4
-    },
-    {
-     "city": "基隆市",
+     "city": "桃園市",
      "type": "setup",
-     "path": "11508/基隆市-setup.csv",
-     "rows": 17,
-     "capitalUp": 0
-    },
-    {
-     "city": "新竹市",
-     "type": "change",
-     "path": "11508/新竹市-change.csv",
-     "rows": 264,
-     "capitalUp": 29
-    },
-    {
-     "city": "新竹市",
-     "type": "setup",
-     "path": "11508/新竹市-setup.csv",
-     "rows": 72,
-     "capitalUp": 0
-    },
-    {
-     "city": "新竹縣",
-     "type": "change",
-     "path": "11508/新竹縣-change.csv",
-     "rows": 346,
-     "capitalUp": 23
-    },
-    {
-     "city": "新竹縣",
-     "type": "setup",
-     "path": "11508/新竹縣-setup.csv",
-     "rows": 66,
-     "capitalUp": 0
-    },
-    {
-     "city": "宜蘭縣",
-     "type": "change",
-     "path": "11508/宜蘭縣-change.csv",
-     "rows": 117,
-     "capitalUp": 7
-    },
-    {
-     "city": "宜蘭縣",
-     "type": "setup",
-     "path": "11508/宜蘭縣-setup.csv",
-     "rows": 29,
+     "path": "11508/桃園市-setup.csv",
+     "rows": 318,
      "capitalUp": 0
     }
    ]
   }
  },
  "latest": "11508",
- "generatedAt": "2026-09-24T23:11:51.880Z"
+ "generatedAt": "2026-09-24T23:19:25.034Z"
 }
