@@ -39,6 +39,16 @@ jobs:
         if: always()
         run: cat probe-report.md >> "$GITHUB_STEP_SUMMARY"
 
+      # 找新客戶的來源（每月清冊、工廠登記、政府採購決標）。結果直接印在 log：
+      # 開發環境連不上 artifact 的下載網址，只有 Actions 的 log 讀得到。
+      - name: 探測新客戶名單來源
+        if: always()
+        run: node tools/probe-leads.mjs | tee probe-leads.log
+
+      - name: 新客戶來源印在摘要上
+        if: always()
+        run: { printf '```\n'; cat probe-leads.log; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: 保留原始回應供後續分析
         if: always()
         uses: actions/upload-artifact@v4
