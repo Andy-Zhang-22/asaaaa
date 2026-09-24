@@ -1,0 +1,25 @@
+# 探測「找新客戶」的公開資料來源（每月清冊、工廠登記、政府採購決標）。
+#
+# 只在手動觸發時跑，結果印在執行紀錄與摘要上。理由同 weekly-company-sync.yml：
+# 開發環境連不上政府網站，只有 Actions 的 runner 出得去。
+name: 探測新客戶名單來源
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 探測各來源
+        run: node tools/probe-leads.mjs | tee probe-leads.log
+      - name: 印在摘要上
+        if: always()
+        run: { printf '```\n'; cat probe-leads.log; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
