@@ -43,7 +43,9 @@ jobs:
       # 開發環境連不上 artifact 的下載網址，只有 Actions 的 log 讀得到。
       - name: 探測新客戶名單來源
         if: always()
-        run: node tools/probe-leads.mjs | tee probe-leads.log
+        run: |
+          which pdftotext >/dev/null 2>&1 || sudo apt-get install -y -q poppler-utils
+          node tools/probe-leads.mjs | tee probe-leads.log
 
       - name: 新客戶來源印在摘要上
         if: always()
