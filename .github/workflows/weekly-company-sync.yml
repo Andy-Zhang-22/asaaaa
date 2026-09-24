@@ -45,7 +45,7 @@ jobs:
         if: always()
         run: |
           which pdftotext >/dev/null 2>&1 || sudo apt-get install -y -q poppler-utils
-          node tools/probe-leads.mjs | tee probe-leads.log
+          node tools/fetch-leads.mjs --probe --cities 新北市,臺北市 | tee probe-leads.log
 
       - name: 新客戶來源印在摘要上
         if: always()
