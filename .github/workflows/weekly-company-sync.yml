@@ -39,20 +39,23 @@ jobs:
         if: always()
         run: cat probe-report.md >> "$GITHUB_STEP_SUMMARY"
 
-      # 找新客戶的來源（每月清冊、工廠登記、政府採購決標）。結果直接印在 log：
-      # 開發環境連不上 artifact 的下載網址，只有 Actions 的 log 讀得到。
-      - name: 探測新客戶名單來源
-        if: always()
+      # 暫時掛在這裡跑一次每月清冊（monthly-leads.yml 要先進預設分支才能手動觸發）。
+      # 合併之後這一段可以拿掉，之後由 monthly-leads.yml 自己排程。
+      - name: 抓每月新公司清冊
         run: |
           which pdftotext >/dev/null 2>&1 || sudo apt-get install -y -q poppler-utils
-          node tools/fetch-leads.mjs --probe --cities 新北市,臺北市 | tee probe-leads.log
+          node tools/fetch-leads.mjs | tee fetch-leads.log
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"; cat fetch-leads.log >> "$GITHUB_STEP_SUMMARY"; printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 新客戶來源印在摘要上
-        if: always()
+      - name: 清冊 CSV 存回 repo
         run: |
-          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
-          cat probe-leads.log >> "$GITHUB_STEP_SUMMARY"
-          printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add leads
+          if git diff --cached --quiet; then echo "清冊沒有變動"; exit 0; fi
+          git commit -m "每月新公司清冊：$(date -u +%Y-%m-%d)"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
 
       - name: 保留原始回應供後續分析
         if: always()

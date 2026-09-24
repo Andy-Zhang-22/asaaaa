@@ -16,6 +16,7 @@
  * 用法：node tools/fetch-leads.mjs [--period 11508] [--cities 新北市,臺北市] [--types change,setup]
  *       [--out leads] [--probe]
  *   --probe 只印解析結果的樣本與統計，不寫檔。
+ *   --prune N 只留最近 N 期（給排程用），其餘都不做。
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -201,13 +202,31 @@ function parse(ls, e) {
 
 const csvCell = (v) => { const s = String(v == null ? '' : v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 function toCsv(records, { city, type, period }) {
-  const dateHead = type === 'setup' ? '核准設立日期' : '核准變更日期';
-  const head = ['統一編號', '公司名稱', '公司所在地', '代表人', '資本額', dateHead, '案由或變更事項', '營業項目', '縣市', '清冊', '期別'];
+  // 設立、變更兩欄都放：網站會把幾份清冊合成一份匯入，欄位要對得上
+  const head = ['統一編號', '公司名稱', '公司所在地', '代表人', '資本額', '核准設立日期', '核准變更日期', '案由或變更事項', '營業項目', '縣市', '清冊', '期別'];
   const rows = records.map((r) => [
-    r.taxId, r.company, r.address, r.owner, r.capitalNum, r.date, r.reason,
+    r.taxId, r.company, r.address, r.owner, r.capitalNum, type === 'setup' ? r.date : '', type === 'setup' ? '' : r.date, r.reason,
     r.items.map((i) => `${i.code} ${i.name}`).join('；'), city, type === 'setup' ? '設立' : '變更', period,
   ]);
   return `﻿${[head, ...rows].map((row) => row.map(csvCell).join(',')).join('\n')}\n`;
+}
+
+/* ---------------- 只留最近幾期 ---------------- */
+
+if (args.includes('--prune')) {
+  const keep = Number(opt('prune', '6')) || 6;
+  let all = { periods: {} };
+  try { all = JSON.parse(await fs.readFile(path.join(OUT, 'index.json'), 'utf8')); } catch (e) { console.log('沒有 index.json，不用清'); process.exit(0); }
+  const keys = Object.keys(all.periods || {}).sort();
+  const drop = keys.slice(0, Math.max(0, keys.length - keep));
+  for (const k of drop) {
+    await fs.rm(path.join(OUT, k), { recursive: true, force: true });
+    delete all.periods[k];
+  }
+  all.latest = Object.keys(all.periods).sort().pop() || null;
+  await fs.writeFile(path.join(OUT, 'index.json'), `${JSON.stringify(all, null, 1)}\n`, 'utf8');
+  console.log(`留 ${keep} 期，清掉 ${drop.length} 期${drop.length ? `：${drop.join('、')}` : ''}`);
+  process.exit(0);
 }
 
 /* ---------------- 主流程 ---------------- */
@@ -246,7 +265,7 @@ for (const city of CITIES) {
       console.log('  -- 前 6 筆 --'); records.slice(0, 6).forEach(show);
       console.log('  -- 有換行的幾筆（公司名或地址較長） --');
       records.filter((r) => r.company.length > 12 || r.address.length > 16).slice(0, 4).forEach(show);
-      console.log('  -- 增資的前 4 筆 --'); records.filter((r) => /增資/.test(r.reason)).slice(0, 4).forEach(show);
+      console.log('  -- 增資的前 4 筆 --'); records.filter((r) => /增資|發行新股/.test(r.reason)).slice(0, 4).forEach(show);
       if (bad.length) { console.log('  -- 欄位不齊 --'); bad.slice(0, 5).forEach(show); }
       if (oddities.length) console.log(`  -- 異常 ${oddities.length} 則 --\n  ${oddities.slice(0, 8).join('\n  ')}`);
       continue;
@@ -254,7 +273,7 @@ for (const city of CITIES) {
     const rel = path.join(period, `${city}-${type}.csv`);
     await fs.mkdir(path.join(OUT, period), { recursive: true });
     await fs.writeFile(path.join(OUT, rel), toCsv(records, { city, type, period }), 'utf8');
-    index.files.push({ city, type, path: rel, rows: records.length, capitalUp: records.filter((r) => /增資/.test(r.reason)).length });
+    index.files.push({ city, type, path: rel, rows: records.length, capitalUp: records.filter((r) => /增資|發行新股/.test(r.reason)).length });
   }
 }
 if (!PROBE) {

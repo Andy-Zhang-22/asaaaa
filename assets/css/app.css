@@ -810,3 +810,9 @@ body.has-registry-bar .update-bar { bottom: 60px; }
   body.print-brief .brief-questions input { -webkit-appearance: checkbox; }
   @page { margin: 12mm; }
 }
+
+/* ---------- 撈本月新公司：清冊清單 ---------- */
+.leads-list { margin: 4px 0 12px; }
+.leads-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px dashed var(--border); cursor: pointer; }
+.leads-row input { margin-top: 5px; flex: none; }
+.leads-row small { display: block; font-size: 12px; }

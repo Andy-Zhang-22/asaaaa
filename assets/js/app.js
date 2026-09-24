@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260924-159';
+  const APP_VERSION = '20260924-160';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1032,6 +1032,9 @@
       const citySel = el('select', {}, Object.entries(GOV_CITY_PRESETS)
         .map(([k, v]) => el('option', { value: k, textContent: v.label })));
       const skipHolding = el('input', { type: 'checkbox' });
+      // 變更清冊才有「案由」：只留增資的那幾家，那是最值得打的一批
+      const hasReason = (rows[0] || []).some((c) => /案由/.test(String(c)));
+      const onlyUp = el('input', { type: 'checkbox' });
 
       host.append(el('label', { className: 'rule-field' }, [
         el('span', { textContent: '資本額下限（萬元）' }), minIn]));
@@ -1041,6 +1044,10 @@
         el('span', { textContent: '地區' }), citySel]));
       host.append(el('label', { className: 'rule-field' }, [
         skipHolding, el('span', { textContent: ' 略過投資／控股類（看名字沒有設備標的，通常不值得打）' })]));
+      if (hasReason) {
+        host.append(el('label', { className: 'rule-field' }, [
+          onlyUp, el('span', { textContent: ' 只要「增資」的（變更清冊的案由；設立清冊沒有案由，勾了會整份被濾掉）' })]));
+      }
 
       const preview = el('div', { className: 'rule-result' });
       host.append(preview);
@@ -1049,6 +1056,7 @@
         minCapital: (Number(minIn.value) || 0) * 10000,
         maxCapital: (Number(maxIn.value) || 0) * 10000 || Infinity,
         cities: GOV_CITY_PRESETS[citySel.value].cities(),
+        onlyCapitalUp: hasReason && onlyUp.checked,
       });
 
       let current = [];
@@ -1060,6 +1068,7 @@
           textContent: `符合條件：${current.length} 筆` }));
         preview.append(el('p', { className: 'rule-note',
           textContent: `（資本額不符 ${out.stats.capitalOut} 筆、地區不符 ${out.stats.cityOut} 筆`
+            + `${out.stats.notUp ? `、非增資 ${out.stats.notUp} 筆` : ''}`
             + `${out.stats.dup ? `、重複 ${out.stats.dup} 筆` : ''}`
             + `${skipHolding.checked ? `、投資控股類 ${out.records.length - current.length} 筆` : ''}）` }));
         // 已經在名單裡的先講，不然匯進去才發現重複
@@ -1073,7 +1082,7 @@
           preview.append(el('div', { className: 'import-preview' }, [
             el('strong', { textContent: r.company }),
             el('p', { className: 'rule-note',
-              textContent: `${r.capitalThousands} 仟元　${r.industry || '產業未知'}　${r.address}` }),
+              textContent: `${r.capitalThousands} 仟元　${r.industry || '產業未知'}${r.reason ? `　${r.reason}` : ''}　${r.address}` }),
           ]));
         });
         if (current.length > 5) {
@@ -1083,6 +1092,7 @@
       [minIn, maxIn].forEach((n) => { n.oninput = recount; });
       citySel.onchange = recount;
       skipHolding.onchange = recount;
+      onlyUp.onchange = recount;
       recount();
 
       const go = el('button', { className: 'btn btn-primary', type: 'button', textContent: '匯入' });
@@ -1096,6 +1106,99 @@
 
       $('#editor').hidden = false;
     });
+  }
+
+  /**
+   * 撈本月新公司：GitHub Actions 每月抓好的設立／變更登記清冊。
+   *
+   * 政府網站沒有 CORS，瀏覽器抓不到清冊 PDF，所以由 Actions 抓下來、解析成 CSV 放在
+   * repo 的 leads/ 底下（tools/fetch-leads.mjs），網站從自己的網址讀。這裡只做兩件事：
+   * 列出有哪些期別、縣市可以抓；把勾選的合成一份 CSV 交給既有的匯入流程——
+   * 之後的資本額／地區／只要增資的篩選、重複處理、商工登記查核，全部走原本那條路。
+   */
+  const csvText = (rows) => rows.map((r) => r.map((v) => {
+    const t = String(v == null ? '' : v);
+    return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  }).join(',')).join('\n');
+
+  async function openLeadsPicker() {
+    const host = $('#editorBody');
+    host.textContent = '';
+    host.append(el('h2', { textContent: '本月新公司（設立／變更登記清冊）' }));
+    const note = el('p', { className: 'muted', textContent: '讀取清冊索引…' });
+    host.append(note);
+    $('#editor').hidden = false;
+    let index;
+    try {
+      const res = await fetch(`leads/index.json?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      index = await res.json();
+    } catch (err) {
+      note.textContent = '還沒有抓好的清冊。清冊由 GitHub Actions 每月 8 日自動抓（repo 的 Actions 頁也可以手動執行「每月新公司清冊」），抓好、部署之後這裡就會列出來。';
+      return;
+    }
+    const periods = Object.keys(index.periods || {}).sort().reverse();
+    if (!periods.length) { note.textContent = '清冊索引是空的。'; return; }
+    note.textContent = '來源：經濟部商工登記「公司所營事業項目清冊」（含案由與營業項目）。勾要匯入的，下一步會再讓你篩資本額、地區、只要增資的。'
+      + `最近更新 ${dateLabel(String(index.generatedAt || '').slice(0, 10))}。`;
+    const periodSel = el('select');
+    periods.forEach((k) => periodSel.append(el('option', { value: k, textContent: `${k.slice(0, 3)} 年 ${+k.slice(3)} 月` })));
+    host.append(el('label', { className: 'rule-field' }, [el('span', { textContent: '期別' }), periodSel]));
+    const list = el('div', { className: 'leads-list' });
+    host.append(list);
+    const chosen = new Set();
+    const draw = () => {
+      list.textContent = '';
+      chosen.clear();
+      const files = (index.periods[periodSel.value] || {}).files || [];
+      files.forEach((f) => {
+        // 預設只勾變更清冊：設立的多半是剛開的小公司，還不能貸；變更的才有增資這種訊號
+        const cb = el('input', { type: 'checkbox', checked: f.type === 'change' });
+        if (cb.checked) chosen.add(f.path);
+        cb.onchange = () => { if (cb.checked) chosen.add(f.path); else chosen.delete(f.path); };
+        list.append(el('label', { className: 'leads-row' }, [cb, el('span', {}, [
+          el('strong', { textContent: `${f.city}　${f.type === 'setup' ? '設立' : '變更'}` }),
+          el('small', { className: 'muted', textContent: `${f.rows} 家${f.type === 'change' ? `，其中增資 ${f.capitalUp} 家` : ''}` }),
+        ])]));
+      });
+    };
+    periodSel.onchange = draw;
+    draw();
+    const label = '下一步：篩選並匯入';
+    const go = el('button', { className: 'btn btn-primary', type: 'button', textContent: label });
+    go.onclick = async () => {
+      const files = ((index.periods[periodSel.value] || {}).files || []).filter((f) => chosen.has(f.path));
+      if (!files.length) { toast('先勾至少一份清冊'); return; }
+      go.disabled = true; go.textContent = '下載中…';
+      let header = null;
+      const rows = [];
+      try {
+        for (const f of files) {
+          const res = await fetch(`leads/${f.path}?t=${Date.now()}`, { cache: 'no-store' });
+          if (!res.ok) throw new Error(`${f.path}：HTTP ${res.status}`);
+          const parsed = window.Normalize.parseCsv((await res.text()).replace(/^﻿/, ''));
+          if (!parsed.length) continue;
+          if (!header) { header = parsed[0]; rows.push(header); }
+          // 各檔表頭是同一支程式產的，理論上一樣；還是照欄名對，多一欄少一欄都不會錯位
+          const map = parsed[0].map((h) => header.indexOf(h));
+          parsed.slice(1).forEach((r) => {
+            const out = header.map(() => '');
+            r.forEach((v, i) => { if (map[i] >= 0) out[map[i]] = v; });
+            rows.push(out);
+          });
+        }
+      } catch (err) {
+        toast(`下載失敗：${err.message}`);
+        go.disabled = false; go.textContent = label;
+        return;
+      }
+      $('#editor').hidden = true;
+      // 合成一個檔案走匯入：名單來源會叫「登記清冊-11508.csv」，之後要整批刪掉也找得到
+      const file = new File([`﻿${csvText(rows)}`], `登記清冊-${periodSel.value}.csv`, { type: 'text/csv' });
+      $('#importer').hidden = false;
+      await importFiles([file]);
+    };
+    host.append(el('div', { className: 'card-actions' }, [go]));
   }
 
   async function reviewCompanyNames() {
@@ -5952,6 +6055,7 @@ export default {
       }
       if (act === 'new-customer') openNewCustomer();
       if (act === 'registry') { openRegistryUpdate(); return; }
+      if (act === 'leads') { await openLeadsPicker(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'check-names') { await reviewCompanyNames(); return; }
       if (act === 'spread-due') { await spreadDueOverWorkdays(15); return; }
