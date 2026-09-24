@@ -99,41 +99,62 @@ const isChrome = (l) => {
   return /清冊|產製|頁\/共|序號|統一編號|登記機關/.test(t) || /^\d{3}\.\d{2}(變更|設立|解散)/.test(l.words[0].text);
 };
 
+/*
+ * 這幾份清冊都是同一套 JasperReports 範本印的，欄位左緣整份文件固定，而且各縣市一樣
+ * （實測 115/08 七個縣市全部是這組數字）。量得出來就用量的；量不出來（樣本太少、
+ * 某縣市的排版有怪東西）就退回這組，並在 log 講明是退回的。
+ */
+const KNOWN_EDGES = { company: 176, owner: 276, address: 342, capitalRight: 519, date: 534.75, reason: 592, item: 662 };
+
 /**
- * 第一趟：從「乾淨」的主列量出每一欄的左緣。
- * 乾淨＝登記機關、公司名稱、（代表人）、所在地、資本額、日期依序都認得出來。
+ * 第一趟：從主列量出每一欄的左緣。
+ *
+ * 用「錨點」各自找，不要求整列照固定順序都認得出來：日期找 115/08/18 那個字、資本額是
+ * 日期前一個純數字、地址是資本額前面最後一個以縣市開頭的字、營業項目是日期後第一個代碼。
+ * 第一版要求整列依序全對才算樣本，桃園的清冊只有 5% 的列過關、設立清冊只剩 2 列，
+ * 量不出欄位整份就丟掉了——其實第二趟照座標分欄對桃園完全沒問題，是量的這一趟太挑。
  */
 function measure(ls) {
   const acc = { company: [], owner: [], address: [], capitalRight: [], date: [], reason: [], item: [] };
   for (const l of ls) {
     if (!isMainRow(l)) continue;
     const w = l.words;
-    if (!ORG_RE.test(w[2].text)) continue;
-    const company = w[3];
-    if (!company) continue;
-    let i = 4;
-    let owner = null;
-    if (w[i] && !CITY_RE.test(w[i].text) && !MONEY_RE.test(w[i].text)) { owner = w[i]; i += 1; }
-    // 代表人是外國人時會有空格：接著還不是地址就都算代表人
-    while (w[i] && !CITY_RE.test(w[i].text) && !MONEY_RE.test(w[i].text)) i += 1;
-    const address = w[i];
-    if (!address || !CITY_RE.test(address.text)) continue;
-    const capital = w[i + 1];
-    const date = w[i + 2];
-    if (!capital || !MONEY_RE.test(capital.text) || !date || !DATE_RE.test(date.text)) continue;
-    acc.company.push(company.x);
-    if (owner) acc.owner.push(owner.x);
-    acc.address.push(address.x);
-    acc.capitalRight.push(capital.x + capital.w);
-    acc.date.push(date.x);
-    const rest = w.slice(i + 3);
+    const dateAt = w.findIndex((x, k) => k >= 4 && DATE_RE.test(x.text));
+    if (dateAt < 0) continue;
+    acc.date.push(w[dateAt].x);
+    const capital = w[dateAt - 1];
+    if (capital && MONEY_RE.test(capital.text)) acc.capitalRight.push(capital.x + capital.w);
+    let addrAt = -1;
+    for (let k = dateAt - 2; k >= 3; k--) { if (CITY_RE.test(w[k].text)) { addrAt = k; break; } }
+    if (addrAt >= 0) acc.address.push(w[addrAt].x);
+    if (ORG_RE.test(w[2].text) && w[3] && addrAt !== 3) {
+      acc.company.push(w[3].x);
+      // 公司名稱與地址之間還有字＝代表人（外國人名會是好幾個字，取第一個）
+      if (addrAt > 4) acc.owner.push(w[4].x);
+    }
+    const rest = w.slice(dateAt + 1);
     const itemAt = rest.findIndex((x) => ITEM_CODE_RE.test(x.text));
     if (itemAt > 0) acc.reason.push(rest[0].x);
     if (itemAt >= 0) acc.item.push(rest[itemAt].x);
   }
-  // 取最小值當左緣；資本額靠右對齊，記右緣
-  const edge = (arr) => (arr.length ? Math.min(...arr) : null);
-  const e = { company: edge(acc.company), owner: edge(acc.owner), address: edge(acc.address), capitalRight: acc.capitalRight.length ? Math.max(...acc.capitalRight) : null, date: edge(acc.date), reason: edge(acc.reason), item: edge(acc.item), samples: acc.company.length };
+  /*
+   * 左緣取「最小值」但要擋離群值：幾千列裡偶爾一列公司名有空格，第二截會被當成代表人，
+   * 它的 x 比真正的代表人欄小很多。取第 2 百分位而不是最小值，少數怪列不會把整欄拉歪；
+   * 樣本少的檔案（基隆設立 17 列）第 2 百分位就是最小值，沒差。
+   */
+  const low = (arr) => { if (!arr.length) return null; const a = arr.slice().sort((x, y) => x - y); return a[Math.floor(a.length * 0.02)]; };
+  const high = (arr) => { if (!arr.length) return null; const a = arr.slice().sort((x, y) => y - x); return a[Math.floor(a.length * 0.02)]; };
+  const measured = { company: low(acc.company), owner: low(acc.owner), address: low(acc.address), capitalRight: high(acc.capitalRight), date: low(acc.date), reason: low(acc.reason), item: low(acc.item) };
+  const e = { samples: acc.date.length, fallback: [] };
+  for (const k of Object.keys(KNOWN_EDGES)) {
+    const v = measured[k];
+    // 量到的跟已知差太多也不信（>25pt 代表抓錯錨點），退回已知值
+    if (v === null || Math.abs(v - KNOWN_EDGES[k]) > 25) { e[k] = KNOWN_EDGES[k]; if (k !== 'reason' && k !== 'owner') e.fallback.push(k); }
+    else e[k] = v;
+  }
+  // 設立清冊沒有案由欄：量不到就是沒有，第二趟才不會把營業項目前半段當成案由
+  if (measured.reason === null) e.reason = null;
+  if (measured.item === null) e.item = null;
   return e;
 }
 
@@ -252,7 +273,8 @@ for (const city of CITIES) {
     await fs.writeFile(file, buf);
     const ls = lines(words(file));
     const e = measure(ls);
-    if (!e.company || !e.address || !e.date || e.samples < 5) { console.log(`\n${city} ${type}：量不出欄位（樣本 ${e.samples}）`, e); continue; }
+    if (e.samples < 1) { console.log(`\n${city} ${type}：找不到任何主列`, e); continue; }
+    if (e.fallback.length) console.log(`\n${city} ${type}：${e.fallback.join('、')} 量不出來，用已知的欄位左緣`);
     const { records, oddities } = parse(ls, e);
     const bad = records.filter((r) => !r.company || !r.address || !r.capitalNum || !r.date);
     const reasons = {};
