@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260922-158';
+  const APP_VERSION = '20260924-159';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -739,8 +739,16 @@
     const allNotes = bundle.text;
     out.dealing = window.Normalize.detectDealing(allNotes);
     out.dealingKind = out.dealing.kind;
-    // 有沒有實際拜訪過：跟往來情形一樣，網站上記的通話也算
-    out.visit = window.Normalize.detectVisit(allNotes);
+    /*
+     * 有沒有實際拜訪過：跟往來情形一樣，網站上記的通話也算。
+     *
+     * 用「記錄這次拜訪」存的紀錄是明講的（kind='visit'），先看它；沒有才回頭從字面猜。
+     * 字面判讀會漏（寫「到廠看了設備」就抓不到），明講的不該再被猜錯。
+     */
+    const visitLog = bundle.logs.find((l) => l.kind === 'visit');
+    out.visit = visitLog
+      ? { visited: true, date: visitLog.date || null, snippet: '', logged: true, company: visitLog.company || '' }
+      : window.Normalize.detectVisit(allNotes);
     out.visitKind = out.visit.visited ? 'yes' : 'no';
     /*
      * KEYMAN：使用者自己改過的最優先；訪談裡明講「KEYMAN 是 X」次之（比名單檔新）；
@@ -2633,7 +2641,7 @@
 
   /* ---------------- 詳細資料抽屜 ---------------- */
 
-  function openDetail(id) {
+  function openDetail(id, opts) {
     const raw = state.records.find((r) => r.id === id);
     if (!raw) return;
     // 用 allViews 的版本：關係企業連動後的日期在那裡
@@ -2653,6 +2661,9 @@
     editBtn.onclick = () => openEditor(r.id);
     const dealBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '承作檢核' });
     dealBtn.onclick = () => openDealCheck(r.id);
+    // 拜訪準備：出門前一頁看完這家，見 openVisitBrief
+    const briefBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '拜訪準備' });
+    briefBtn.onclick = () => openVisitBrief(r.id);
     // 單筆匯出：要把一家的資料交出去時，不必整份匯出再自己刪剩一列
     const xlsxBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '匯出 Excel' });
     xlsxBtn.onclick = () => exportOneXlsx(r.id);
@@ -2702,6 +2713,7 @@
         chanceBtn('no'),
         editBtn,
         dealBtn,
+        briefBtn,
         xlsxBtn,
         deleteBtn(r),
       ].filter(Boolean)),
@@ -3074,6 +3086,10 @@
     section.append(form);
     body.append(section);
 
+    // 拜訪回來記一筆：要記的欄位跟電話不一樣（見到誰、資金需求、下一步），另開一段
+    const visitSec = visitSection(r, members);
+    body.append(visitSec);
+
     // 回撥提醒放在記通話的下面、往來情形的上面：掛了電話先記錄、再設提醒
     body.append(reminderSection(r));
 
@@ -3095,7 +3111,9 @@
       sec.append(el('p', { className: `dealing-verdict visit-${r.visitKind}` }, [
         el('strong', { textContent: r.visitKind === 'yes' ? '有拜訪' : '無拜訪' }),
         el('span', { className: 'muted', textContent: r.visitKind === 'yes'
-          ? `（${r.visit.date ? `${dateLabel(r.visit.date)} ` : ''}依訪談內容判讀）`
+          ? (r.visit.logged
+            ? `（${r.visit.date ? `${dateLabel(r.visit.date)} ` : ''}${r.visit.company ? `同老闆的「${r.visit.company}」` : ''}記錄的拜訪）`
+            : `（${r.visit.date ? `${dateLabel(r.visit.date)} ` : ''}依訪談內容判讀）`)
           : '（訪談內容裡沒有實際拜訪的紀錄）' }),
       ]));
       if (r.visit.snippet) {
@@ -3123,7 +3141,7 @@
     const bundle = notesBundle(r);
     const mineLogs = bundle.logs
       // uid 也要帶：logId 同步過後會重新編號，改／刪時要靠 uid 才找得回那一則
-      .map((l) => ({ date: l.date, time: l.createdAt ? timeLabel(l.createdAt) : '', text: l.text || `（${window.Normalize.outcomeLabel(l.outcome)}）`, mine: true, logId: l.logId, uid: l.uid, company: l.company, own: !l.company }));
+      .map((l) => ({ date: l.date, time: l.createdAt ? timeLabel(l.createdAt) : '', text: l.text || `（${window.Normalize.outcomeLabel(l.outcome)}）`, mine: true, kind: l.kind || '', logId: l.logId, uid: l.uid, company: l.company, own: !l.company }));
     // 同組其他家名單檔裡的訪談內容也列進來，標出是哪一家的
     const peerEntries = bundle.peers.flatMap((id) => {
       const x = state.records.find((y) => y.id === id);
@@ -3137,10 +3155,11 @@
       const sec = el('div', { className: 'detail-section' }, [el('h3', { textContent: `訪談紀錄（${entries.length}）` })]);
       const ul = el('ul', { className: 'timeline' });
       entries.forEach((e) => {
-        const li = el('li');
+        // 拜訪那幾則點成另一個顏色，捲時間軸時一眼就分得出哪幾次是真的去過
+        const li = el('li', { className: e.kind === 'visit' ? 'is-visit' : '' });
         li.append(el('time', {
           className: e.mine ? 'is-mine' : '',
-          textContent: `${e.date ? dateLabel(e.date) : (e.dateRaw || '日期未標示')}${e.time ? `  ${e.time}` : ''}${e.mine ? ' · 我的紀錄' : ''}${e.company ? ` · ${e.company}` : ''}`,
+          textContent: `${e.date ? dateLabel(e.date) : (e.dateRaw || '日期未標示')}${e.time ? `  ${e.time}` : ''}${e.mine ? (e.kind === 'visit' ? ' · 我的拜訪' : ' · 我的紀錄') : ''}${e.company ? ` · ${e.company}` : ''}`,
         }));
         li.append(el('p', { textContent: e.text }));
         if (e.mine && e.own) {
@@ -3224,6 +3243,487 @@
 
     $('#drawer').hidden = false;
     document.body.style.overflow = 'hidden';
+    // 從拜訪準備頁按「記錄拜訪結果」進來的：把拜訪表單攤開、捲到眼前
+    if (opts && opts.visit) {
+      visitSec.open = true;
+      requestAnimationFrame(() => visitSec.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    }
+  }
+
+  /* ---------------- 拜訪：出門前一頁紙、回來記一筆 ---------------- */
+
+  const NEED_OPTIONS = ['週轉金', '購置設備', '擴廠／購置不動產', '備料／存貨', '代償／轉貸', '暫無需求'];
+  const NEXT_OPTIONS = ['送資料評估', '再約拜訪', '電話追蹤', '先不追'];
+  // 拜訪表單的草稿（每家各一份），理由跟通話紀錄的草稿一樣：localStorage 失效時靠這個撐過重畫
+  const visitDrafts = new Map();
+
+  /**
+   * 拜訪回來記一筆。
+   *
+   * 跟「記錄這通電話」分開：電話記的是講了什麼、下次何時打；拜訪要記的是見到誰、
+   * 資金需求落在哪、下一步是送件還是再約。塞進同一個框只會又變成一坨字，
+   * 之後要找「上次拜訪誰說要買設備」還是得整篇讀。
+   *
+   * 存成一則 kind='visit' 的紀錄：時間軸、匯出、關係企業互通都跟通話一樣走；
+   * 「有拜訪」的判讀直接認這個標記，不用再從字面猜。內容開頭固定寫「實地拜訪」，
+   * 匯出 Excel 再匯回來（標記會掉）時，字面判讀也還認得出這是一次拜訪。
+   */
+  function visitSection(r, members) {
+    const sec = el('details', { className: 'detail-section visit-section' });
+    sec.append(el('summary', {}, [el('h3', { textContent: '記錄這次拜訪' })]));
+    const form = el('div', { className: 'logform visitform' });
+    const whenInput = el('input', { type: 'date', value: todayISO() });
+    // 見到誰：KEYMAN 與負責人先列進候選，多半就是其中一位
+    const who = el('input', { type: 'text', placeholder: '見到誰（例如：財務長 王小姐）', autocomplete: 'off' });
+    const whoList = el('datalist', { id: `visit-who-${r.id}` });
+    [...new Set([r.keyman, r.owner].filter(Boolean))].forEach((n) => whoList.append(el('option', { value: n })));
+    who.setAttribute('list', whoList.id);   // input.list 是唯讀屬性，只能走 setAttribute
+    const memo = el('textarea', { placeholder: '談了什麼？（現場看到的、對方在意的、答應要給的資料…）' });
+    const needs = new Set();
+    let next = '';
+    let chance = '';
+    let writeDraft = () => {};
+    const chipRow = (options, isOn, onPick) => {
+      const box = el('div', { className: 'chips' });
+      const refresh = () => [...box.children].forEach((c) => c.setAttribute('aria-pressed', String(isOn(c.textContent))));
+      options.forEach((name) => {
+        const chip = el('button', { className: 'chip', type: 'button', textContent: name });
+        chip.setAttribute('aria-pressed', 'false');
+        chip.onclick = () => { onPick(name); refresh(); writeDraft(); };
+        box.append(chip);
+      });
+      box.refresh = refresh;
+      return box;
+    };
+    const needBox = chipRow(NEED_OPTIONS, (n) => needs.has(n), (n) => {
+      // 「暫無需求」跟其他選項互斥
+      if (n === '暫無需求') { if (needs.has(n)) needs.clear(); else { needs.clear(); needs.add(n); } return; }
+      needs.delete('暫無需求');
+      if (needs.has(n)) needs.delete(n); else needs.add(n);
+    });
+    const nextBox = chipRow(NEXT_OPTIONS, (n) => next === n, (n) => { next = next === n ? '' : n; });
+    const chanceBox = chipRow(['有機會', '無機會'], (n) => chance === n, (n) => { chance = chance === n ? '' : n; });
+    const nextInput = el('input', { type: 'date', value: r.nextDate || '' });
+
+    const DRAFT_KEY = `visit-draft:${r.id}`;
+    const snapshot = () => ({ when: whenInput.value, who: who.value, text: memo.value, needs: [...needs], next, chance, nextDate: nextInput.value, at: Date.now() });
+    const isBlank = (d) => !d.who.trim() && !d.text.trim() && !d.needs.length && !d.next && !d.chance && d.nextDate === (r.nextDate || '');
+    const clearDraft = () => {
+      visitDrafts.delete(r.id);
+      try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* 無痕模式 */ }
+    };
+    writeDraft = () => {
+      const d = snapshot();
+      if (isBlank(d)) { clearDraft(); return; }
+      visitDrafts.set(r.id, d);
+      try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch (e) { /* 無痕模式 */ }
+    };
+    const readDraft = () => {
+      try {
+        const raw = localStorage.getItem(DRAFT_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch (e) { /* 無痕模式 */ }
+      return visitDrafts.get(r.id) || null;
+    };
+    const draft = readDraft();
+    if (draft) {
+      if (draft.when) whenInput.value = draft.when;
+      who.value = draft.who || '';
+      memo.value = draft.text || '';
+      (draft.needs || []).forEach((n) => needs.add(n));
+      next = draft.next || '';
+      chance = draft.chance || '';
+      if (draft.nextDate) nextInput.value = draft.nextDate;
+      needBox.refresh(); nextBox.refresh(); chanceBox.refresh();
+      sec.open = true;   // 寫到一半的要攤開給人看，收著會以為不見了
+    }
+    [whenInput, who, memo, nextInput].forEach((i) => i.addEventListener('input', writeDraft));
+    nextInput.addEventListener('change', writeDraft);
+
+    const quick = el('div', { className: 'card-actions' });
+    [['明天', 1], ['3 天後', 3], ['一週後', 7], ['兩週後', 14], ['一個月後', 30]].forEach(([label, days]) => {
+      const b = el('button', { className: 'btn btn-tiny', type: 'button', textContent: label });
+      b.onclick = () => {
+        const want = addDays(todayISO(), days);
+        const got = window.Holidays ? window.Holidays.nextWorkday(want) : { iso: want, moved: false };
+        nextInput.value = got.iso;
+        nextInput.dispatchEvent(new Event('change'));
+        if (got.moved) toast(`${dateLabel(got.from)} 是${got.reason}，順延到 ${dateLabel(got.iso)}（${window.Holidays.weekLabel(got.iso)}）`);
+      };
+      quick.append(b);
+    });
+    const saveErr = el('p', { className: 'save-err', hidden: true });
+    const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存拜訪紀錄' });
+    save.onclick = async () => {
+      saveErr.hidden = true;
+      const whoText = who.value.trim();
+      const memoText = memo.value.trim();
+      if (!whoText && !memoText && !needs.size && !next) { toast('至少填一項：見到誰、談了什麼、資金需求或下一步'); return; }
+      const visitDate = whenInput.value || todayISO();
+      const today = todayISO();
+      const lines = [`實地拜訪${whoText ? `，見到 ${whoText}` : ''}。${memoText}`.replace(/\s+$/, '')];
+      if (needs.size) lines.push(`資金需求：${NEED_OPTIONS.filter((n) => needs.has(n)).join('、')}`);
+      if (next) lines.push(`下一步：${next}`);
+      const text = lines.join('\n');
+      // 日期欄沒填但內容寫了「約10/20再談」，就照內容補；跟通話紀錄同一套
+      let picked = nextInput.value;
+      let auto = null;
+      if (!picked && memoText) {
+        auto = window.Normalize.findFollowUp(memoText, today);
+        if (auto) {
+          const got = window.Holidays ? window.Holidays.nextWorkday(auto.iso) : { iso: auto.iso, moved: false };
+          auto = { ...auto, iso: got.iso, movedFrom: got.moved ? got.from : '', reason: got.reason };
+          picked = auto.iso;
+        }
+      }
+      save.disabled = true;
+      const wasLabel = save.textContent;
+      save.textContent = '儲存中…';
+      const flushNote = remindNoteFlush.get(r.id);
+      if (flushNote) { try { await flushNote(); } catch (e) { console.error('備註寫入失敗', e); } }
+      const fail = (err, what) => {
+        console.error(what, err);
+        const why = err && err.message ? err.message : String(err);
+        saveErr.textContent = `${what}：${why}。你填的內容還留著，直接再按一次「儲存拜訪紀錄」就好。`;
+        saveErr.hidden = false;
+        toast(`${what}：${why}`);
+      };
+      const createdAt = Date.now();
+      try {
+        await window.Store.addLog({ recordId: r.id, date: visitDate, text, outcome: 'contacted', kind: 'visit', createdAt });
+        state.logs = await window.Store.allLogs();
+        if (!state.logs.some((l) => l.recordId === r.id && l.createdAt === createdAt)) {
+          throw new Error('寫得進去卻讀不回來');
+        }
+      } catch (err) {
+        fail(err, '拜訪紀錄存不進去');
+        save.disabled = false; save.textContent = wasLabel;
+        return;
+      }
+      clearDraft();
+      const patch = { outcome: 'contacted', nextDate: picked || null };
+      // 補記幾天前的拜訪時，不能把最近聯絡日往回拉
+      if (!r.lastDate || visitDate >= r.lastDate) patch.lastDate = visitDate;
+      if (chance) { patch.chance = chance === '有機會' ? 'yes' : 'no'; patch.chanceAt = Date.now(); }
+      try {
+        await saveState(r.id, patch);
+      } catch (err) {
+        fail(err, '紀錄已存好，但下次聯絡日與狀態沒寫進去');
+        save.disabled = false; save.textContent = wasLabel;
+        render();
+        return;
+      }
+      save.disabled = false; save.textContent = wasLabel;
+      const extra = members.length ? `（同老闆的 ${members.length} 家一起看得到）` : '';
+      let msg = `已儲存拜訪紀錄${extra}`;
+      if (auto) msg += `，並依內容把下次聯絡日設為 ${dateLabel(auto.iso)}${auto.movedFrom ? `（${dateLabel(auto.movedFrom)} 是${auto.reason}，順延了）` : ''}`;
+      else if (!picked && next && next !== '先不追') msg += '。還沒排下次聯絡日，這家不會出現在今日待打';
+      toast(msg);
+      render();
+      openDetail(r.id);
+      scheduleSync();
+    };
+    const field = (label, control) => el('div', { className: 'visit-field' }, [el('span', { className: 'muted', textContent: label }), control]);
+    form.append(
+      el('div', { className: 'row' }, [
+        el('span', { className: 'muted', textContent: '拜訪日期' }), withDateHint(whenInput),
+        el('span', { className: 'muted', textContent: '見到' }), who, whoList,
+      ]),
+      memo,
+      field('資金需求', needBox),
+      field('下一步', nextBox),
+      field('有沒有機會', chanceBox),
+      saveErr,
+      el('div', { className: 'row' }, [
+        el('span', { className: 'muted', textContent: '下次聯絡' }), withDateHint(nextInput, true), save,
+      ]),
+      quick,
+    );
+    if (members.length) {
+      form.append(el('p', { className: 'muted apply-group', textContent: `這次拜訪同老闆的 ${members.length} 家也會一起看到，日期與狀態一起連動。` }));
+    }
+    sec.append(form);
+    return sec;
+  }
+
+  /**
+   * 這次要問什麼：從名單與訪談內容推出來的提問清單。
+   *
+   * 不是一張固定的問卷。剛增資的公司該問錢要用在哪，跟中租有往來的該問到期與加碼，
+   * 有往來銀行的該問額度用了多少——每家不一樣，固定問卷就是每家都問一樣的話。
+   * 通用的四題放最後，前面的都是這家特有的，而且把查到的數字帶在題目裡，
+   * 對方一聽就知道你做過功課。
+   */
+  function visitQuestions(r, ctx) {
+    const qs = [];
+    const push = (text, why) => qs.push({ text, why: why || '' });
+    if (ctx.follow) push(`先接上次的話：「${ctx.follow.snippet}」`, ctx.follow.from ? `${dateLabel(ctx.follow.from)} 的紀錄` : '訪談內容');
+    // 變更登記：一件一件問，from → to 帶在題目裡
+    const changeOf = (kind, field) => {
+      const c = (r.regChanges || []).find((x) => (x.kinds || []).includes(kind));
+      const ch = c && c.changes && c.changes[field];
+      return { date: c ? `商工登記 ${dateLabel(c.date)}` : '', from: ch ? String(ch.from || '') : '', to: ch ? String(ch.to || '') : '' };
+    };
+    const kinds = r.regKinds || [];
+    if (kinds.includes('capitalUp')) {
+      const c = changeOf('capitalUp', 'capital');
+      push(`最近增資${c.from && c.to ? `（${c.from} → ${c.to} 仟元）` : ''}：錢要用在哪？擴廠、買設備、還是接單備料？已經到位還是分批？`, c.date);
+    }
+    if (kinds.includes('capitalDown')) push('最近減資：是彌補虧損還是股東退出？現在的營運狀況？', changeOf('capitalDown', 'capital').date);
+    if (kinds.includes('owner')) {
+      const c = changeOf('owner', 'owner');
+      push(`負責人剛換人${c.from && c.to ? `（${c.from} → ${c.to}）` : ''}：是接班還是轉手？財務現在誰拍板？`, c.date);
+    }
+    if (kinds.includes('address')) push('登記地址剛變更：是搬廠擴大還是縮編？新址租的還是買的？', changeOf('address', 'address').date);
+    // 往來
+    if (r.dealingKind === 'active') {
+      push(`目前跟中租有往來${ctx.balance ? `，本餘約 ${ctx.balance.toLocaleString()} 仟元` : ''}：合約到期日、還款進度？有沒有加碼或新的需求？`, r.dealing.snippet ? `「${r.dealing.snippet}」` : '');
+    } else if (r.dealing && r.dealing.ended) {
+      push('之前跟中租的合作已結束：當時為什麼結束？現在資金從哪裡來？', r.dealing.snippet ? `「${r.dealing.snippet}」` : '');
+    }
+    const names = (kind) => [...new Set(r.relations[kind].map((x) => x.name))].join('、');
+    if (r.relations.bank.length) push(`往來銀行 ${names('bank')}：額度多少、用了多少、利率大概多少？有沒有額度不夠或撥款太慢的問題？`, '訪談內容');
+    if (r.relations.peer.length) push(`同業 ${names('peer')} 也有往來：條件如何？哪裡不滿意？`, '訪談內容');
+    if (r.relations.internal.length) push(`中租${names('internal')}接觸過這家：先確認彼此分工，不要重複開發`, '訪談內容');
+    // KEYMAN
+    if (!r.keyman || r.keymanFrom === 'owner' || !r.keymanFrom) push('財務由誰決定？先確認這次找的人能不能拍板', '訪談看不出 KEYMAN');
+    else push(`這次找 ${r.keyman}：確認他能拍板，還是要再往上一層`, r.keymanFrom === 'notes' ? `訪談：「${r.keymanInfo.snippet}」` : '');
+    if (r.scale === '微企範疇') push('資本額落在微企範疇：問實際營收規模，看該不該轉微企處');
+    if (r.scale === '大企部範疇') push('資本額落在大企部範疇：問往來規模，看要不要跟大企部協同');
+    if (r.territory === '範圍外') push('登記地址在服務範圍外：先確認實際營業地點，範圍外要走協銷', '行銷規範');
+    if (ctx.years !== null && ctx.years < 3) push(`成立才 ${ctx.years} 年：營收穩了嗎？有沒有兩個年度以上的財報？`);
+    // 通用
+    push('近一年營收與訂單狀況？旺季淡季？主要客戶與付款天期？');
+    push('未來半年有沒有設備、擴廠、備料的資金需求？大概多少、什麼時候要？');
+    push('現有額度用了多少？有沒有快到期要續約、或想代償的？');
+    push('可以提供的資料（401、財報、銀行往來明細）：約什麼時候給？');
+    return qs;
+  }
+
+  /**
+   * 拜訪準備：出門前把這家看一遍的一頁紙。
+   *
+   * 詳細頁什麼都有，但那是拿來打電話跟記錄的，捲三屏才看得完。出門前要的是
+   * 反過來：登記動態、往來、上次聊到哪、這次要問什麼，一頁看完就能進去談。
+   * 手機上開著看，或列印帶著；「複製文字」是給貼到 LINE 或行事曆備註用的，
+   * 所以畫面跟純文字版是同一份資料一起組的，不會一邊有一邊沒有。
+   */
+  function openVisitBrief(recordId) {
+    const raw = state.records.find((x) => x.id === recordId);
+    if (!raw) return;
+    const r = allViews().find((x) => x.id === recordId) || view(raw);
+    const N = window.Normalize;
+    const R = window.Rules;
+    const host = $('#editorBody');
+    host.textContent = '';
+    const members = groupMembers(r);
+    const bundle = notesBundle(r);
+    const today = todayISO();
+    const lines = [];
+    const line = (t) => lines.push(t);
+
+    const box = el('div', { className: 'brief' });
+    box.append(el('h2', { textContent: `拜訪準備：${r.company}` }));
+    box.append(el('p', { className: 'muted', textContent: `${dateLabel(today)} 產生　·　資料來自名單、商工登記與訪談內容` }));
+    line(`【拜訪準備】${r.company}（${dateLabel(today)}）`);
+
+    // 動作列：列印、複製、導航、記錄
+    const actions = el('div', { className: 'brief-actions' });
+    const printBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '列印／存成 PDF' });
+    printBtn.onclick = () => {
+      document.body.classList.add('print-brief');
+      const done = () => document.body.classList.remove('print-brief');
+      window.addEventListener('afterprint', done, { once: true });
+      window.print();
+      setTimeout(done, 60000);   // 有些手機瀏覽器不發 afterprint；這個 class 只影響列印，多留一會兒無妨
+    };
+    const copyBtn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '複製文字' });
+    copyBtn.onclick = async () => {
+      const ok = await copyText(lines.join('\n'));
+      toast(ok ? '已複製整頁文字，可以貼到 LINE 或行事曆' : '這個瀏覽器不讓網頁複製');
+    };
+    actions.append(printBtn, copyBtn);
+    if (r.addressActual) {
+      actions.append(el('a', {
+        className: 'btn btn-tiny', target: '_blank', rel: 'noopener', textContent: '導航到實際地址',
+        href: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(r.addressActual)}`,
+      }));
+    }
+    const logBtn = el('button', { className: 'btn btn-tiny btn-primary', type: 'button', textContent: '記錄拜訪結果' });
+    logBtn.onclick = () => { $('#editor').hidden = true; openDetail(r.id, { visit: true }); };
+    actions.append(logBtn);
+    box.append(actions);
+
+    if (r.blocked) {
+      box.append(el('div', { className: 'blocked-warning' }, [
+        el('strong', { textContent: '⛔ 這家標了禁止推廣' }),
+        el('p', { textContent: r.blockedInfo.snippet ? `訪談內容：「${r.blockedInfo.snippet}」` : '是在通話結果裡被標記為禁止推廣的。' }),
+      ]));
+      line('⛔ 禁止推廣');
+    }
+
+    // 基本資料
+    const dl = el('dl', { className: 'detail-grid brief-grid' });
+    const row = (k, v, node) => {
+      if (!v && !node) return;
+      dl.append(el('dt', { textContent: k }), node ? el('dd', {}, [node]) : el('dd', { textContent: v }));
+      line(`${k}：${v}`);
+    };
+    const years = (() => {
+      const m = String(r.founded || '').match(/\d{2,4}/);
+      if (!m) return null;
+      let y = +m[0];
+      if (y < 200) y += 1911;   // 名單上偶爾寫民國年
+      const n = +today.slice(0, 4) - y;
+      return n >= 0 && n < 150 ? n : null;
+    })();
+    box.append(el('h3', { textContent: '基本資料' }));
+    line('');
+    line('■ 基本資料');
+    row('統一編號', r.taxId);
+    row('負責人', r.owner);
+    row('KEYMAN', r.keyman ? `${r.keyman}${r.keymanFrom === 'owner' ? '（訪談看不出 KEYMAN，先填負責人）' : r.keymanFrom === 'notes' ? `（${r.keymanInfo.reason}）` : ''}` : '');
+    row('產業別', r.industry);
+    row('成立年', r.founded ? `${r.founded}${years !== null ? `（${years} 年）` : ''}` : '');
+    row('資本總額', r.capital ? `${r.capital} 仟元${r.scale ? `（${r.scale}）` : ''}` : '');
+    row('實收資本額', r.capitalPaid ? `${r.capitalPaid} 仟元` : '');
+    if (r.phones.length) {
+      const tel = el('div', { className: 'card-actions brief-tels' });
+      telLinks(r).forEach((a) => tel.append(a));
+      row('電話', r.phones.map((p) => p.display).filter(Boolean).join('、') + (r.phonesFrom ? `（同老闆的「${r.phonesFrom}」的）` : ''), tel);
+    } else if (r.phoneRaw) {
+      row('電話', r.phoneRaw);
+    }
+    const addrNode = (value) => el('a', {
+      href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(value)}`,
+      target: '_blank', rel: 'noopener', textContent: value,
+    });
+    if (r.addressActual) row('實際地址', r.addressActual, addrNode(r.addressActual));
+    if (r.addressRegistered && r.addressRegistered !== r.addressActual) row('登記地址', r.addressRegistered, addrNode(r.addressRegistered));
+    if (r.branch && r.branch.label) row('行銷區域', r.branch.label);
+    if (r.territory === '範圍外') row('服務區域', '範圍外——依【一般組】行銷規範第(三)項應採協銷辦理');
+    row('有沒有機會', r.chance ? `${CHANCE_LABEL[r.chance]}${r.chanceFrom ? `（跟著同老闆的「${r.chanceFrom}」）` : ''}` : '');
+    row('下次聯絡', r.nextDate ? dateLabel(r.nextDate) : '');
+    box.append(dl);
+
+    // 登記動態
+    box.append(el('h3', { textContent: '登記動態' }));
+    line('');
+    line('■ 登記動態');
+    {
+      const p = el('div', { className: 'brief-reg' });
+      const head = `最近核准變更：${r.regChanged || '—'}`;
+      p.append(el('div', { textContent: head }));
+      line(head);
+      if (r.regChanges && r.regChanges.length) {
+        const ol = el('ol', { className: 'reg-history' });
+        r.regChanges.forEach((c) => {
+          const title = `${dateLabel(c.date)}　${(c.kinds || []).map((k) => REG_KIND_LABEL[k]).join('、')}`;
+          const li = el('li', {}, [el('b', { textContent: title })]);
+          line(`- ${title}`);
+          Object.entries(c.changes || {}).forEach(([key, ch]) => {
+            const label = (REGISTRY_FIELDS.find(([k]) => k === key) || [, key])[1];
+            const t = `${label}：${ch.from || '（空）'} → ${ch.to}`;
+            li.append(el('div', { className: 'muted', textContent: t }));
+            line(`　${t}`);
+          });
+          ol.append(li);
+        });
+        p.append(ol);
+      } else {
+        const t = r.regError ? `商工登記查不到這家（${r.regError}）` : r.regAt ? '查過商工登記，沒有變更' : '還沒查過商工登記';
+        p.append(el('div', { className: 'muted', textContent: t }));
+        line(t);
+      }
+      box.append(p);
+    }
+
+    // 往來與拜訪
+    box.append(el('h3', { textContent: '往來情形' }));
+    line('');
+    line('■ 往來情形');
+    {
+      const dealing = `${N.DEALING_LABEL[r.dealingKind]}${r.dealing.snippet ? `：「${r.dealing.snippet}」` : ''}`;
+      box.append(el('p', { className: `dealing-verdict dealing-${r.dealingKind}` }, [
+        el('strong', { textContent: N.DEALING_LABEL[r.dealingKind] }),
+        r.dealing.snippet ? el('span', { className: 'muted', textContent: `「…${r.dealing.snippet}…」` }) : '',
+      ].filter(Boolean)));
+      line(dealing);
+      ['internal', 'peer', 'bank'].forEach((kind) => {
+        if (!r.relations[kind].length) return;
+        const t = `${N.RELATION_LABEL[kind]}：${[...new Set(r.relations[kind].map((x) => x.name))].join('、')}`;
+        box.append(el('p', { className: 'brief-relation', textContent: t }));
+        line(t);
+      });
+      const visit = r.visitKind === 'yes'
+        ? `有拜訪過${r.visit.date ? `（${dateLabel(r.visit.date)}）` : ''}${r.visit.snippet ? `：「${r.visit.snippet}」` : ''}`
+        : '還沒拜訪過';
+      box.append(el('p', { className: `dealing-verdict visit-${r.visitKind}` }, [el('strong', { textContent: visit })]));
+      line(visit);
+    }
+
+    // 同老闆的公司
+    if (members.length) {
+      box.append(el('h3', { textContent: `同老闆的公司（${members.length} 家）` }));
+      line('');
+      line('■ 同老闆的公司');
+      const ul = el('ul', { className: 'group-members' });
+      members.forEach((m) => {
+        const bits = [m.nextDate && `下次 ${dateLabel(m.nextDate)}`, N.outcomeLabel(m.outcome), m.dealingKind === 'active' ? '中租往來' : ''].filter(Boolean).join('　');
+        ul.append(el('li', {}, [document.createTextNode(m.company), el('small', { className: 'muted', textContent: bits ? `　${bits}` : '' })]));
+        line(`- ${m.company}${bits ? `（${bits}）` : ''}`);
+      });
+      box.append(ul);
+    }
+
+    // 最近談了什麼：自己記的、檔案帶的、同組的，一起排，取最近三則
+    const talks = bundle.logs
+      .map((l) => ({ date: l.date, text: l.text || `（${N.outcomeLabel(l.outcome)}）`, company: l.company, mine: true }))
+      .concat(r.timeline || [])
+      .concat(bundle.peers.flatMap((id) => {
+        const x = state.records.find((y) => y.id === id);
+        return x ? N.parseNotes(x.notesRaw || '').map((e) => ({ ...e, company: x.company })) : [];
+      }))
+      .map((e, i) => ({ ...e, i }))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || '') || a.i - b.i)
+      .slice(0, 3);
+    box.append(el('h3', { textContent: '最近談了什麼' }));
+    line('');
+    line('■ 最近談了什麼');
+    if (talks.length) {
+      const ul = el('ul', { className: 'brief-talks' });
+      talks.forEach((e) => {
+        const when = `${e.date ? dateLabel(e.date) : (e.dateRaw || '日期未標示')}${e.mine ? ' · 我的紀錄' : ''}${e.company ? ` · ${e.company}` : ''}`;
+        const text = String(e.text || '').replace(/\s+/g, ' ').trim();
+        const short = text.length > 160 ? `${text.slice(0, 160)}…` : text;
+        ul.append(el('li', {}, [el('time', { textContent: when }), el('span', { textContent: short })]));
+        line(`- ${when}：${short}`);
+      });
+      box.append(ul);
+    } else {
+      box.append(el('p', { className: 'muted', textContent: '還沒有任何談話紀錄，這是第一次接觸。' }));
+      line('（還沒有任何談話紀錄）');
+    }
+
+    // 這次要問
+    const latest = N.latestNote(bundle.text);
+    const balance = R && R.parseBalance ? (R.parseBalance((latest && latest.text) || '') || R.parseBalance(bundle.text)) : null;
+    const qs = visitQuestions(r, { follow: N.findFollowUp(bundle.text, today), balance, years });
+    box.append(el('h3', { textContent: `這次要問（${qs.length}）` }));
+    line('');
+    line('■ 這次要問');
+    const ol = el('ol', { className: 'brief-questions' });
+    qs.forEach((q, i) => {
+      const cb = el('input', { type: 'checkbox' });
+      const label = el('label', {}, [cb, el('span', {}, [document.createTextNode(q.text), q.why ? el('small', { textContent: q.why }) : ''].filter(Boolean))]);
+      ol.append(el('li', {}, [label]));
+      line(`${i + 1}. ${q.text}${q.why ? `（${q.why}）` : ''}`);
+    });
+    box.append(ol);
+    box.append(el('p', { className: 'muted', textContent: '問題是從名單、商工登記與訪談內容推出來的，帶著看就好，不用照念。回來後按「記錄拜訪結果」。' }));
+
+    host.append(box);
+    $('#editor').hidden = false;
   }
 
   function closeOverlays() {

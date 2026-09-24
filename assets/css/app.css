@@ -747,3 +747,66 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 .lock-box .btn { padding: 11px 16px; font-size: 16px; justify-content: center; }
 .lock-msg { margin: 14px 0 0; color: var(--danger); font-size: 14px; }
 .lock-note { margin: 14px 0 0; font-size: 13px; }
+
+/* ---------- 拜訪：出門前一頁紙、回來記一筆 ---------- */
+/* 拜訪表單預設收著：不是每次開詳細頁都是剛拜訪回來，攤開只會把記通話的框往下推 */
+.visit-section summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+.visit-section summary::-webkit-details-marker { display: none; }
+.visit-section summary::before { content: '▸'; color: var(--muted); font-size: 12px; width: 10px; }
+.visit-section[open] summary::before { content: '▾'; }
+.visit-section summary h3 { margin: 0; }
+.visit-section[open] summary { margin-bottom: 8px; }
+.visitform .row input[type="text"] {
+  flex: 1; min-width: 160px; padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+.visitform textarea { margin-top: 10px; }
+.visit-field { margin-top: 10px; }
+.visit-field > .muted { display: block; font-size: 12px; margin-bottom: 6px; }
+/* 時間軸上拜訪那幾則的點換個顏色，捲的時候一眼分得出哪幾次是真的去過 */
+.timeline li.is-visit::before { background: var(--warn); }
+.timeline li.is-visit time.is-mine { color: var(--warn); }
+
+.brief h2 { font-size: 19px; margin-bottom: 2px; }
+.brief > .muted { font-size: 13px; }
+.brief-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px; }
+.brief-actions a.btn { text-decoration: none; }
+.brief h3 { font-size: 14px; color: var(--muted); margin: 18px 0 6px; }
+.brief-grid { grid-template-columns: 96px 1fr; margin: 6px 0; }
+.brief-tels { margin-top: 0; }
+.brief-reg .reg-history { margin-top: 6px; }
+.brief-relation { margin: 4px 0; font-size: 14px; }
+.brief-talks { list-style: none; margin: 0; padding: 0; }
+.brief-talks li { padding: 6px 0; border-top: 1px dashed var(--border); font-size: 14px; line-height: 1.6; }
+.brief-talks time { display: block; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.brief-questions { margin: 0; padding: 0; list-style: none; counter-reset: q; }
+.brief-questions li { border-top: 1px dashed var(--border); }
+.brief-questions label { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; cursor: pointer; line-height: 1.6; }
+.brief-questions label::before { counter-increment: q; content: counter(q) "."; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 1.4em; }
+.brief-questions input { margin: 6px 0 0; flex: none; }
+.brief-questions small { display: block; color: var(--muted); font-size: 12px; }
+/* 勾掉的問題淡掉：現場一邊問一邊勾，還沒問的才醒目 */
+.brief-questions input:checked ~ span { opacity: .45; text-decoration: line-through; }
+
+/*
+ * 列印拜訪準備：整頁只留那一張紙。
+ *
+ * 對話框是疊在名單上面的浮層，直接列印會連底下的名單一起印出來，而且固定定位的
+ * 東西每一頁都會重複。所以列印時把 body 其他東西全藏起來，對話框改成一般流式排版。
+ * 這個 class 只在 @media print 裡有意義，留在 body 上不影響螢幕。
+ */
+@media print {
+  body.print-brief > *:not(#editor) { display: none !important; }
+  body.print-brief #editor { position: static; }
+  body.print-brief #editor .drawer-backdrop, body.print-brief #editor .drawer-close, body.print-brief .brief-actions { display: none !important; }
+  body.print-brief #editor .modal {
+    position: static; transform: none; width: auto; max-height: none; overflow: visible;
+    box-shadow: none; border: 0; border-radius: 0; padding: 0;
+  }
+  body.print-brief { background: #fff; color: #000; }
+  body.print-brief .brief a { color: inherit; text-decoration: none; }
+  body.print-brief .brief .tel { border: 0; padding: 0; background: none; }
+  body.print-brief .brief .copy-dot { display: none !important; }
+  body.print-brief .brief-questions input { -webkit-appearance: checkbox; }
+  @page { margin: 12mm; }
+}
