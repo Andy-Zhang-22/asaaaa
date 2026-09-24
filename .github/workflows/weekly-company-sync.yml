@@ -39,22 +39,6 @@ jobs:
         if: always()
         run: cat probe-report.md >> "$GITHUB_STEP_SUMMARY"
 
-      # 暫掛：重抓全部七個縣市（設立清冊的營業項目欄位修正、index.json 合併修正）。
-      # monthly-leads.yml 進了預設分支之後這段拿掉。
-      - name: 重抓全部清冊
-        run: |
-          which pdftotext >/dev/null 2>&1 || sudo apt-get install -y -q poppler-utils
-          rm -rf leads/11508 leads/index.json
-          node tools/fetch-leads.mjs | tee fetch-leads.log
-          printf '```\n' >> "$GITHUB_STEP_SUMMARY"; cat fetch-leads.log >> "$GITHUB_STEP_SUMMARY"; printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A leads
-          if git diff --cached --quiet; then echo "清冊沒有變動"; exit 0; fi
-          git commit -m "每月新公司清冊：重抓 $(date -u +%Y-%m-%d)"
-          git pull --rebase origin "$GITHUB_REF_NAME"
-          git push origin "HEAD:$GITHUB_REF_NAME"
-
       - name: 保留原始回應供後續分析
         if: always()
         uses: actions/upload-artifact@v4
