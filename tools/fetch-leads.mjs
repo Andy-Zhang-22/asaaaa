@@ -105,6 +105,8 @@ const isChrome = (l) => {
  * 某縣市的排版有怪東西）就退回這組，並在 log 講明是退回的。
  */
 const KNOWN_EDGES = { company: 176, owner: 276, address: 342, capitalRight: 519, date: 534.75, reason: 592, item: 662 };
+// 設立清冊沒有「案由」欄，營業項目往左移到案由的位置
+const KNOWN_ITEM_WITHOUT_REASON = 592;
 
 /**
  * 第一趟：從主列量出每一欄的左緣。
@@ -146,15 +148,17 @@ function measure(ls) {
   const high = (arr) => { if (!arr.length) return null; const a = arr.slice().sort((x, y) => y - x); return a[Math.floor(a.length * 0.02)]; };
   const measured = { company: low(acc.company), owner: low(acc.owner), address: low(acc.address), capitalRight: high(acc.capitalRight), date: low(acc.date), reason: low(acc.reason), item: low(acc.item) };
   const e = { samples: acc.date.length, fallback: [] };
-  for (const k of Object.keys(KNOWN_EDGES)) {
+  // 設立清冊沒有案由欄：量不到就是沒有，而且營業項目的已知左緣要換成沒有案由的那一組。
+  // 第一版沒換，設立清冊量到的 592 被當成「差太多」退回 662，營業項目整欄變成案由。
+  const hasReason = measured.reason !== null;
+  const known = { ...KNOWN_EDGES, item: hasReason ? KNOWN_EDGES.item : KNOWN_ITEM_WITHOUT_REASON };
+  for (const k of Object.keys(known)) {
     const v = measured[k];
     // 量到的跟已知差太多也不信（>25pt 代表抓錯錨點），退回已知值
-    if (v === null || Math.abs(v - KNOWN_EDGES[k]) > 25) { e[k] = KNOWN_EDGES[k]; if (k !== 'reason' && k !== 'owner') e.fallback.push(k); }
+    if (v === null || Math.abs(v - known[k]) > 25) { e[k] = known[k]; if (k !== 'reason' && k !== 'owner') e.fallback.push(k); }
     else e[k] = v;
   }
-  // 設立清冊沒有案由欄：量不到就是沒有，第二趟才不會把營業項目前半段當成案由
-  if (measured.reason === null) e.reason = null;
-  if (measured.item === null) e.item = null;
+  if (!hasReason) e.reason = null;
   return e;
 }
 
@@ -303,6 +307,12 @@ if (!PROBE) {
   let all = { periods: {} };
   try { all = JSON.parse(await fs.readFile(path.join(OUT, 'index.json'), 'utf8')); } catch (e) { /* 第一次 */ }
   all.periods = all.periods || {};
+  // 同一期照「縣市＋清冊」合併：只抓一個縣市時，其他縣市的檔案要留著，不能整期蓋掉
+  const before = (all.periods[period] && all.periods[period].files) || [];
+  const key = (f) => `${f.city}|${f.type}`;
+  const fresh = new Set(index.files.map(key));
+  index.files = [...before.filter((f) => !fresh.has(key(f))), ...index.files]
+    .sort((a, b) => a.city.localeCompare(b.city, 'zh-Hant') || a.type.localeCompare(b.type));
   all.periods[period] = index;
   all.latest = Object.keys(all.periods).sort().pop();
   all.generatedAt = index.generatedAt;
