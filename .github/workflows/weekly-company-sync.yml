@@ -47,7 +47,10 @@ jobs:
 
       - name: 新客戶來源印在摘要上
         if: always()
-        run: { printf '```\n'; cat probe-leads.log; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          cat probe-leads.log >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
 
       - name: 保留原始回應供後續分析
         if: always()
