@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260925-162';
+  const APP_VERSION = '20260925-163';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -6399,13 +6399,6 @@ export default {
           JSON.stringify(await window.Store.exportAll()), 'application/json');
       }
       if (act === 'import-json') $('#jsonPick').click();
-      if (act === 'theme') {
-        const now = document.body.dataset.theme;
-        const next = now === 'dark' ? 'light' : 'dark';
-        document.body.dataset.theme = next;
-        document.documentElement.dataset.theme = next;
-        localStorage.setItem('theme', next);
-      }
       if (act === 'sync-now') runSync({ interactive: true });
       if (act === 'sync-setup') {
         $('#clientId').value = window.DriveSync.clientId();
@@ -6536,11 +6529,8 @@ export default {
   }
 
   async function init() {
-    const saved = localStorage.getItem('theme');
-    if (saved) {
-      document.body.dataset.theme = saved;
-      document.documentElement.dataset.theme = saved;
-    }
+    // 深淺色切換拿掉了（使用者說用不到），一律跟著系統；以前手動選過的清掉，不然會永遠卡在那一色
+    try { localStorage.removeItem('theme'); } catch (e) { /* 無痕模式 */ }
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = `assets/vendor/pdfjs/pdf.worker.min.js?v=${APP_VERSION}`;
     $('#menuVersion').textContent = `版本 ${APP_VERSION}`;
     wireEvents();
