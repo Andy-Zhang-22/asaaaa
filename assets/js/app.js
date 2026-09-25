@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260925-163';
+  const APP_VERSION = '20260925-164';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1078,7 +1078,7 @@
         const dup = current.filter((r) => r.taxId && known.has(r.taxId)).length;
         if (dup) {
           preview.append(el('p', { className: 'rule-note',
-            textContent: `※ 其中 ${dup} 筆的統編已經在你的名單裡，匯入後會以這份資料更新它們。` }));
+            textContent: `※ 其中 ${dup} 筆的統編已經在你的名單裡。匯入時會再問一次：預設「補上」——舊的不動，只把變更事項加進訪談內容。` }));
         }
         current.slice(0, 5).forEach((r) => {
           preview.append(el('div', { className: 'import-preview' }, [
@@ -5609,7 +5609,8 @@ export default {
    *
    * 沒有預設幫他決定，因為三種做法的後果差很多，而且覆蓋會動到他手動改過的內容。
    */
-  function askDuplicatePolicy(filename, hits) {
+  function askDuplicatePolicy(filename, hits, opts) {
+    const gov = !!(opts && opts.gov);
     return new Promise((resolve) => {
       const edited = hits.filter(({ old }) => {
         const st = state.userStates.get(old.id);
@@ -5657,7 +5658,21 @@ export default {
           el('p', { className: 'rule-note', textContent: hint }),
         ]));
       };
-      pick('overwrite', '以新檔案覆蓋', '同一家公司只留一張卡片，內容以新檔案為準。通話紀錄保留。', true);
+      /*
+       * 登記清冊的重複另外有一條路：補上。
+       *
+       * 清冊那一列很薄（沒電話、沒訪談），名單上那筆是厚的（打過的紀錄、找來的電話、
+       * 改過的欄位）。「覆蓋」會用薄的蓋掉厚的，還把手動修改一起清掉——把 Google 地圖
+       * 找來的電話都洗掉。所以清冊預設是「補上」：舊的全留，只把變更事項與營業項目
+       * 接到訪談內容最後面（放最後面，不然沒日期的那一段會排到最上面，洽談狀態被判成
+       * 「未撥打」），空著的欄位順手補。
+       */
+      if (gov) {
+        pick('enrich', '補上登記資料（推薦）', '名單上那筆不動——訪談內容、電話、改過的欄位、通話紀錄都留著，只把清冊的變更事項與營業項目加進訪談內容，空著的欄位（統編、資本額、負責人、地址、成立年）補上。', true);
+      }
+      pick('overwrite', '以新檔案覆蓋', gov
+        ? '同一家公司只留一張卡片，內容以清冊為準——清冊沒有電話與訪談，原本的會不見，手動修改也會清掉。通話紀錄保留。'
+        : '同一家公司只留一張卡片，內容以新檔案為準。通話紀錄保留。', !gov);
       pick('keep', '兩邊都留著', '新檔案的資料另外新增一筆。同一家公司會有兩張卡片。');
       pick('skip', '略過重複的', '名單上已經有的就不動，只匯入新的公司。');
 
@@ -5909,6 +5924,7 @@ export default {
     for (const file of wanted) {
       const isCsv = /\.csv$/i.test(file.name) || file.type === 'text/csv';
       const isXlsx = /\.xlsx?$/i.test(file.name);
+      let isGov = false;   // 經濟部登記清冊：重複時多一種「補上」的處理
       logLine(`⏳ 解析 ${file.name} …`);
       try {
         let rows;
@@ -5928,6 +5944,7 @@ export default {
           const picked = await askGovFilter(file.name, rows);
           if (!picked) { logLine(`已取消 ${file.name}`); continue; }
           rows = picked;
+          isGov = true;
         }
         if (!isCsv && !isXlsx) {
           const buffer = await file.arrayBuffer();
@@ -5990,12 +6007,27 @@ export default {
         let dupNote = droppedNote(dropped);
         const hits = findImportDuplicates(records, file.name);
         if (hits.length) {
-          const policy = await askDuplicatePolicy(file.name, hits);
+          const policy = await askDuplicatePolicy(file.name, hits, { gov: isGov });
           if (!policy) { logLine(`已取消 ${file.name}`); continue; }
           const byIncoming = new Map(hits.map((h) => [h.incoming, h]));
           if (policy === 'skip') {
             toSave = records.filter((r) => !byIncoming.has(r));
             dupNote += `，略過 ${hits.length} 筆重複`;
+          } else if (policy === 'enrich') {
+            // 舊的那筆整個留著（id、來源都不變，同名重匯刪來源時才不會把它刪掉），只補不蓋
+            const merged = hits.map(({ incoming, old }) => {
+              const out = { ...old };
+              ['taxId', 'owner', 'capital', 'capitalPaid', 'founded', 'address', 'industry'].forEach((k) => {
+                if (!String(out[k] || '').trim() && String(incoming[k] || '').trim()) out[k] = incoming[k];
+              });
+              const add = String(incoming.notesRaw || '').trim();
+              if (add && !String(out.notesRaw || '').includes(add)) out.notesRaw = [String(out.notesRaw || '').trim(), add].filter(Boolean).join('\n');
+              out.timeline = window.Normalize.parseNotes(out.notesRaw || '');
+              out.importedAt = importedAt;
+              return out;
+            });
+            toSave = records.filter((r) => !byIncoming.has(r)).concat(merged);
+            dupNote += `，補上 ${hits.length} 筆已在名單上的登記資料`;
           } else if (policy === 'overwrite') {
             // 沿用舊的 id，通話紀錄才會繼續掛在同一筆上
             hits.forEach(({ incoming, old }) => { incoming.id = old.id; });
