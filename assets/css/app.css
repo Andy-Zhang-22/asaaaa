@@ -705,6 +705,22 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 /* 存檔失敗的原因：toast 兩秒多就消失，錯過就不知道發生什麼事，所以留在表單上 */
 /* 存不了的那一支電話要看得出來是哪一支，不能只有下面一行字 */
 .phone-row input.is-bad { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
+/* 每天打得完幾家：一天一列，長條讓「哪幾天爆了」一眼看得出來 */
+.cap-row { align-items: center; gap: 8px; margin: 12px 0; }
+.cap-input { width: 72px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); }
+.day-load { display: flex; flex-direction: column; gap: 2px; margin: 12px 0; }
+.day-row {
+  display: grid; grid-template-columns: 96px 1fr 56px; align-items: center; gap: 10px;
+  padding: 6px 8px; border: 0; border-radius: 8px; background: transparent;
+  font: inherit; color: var(--text); text-align: left; cursor: pointer;
+}
+.day-row:hover { background: var(--surface-2); }
+.day-bar { display: block; height: 10px; border-radius: 5px; background: var(--surface-2); overflow: hidden; }
+.day-bar i { display: block; height: 100%; background: var(--primary); }
+.day-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+/* 超過上限的那幾天要一眼認得出來，不能只靠數字 */
+.day-row.is-over .day-bar i { background: var(--danger); }
+.day-row.is-over .day-n { color: var(--danger); font-weight: 600; }
 .save-err {
   margin: 8px 0 0; padding: 8px 10px; font-size: 13px; line-height: 1.6;
   color: var(--danger); background: var(--surface-2);
@@ -713,6 +729,8 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 
 /* 連結關係企業裡「用商工登記找」那一區：跟名單內的清單分開，免得混在一起看不出差別 */
 .group-registry { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
+/* 名單外查詢移到上面之後，換名單內那段需要自己的分隔線 */
+.group-inlist { margin-top: 18px; padding-top: 12px; border-top: 1px dashed var(--border); }
 .group-registry .row { gap: 8px; align-items: center; }
 .group-registry .paste-box { flex: 1; min-width: 160px; }
 /* 登記查到的每一家要三行：名稱、統編地址資本額、在不在名單裡 */

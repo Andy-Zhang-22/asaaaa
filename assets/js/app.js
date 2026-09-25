@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260925-165';
+  const APP_VERSION = '20260925-167';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1586,7 +1586,7 @@
     const members = groupMembers(r);
     const picked = new Set(members.map((m) => m.id));
     const chosenBox = el('div', { className: 'chips' });
-    const listBox = el('div', { className: 'group-list' });
+    const listBox = el('div', { className: 'group-list group-list-mine' });
 
     const rowFor = (x) => {
       const cb = el('input', { type: 'checkbox' });
@@ -1640,7 +1640,7 @@
     const newPicks = new Map();          // 名單外要一起加進來的：統編或名稱 → 登記資料
     const regBox = el('div', { className: 'group-registry' });
     const regNote = el('p', { className: 'rule-note' });
-    const regList = el('div', { className: 'group-list' });
+    const regList = el('div', { className: 'group-list group-list-found' });
     const kwInput = el('input', {
       type: 'search', className: 'paste-box',
       placeholder: '登記全名或統一編號（簡稱查不到；兩個一起貼也可以）',
@@ -1976,12 +1976,21 @@
     };
     cancel.onclick = () => { $('#editor').hidden = true; };
 
-    host.append(el('p', { className: 'muted', textContent: '目前選的：' }), chosenBox, search, listBox, regBox,
+    /*
+     * 「名單外查詢」放在名單內清單的上面。
+     *
+     * 使用者說這個功能他比較常用。本來要連的關企多半就是他當下知道名字、但名單裡
+     * 沒有的那一家；名單內的清單有好幾百列，擺在前面等於每次都要先捲過去。
+     * 游標也直接落在查詢框，打開就能打字。
+     */
+    host.append(el('p', { className: 'muted', textContent: '目前選的：' }), chosenBox, regBox,
+      el('p', { className: 'muted group-inlist', textContent: '名單內的公司：勾選要連在一起的。' }),
+      search, listBox,
       el('div', { className: 'card-actions' }, [save, unlink, cancel]));
     paintChosen();
     paintList('');
     $('#editor').hidden = false;
-    search.focus();
+    kwInput.focus();
   }
 
   /*
@@ -2298,6 +2307,233 @@
     render();
     toast(`已把 ${done} 家分散到 ${dateLabel(slots[0])} ～ ${dateLabel(slots[slots.length - 1])}`);
     scheduleSync();
+  }
+
+  /* ------------------------------------------------------------------
+   * 一天打得完幾家
+   *
+   * 使用者把匯進來的名單篩一篩、一筆一筆排上下次聯絡日之後，短期內要打的就爆量了。
+   * 原本只有「把今天要聯絡的分散到未來 15 個工作天」，那顆只處理今天（含逾期）那一批，
+   * 而且是平均切——未來每天本來就已經塞滿的時候，它反而把今天的再疊上去。
+   *
+   * 所以需要兩件事：看得到每個上班日各有幾家，以及照「我一天打得完幾家」把超過的往後挪。
+   * ------------------------------------------------------------------ */
+  const DAILY_CAP_DEFAULT = 20;
+  const dailyCap = () => {
+    const n = Number(registryPref('daily-cap'));
+    return Number.isFinite(n) && n > 0 ? Math.min(500, Math.round(n)) : DAILY_CAP_DEFAULT;
+  };
+
+  /** 從今天起算的上班日（今天放假就從下一個上班日開始）。 */
+  function workdaysFromToday(count) {
+    const out = [];
+    let d = todayISO();
+    if (!window.Holidays || window.Holidays.isWorkday(d)) out.push(d);
+    for (let i = 0; i < 400 && out.length < count; i++) {
+      d = addDays(d, 1);
+      if (!window.Holidays || window.Holidays.isWorkday(d)) out.push(d);
+    }
+    return out;
+  }
+
+  /*
+   * 誰留在前面、誰往後挪。
+   *
+   * 最前面的是「已經被擠過一次的」（原訂日期最早），不然同一批會一直被往後推、永遠排不到。
+   * 接著是你自己標過有機會的、最近查到變更登記的（增資、換負責人這種有資金需求的訊號），
+   * 最後才比資本額。名稱只是讓結果穩定，不要每次按都換一個順序。
+   */
+  const callPriority = (a, b) => {
+    const at = (x) => x.from || '9999-99-99';
+    if (at(a) !== at(b)) return at(a) < at(b) ? -1 : 1;
+    const chance = (x) => (x.v.chance === 'yes' ? 0 : 1);
+    if (chance(a) !== chance(b)) return chance(a) - chance(b);
+    const reg = (x) => ((x.v.regKinds || []).some((k) => k !== 'none' && k !== 'unchecked') ? 0 : 1);
+    if (reg(a) !== reg(b)) return reg(a) - reg(b);
+    const cap = (x) => Number(String(x.v.capital || '').replace(/[^\d]/g, '')) || 0;
+    if (cap(a) !== cap(b)) return cap(b) - cap(a);
+    return a.v.company.localeCompare(b.v.company, 'zh-Hant');
+  };
+
+  /*
+   * 把要聯絡的客戶歸到上班日。
+   *
+   * 逾期的算在第一個上班日（本來就該處理了）；下次聯絡日剛好落在週末或國定假日的，
+   * 算到下一個上班日——那天本來就打不了電話，列在那裡只會讓當天看起來是空的。
+   * 排在視野之外的不算，那已經不是「短期內太多」的問題。
+   */
+  function bucketByWorkday(days) {
+    const today = todayISO();
+    const at = (iso) => {
+      let lo = 0; let hi = days.length - 1; let ans = -1;
+      while (lo <= hi) { const mid = (lo + hi) >> 1; if (days[mid] >= iso) { ans = mid; hi = mid - 1; } else lo = mid + 1; }
+      return ans;
+    };
+    const movable = [];
+    const fixed = new Map();
+    let overdue = 0;
+    let beyond = 0;
+    allViews().forEach((v) => {
+      if (!v.nextDate || v.blocked) return;
+      if (v.nextDate < today) overdue += 1;
+      const i = at(v.nextDate < today ? today : v.nextDate);
+      if (i < 0) { beyond += 1; return; }
+      const day = days[i];
+      // 已經跟客戶約好回撥時間的不動，但要算進那天的額度裡
+      if (v.remindAt) { fixed.set(day, (fixed.get(day) || 0) + 1); return; }
+      movable.push({ v, from: v.nextDate, day });
+    });
+    return { movable, fixed, overdue, beyond };
+  }
+
+  /** 目前每個上班日各有幾家要打。 */
+  function dayLoad(horizon) {
+    const days = workdaysFromToday(horizon);
+    const { movable, fixed, overdue, beyond } = bucketByWorkday(days);
+    const counts = new Map(days.map((d) => [d, fixed.get(d) || 0]));
+    movable.forEach((m) => counts.set(m.day, (counts.get(m.day) || 0) + 1));
+    return { days, counts, overdue, beyond, total: movable.length + [...fixed.values()].reduce((a, b) => a + b, 0) };
+  }
+
+  /**
+   * 照「一天最多幾家」算出要把誰挪到哪一天。
+   *
+   * 一天一天往後走：那天的池子（前一天擠下來的 ＋ 原本排那天的）照優先順序留下上限
+   * 那麼多家，其餘整批推到下一個上班日。只會往後、不會往前。
+   */
+  function planDailyCap(cap) {
+    const first = workdaysFromToday(30);
+    const rough = bucketByWorkday(first);
+    // 天數要夠放，不然最後一天會擠成一坨，等於沒排
+    const need = Math.ceil((rough.movable.length || 1) / Math.max(1, cap)) + 5;
+    const days = workdaysFromToday(Math.min(260, Math.max(30, need)));
+    const { movable, fixed, overdue } = bucketByWorkday(days);
+    const byDay = new Map();
+    movable.forEach((m) => {
+      if (!byDay.has(m.day)) byDay.set(m.day, []);
+      byDay.get(m.day).push(m);
+    });
+    const counts = new Map();
+    const moves = [];
+    let carry = [];
+    days.forEach((d) => {
+      const pool = carry.concat(byDay.get(d) || []);
+      pool.sort(callPriority);
+      const room = Math.max(0, cap - (fixed.get(d) || 0));
+      const keep = pool.slice(0, room);
+      carry = pool.slice(room);
+      counts.set(d, keep.length + (fixed.get(d) || 0));
+      keep.forEach((m) => { if (m.v.nextDate !== d) moves.push({ id: m.v.id, from: m.v.nextDate, to: d }); });
+    });
+    return { moves, days, counts, leftover: carry.length, total: movable.length, overdue };
+  }
+
+  async function applyDailyCap() {
+    const cap = dailyCap();
+    const plan = planDailyCap(cap);
+    if (!plan.total) { toast('目前沒有排定下次聯絡日的客戶'); return false; }
+    if (!plan.moves.length) { toast(`每天都沒超過 ${cap} 家，不用重排`); return false; }
+    const lastDay = [...plan.counts.entries()].filter(([, n]) => n > 0).map(([d]) => d).pop() || plan.days[0];
+    const ok = await askConfirm(
+      `要照「一天最多 ${cap} 家」重排嗎？\n\n`
+      + `${plan.total} 家裡有 ${plan.moves.length} 家會被往後挪，最後排到 ${dateLabel(lastDay)}。\n\n`
+      + '每天留下最該打的，其餘推到下一個上班日；只會往後、不會往前。\n'
+      + '已經約好回撥時間的不會被動到，但會佔掉當天的額度。\n'
+      + '週末與國定假日會跳過。原本的下次聯絡日會被蓋掉'
+      + '（可以馬上按選單裡的「復原剛才的分散」還原）。',
+      { okText: `重排（${plan.moves.length} 家）`, cancelText: '不要' },
+    );
+    if (!ok) return false;
+    const undo = [];
+    let done = 0;
+    for (const m of plan.moves) {
+      try {
+        await saveState(m.id, { nextDate: m.to });
+        undo.push({ id: m.id, nextDate: m.from });
+        done += 1;
+      } catch (err) {
+        console.error('照上限重排失敗', err);
+        toast(`排到一半失敗：${err && err.message ? err.message : err}。已經排好 ${done} 家。`);
+        break;
+      }
+    }
+    lastSpread = undo.length ? { items: undo, at: Date.now() } : null;
+    $('#menu').querySelector('[data-act="spread-undo"]').hidden = !lastSpread;
+    await reload();
+    render();
+    toast(`已重排 ${done} 家，最後排到 ${dateLabel(lastDay)}`);
+    scheduleSync();
+    return true;
+  }
+
+  /** 選單的「每天打得完幾家」：看未來每個上班日各有幾家，順便照上限重排。 */
+  function openDayLoad() {
+    const HORIZON = 20;
+    const host = $('#editorBody');
+    const draw = () => {
+      const cap = dailyCap();
+      const { days, counts, overdue, beyond, total } = dayLoad(HORIZON);
+      host.textContent = '';
+      host.append(el('h2', { textContent: '每天打得完幾家' }));
+
+      const capInput = el('input', { type: 'number', min: '1', max: '500', value: String(cap), className: 'cap-input' });
+      const replan = el('button', { className: 'btn btn-primary', type: 'button', textContent: '照上限重排' });
+      capInput.onchange = () => {
+        const n = Math.max(1, Math.min(500, Math.round(Number(capInput.value) || 0)));
+        capInput.value = String(n);
+        registryPref('daily-cap', String(n));
+        draw();
+      };
+      replan.onclick = async () => { if (await applyDailyCap()) draw(); };
+      host.append(el('div', { className: 'card-actions cap-row' }, [
+        el('span', { className: 'muted', textContent: '我一天最多打' }), capInput,
+        el('span', { className: 'muted', textContent: '家' }), replan,
+      ]));
+
+      const over = days.filter((d) => (counts.get(d) || 0) > cap);
+      const extra = over.reduce((n, d) => n + ((counts.get(d) || 0) - cap), 0);
+      host.append(el('p', { className: `rule-verdict ${over.length ? 'is-fail' : 'is-ok'}` }, [
+        el('strong', { textContent: over.length
+          ? `接下來 ${days.length} 個上班日有 ${over.length} 天超過上限，多出 ${extra} 家`
+          : `接下來 ${days.length} 個上班日都沒超過 ${cap} 家` }),
+      ]));
+      const notes = [
+        `這 ${days.length} 天共 ${total} 家`,
+        overdue ? `其中 ${overdue} 家已逾期，算在第一個上班日` : '',
+        beyond ? `另外有 ${beyond} 家排在 ${dateLabel(days[days.length - 1])} 之後，沒算進來` : '',
+      ].filter(Boolean);
+      host.append(el('p', { className: 'muted', textContent: `${notes.join('；')}。點任一天可以只看那天的名單。` }));
+
+      const max = Math.max(cap, ...days.map((d) => counts.get(d) || 0), 1);
+      const list = el('div', { className: 'day-load' });
+      days.forEach((d) => {
+        const n = counts.get(d) || 0;
+        const row = el('button', { className: `day-row${n > cap ? ' is-over' : ''}`, type: 'button' });
+        row.append(
+          el('span', { className: 'day-when', textContent: `${ymdShort(d)}（${window.Holidays ? window.Holidays.weekLabel(d) : ''}）` }),
+          el('span', { className: 'day-bar' }, [el('i', { style: `width:${Math.round((n / max) * 100)}%` })]),
+          el('span', { className: 'day-n', textContent: n ? `${n} 家` : '—' }),
+        );
+        row.title = n > cap ? `${dateLabel(d)} 有 ${n} 家，超過上限 ${n - cap} 家` : `${dateLabel(d)} 有 ${n} 家`;
+        row.onclick = () => {
+          state.filters.due = '';
+          state.filters.dueNone = false;
+          state.filters.dueFrom = d;
+          state.filters.dueTo = d;
+          state.limit = PAGE_SIZE;
+          closeOverlays();
+          render();
+          toast(`只看 ${dateLabel(d)} 要聯絡的（${n} 家）`);
+        };
+        list.append(row);
+      });
+      host.append(list);
+      host.append(el('p', { className: 'muted',
+        textContent: '重排時每天留下最該打的：被擠過一次的優先，再來是你標過「有機會」的、'
+          + '最近查到變更登記的（增資、換負責人），最後才比資本額。' }));
+    };
+    draw();
+    $('#editor').hidden = false;
   }
 
   async function undoSpread() {
@@ -4760,7 +4996,8 @@ export default {
   const SYNCED_PREFS = new Set(['registry-proxy-url', 'registry-dataset-url', 'registry-dataset-taxid-url',
     'registry-mirror', 'registry-auto', 'registry-auto-last', 'registry-auto-summary',
     // 欄位改版的記號也同步：某台已經重查完、資料也同步過來了，另一台就不用再查一次
-    'registry-fields-rev', 'my-branch', 'my-unit']);
+    // 一天打得完幾家：在電腦上設好，手機打開要是同一個數字
+    'registry-fields-rev', 'my-branch', 'my-unit', 'daily-cap']);
   /** 每天自動對商工登記：預設開，使用者關掉才存 '0'。 */
   const registryAutoOn = () => registryPref('registry-auto') !== '0';
   const registryPref = (key, value) => {
@@ -6332,6 +6569,7 @@ export default {
       if (act === 'phone-hunt') { await openPhoneHunt(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'check-names') { await reviewCompanyNames(); return; }
+      if (act === 'day-load') { openDayLoad(); return; }
       if (act === 'spread-due') { await spreadDueOverWorkdays(15); return; }
       if (act === 'spread-undo') { await undoSpread(); return; }
       if (act === 'manage') {
