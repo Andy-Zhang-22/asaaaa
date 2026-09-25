@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260924-160';
+  const APP_VERSION = '20260925-162';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -794,6 +794,8 @@
     // 提醒列上按過「完成」的那一天，當天就不再列出來（見 remindItems）
     out.dueDoneOn = (mine && mine.dueDoneOn) || '';
     out.remindNote = (mine && mine.remindNote) || '';
+    // 電話是從 Google 地圖找來的話，詳細頁要標明來源
+    out.phoneSource = (mine && mine.phoneSource) || null;
     /*
      * 篩選要撈得到每一次查到的變更：9/16 增資、10/8 變更地址，兩個籤都該有這家。
      * regKindDate 記每一種最近那次的日期，卡片標記才寫得出「增資 9/16」。
@@ -1108,97 +1110,283 @@
     });
   }
 
-  /**
-   * 撈本月新公司：GitHub Actions 每月抓好的設立／變更登記清冊。
-   *
-   * 政府網站沒有 CORS，瀏覽器抓不到清冊 PDF，所以由 Actions 抓下來、解析成 CSV 放在
-   * repo 的 leads/ 底下（tools/fetch-leads.mjs），網站從自己的網址讀。這裡只做兩件事：
-   * 列出有哪些期別、縣市可以抓；把勾選的合成一份 CSV 交給既有的匯入流程——
-   * 之後的資本額／地區／只要增資的篩選、重複處理、商工登記查核，全部走原本那條路。
-   */
-  const csvText = (rows) => rows.map((r) => r.map((v) => {
-    const t = String(v == null ? '' : v);
-    return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
-  }).join(',')).join('\n');
+  /* ---------------- 找電話：Google 地圖（Places API） ---------------- */
 
-  async function openLeadsPicker() {
+  /*
+   * 沒電話的客戶怎麼補電話。
+   *
+   * 使用者的做法：Google 搜公司名，電話取自官網或 Google 地圖的店家資料，找不到就刪掉。
+   * 名單裡沒電話的有兩千多家（多半是清冊匯進來的），一家一家搜是一週的工作。
+   *
+   * 這裡接的是 Google 地圖同一份資料的正規管道：Places API（New）的文字搜尋，
+   * 用「公司名＋地址」查，回來的店家有電話、地址、官網、地圖連結。從使用者自己的瀏覽器
+   * 直接查（API 允許跨網域，金鑰限制在這個網址），送出去的只有公司名與地址，都是登記上
+   * 的公開資料；金鑰存在這台裝置，不進同步檔。
+   *
+   * 對不對得上要自己判：Google 回的可能是隔壁店。公司名去掉「股份有限公司」之後要互相
+   * 包含，而且地址要在同一個區（或同一條路）才算「確定」；只有名字像、或只有地址像，
+   * 算「疑似」，列出來讓人看；都不像就當找不到，寧可沒電話也不要存錯的號碼。
+   *
+   * 費用：Places 文字搜尋含電話欄位是 Pro 級，每千次約 US$32，Google 每月送 US$200
+   * 額度（約六千次），這個名單一個月用不到。
+   */
+  const PLACES_KEY = 'places-api-key';
+  const placesKey = () => { try { return localStorage.getItem(PLACES_KEY) || ''; } catch (e) { return ''; } };
+  const nameCore = (t) => String(t || '').replace(/\s+/g, '').replace(/台/g, '臺')
+    .replace(/[()（）\-－·．.,，、]/g, '')
+    .replace(/(股份有限公司|有限公司|股份|公司|企業社|商行|工作室|工廠)/g, '');
+
+  /** 打分：確定／疑似／不像。回傳最好的一個候選（帶 level）與全部候選。 */
+  function gradePlaces(r, places) {
+    const core = nameCore(r.company);
+    const area = `${r.city || ''}${r.district || ''}`.replace(/台/g, '臺');
+    // 地址正規化：台→臺、「一段」→「1段」、全形數字→半形，門牌才比得起來
+    const normAddr = (t) => String(t || '').replace(/台/g, '臺')
+      .replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0))
+      .replace(/([一二三四五六七八九十])段/g, (m, c) => `${'一二三四五六七八九十'.indexOf(c) + 1}段`)
+      .replace(/\s+/g, '');
+    const addr = normAddr(r.addressActual || r.address);
+    // 「路名＋段＋號」：同一條路不算，要同一個門牌才算地址對上——同一條路上的便利商店太多了
+    const house = (addr.match(/[\u4e00-\u9fa5]{1,8}(路|街|大道)(\d+段)?(\d+巷)?(\d+弄)?\d+(之\d+)?號/) || [])[0] || '';
+    let best = null;
+    const rank = { sure: 2, maybe: 1, none: 0 };
+    places.forEach((p) => {
+      const pn = nameCore(p.name);
+      const pa = normAddr(p.address);
+      const nameHit = core.length >= 2 && pn.length >= 2 && (pn.includes(core) || core.includes(pn));
+      const areaHit = !!area && pa.includes(area);
+      const houseHit = !!house && pa.includes(house);
+      let level = 'none';
+      if (p.phone && nameHit && (areaHit || houseHit || !area)) level = 'sure';
+      else if (p.phone && (nameHit || houseHit)) level = 'maybe';
+      p.level = level;
+      if (!best || rank[level] > rank[best.level]) best = p;
+    });
+    return { best: best && best.level !== 'none' ? best : null, candidates: places };
+  }
+
+  async function placesLookup(r) {
+    const key = placesKey();
+    if (!key) throw new Error('還沒設定 Google 地圖的 API 金鑰');
+    const addr = r.addressActual || r.address || '';
+    const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': key,
+        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.googleMapsUri,places.businessStatus',
+      },
+      body: JSON.stringify({ textQuery: `${r.company} ${addr}`.trim(), languageCode: 'zh-TW', regionCode: 'TW', pageSize: 3 }),
+    });
+    if (!res.ok) {
+      let why = `HTTP ${res.status}`;
+      try { const j = await res.json(); why = (j.error && j.error.message) || why; } catch (e) { /* 不是 JSON */ }
+      // 金鑰問題要講白，這是最常踩到的：沒啟用 Places API (New)、網址限制沒填對
+      if (res.status === 403 || res.status === 400) why += '。多半是金鑰沒開 Places API (New)，或「網站限制」沒填這個網址。';
+      throw new Error(why);
+    }
+    const data = await res.json();
+    const places = (data.places || []).map((p) => ({
+      id: p.id, name: (p.displayName && p.displayName.text) || '', address: p.formattedAddress || '',
+      phone: p.nationalPhoneNumber || p.internationalPhoneNumber || '', website: p.websiteUri || '',
+      maps: p.googleMapsUri || '', status: p.businessStatus || '',
+    }));
+    return gradePlaces(r, places);
+  }
+
+  /** 採用某個店家的電話：存成編輯覆蓋（跟手動改電話一樣），並記下來源。 */
+  async function adoptPlacePhone(r, p) {
+    const st = state.userStates.get(r.id) || {};
+    const edits = { ...(st.edits || {}), phoneRaw: p.phone };
+    await saveState(r.id, {
+      edits, editsAt: Date.now(),
+      phoneSource: { name: p.name, address: p.address, maps: p.maps, website: p.website, at: Date.now() },
+    });
+  }
+
+  function openPlacesSetup(after) {
     const host = $('#editorBody');
     host.textContent = '';
-    host.append(el('h2', { textContent: '本月新公司（設立／變更登記清冊）' }));
-    const note = el('p', { className: 'muted', textContent: '讀取清冊索引…' });
-    host.append(note);
-    $('#editor').hidden = false;
-    let index;
-    try {
-      const res = await fetch(`leads/index.json?t=${Date.now()}`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      index = await res.json();
-    } catch (err) {
-      note.textContent = '還沒有抓好的清冊。清冊由 GitHub Actions 每月 8 日自動抓（repo 的 Actions 頁也可以手動執行「每月新公司清冊」），抓好、部署之後這裡就會列出來。';
-      return;
-    }
-    const periods = Object.keys(index.periods || {}).sort().reverse();
-    if (!periods.length) { note.textContent = '清冊索引是空的。'; return; }
-    note.textContent = '來源：經濟部商工登記「公司所營事業項目清冊」（含案由與營業項目）。勾要匯入的，下一步會再讓你篩資本額、地區、只要增資的。'
-      + `最近更新 ${dateLabel(String(index.generatedAt || '').slice(0, 10))}。`;
-    const periodSel = el('select');
-    periods.forEach((k) => periodSel.append(el('option', { value: k, textContent: `${k.slice(0, 3)} 年 ${+k.slice(3)} 月` })));
-    host.append(el('label', { className: 'rule-field' }, [el('span', { textContent: '期別' }), periodSel]));
-    const list = el('div', { className: 'leads-list' });
-    host.append(list);
-    const chosen = new Set();
-    const draw = () => {
-      list.textContent = '';
-      chosen.clear();
-      const files = (index.periods[periodSel.value] || {}).files || [];
-      files.forEach((f) => {
-        // 預設只勾變更清冊：設立的多半是剛開的小公司，還不能貸；變更的才有增資這種訊號
-        const cb = el('input', { type: 'checkbox', checked: f.type === 'change' });
-        if (cb.checked) chosen.add(f.path);
-        cb.onchange = () => { if (cb.checked) chosen.add(f.path); else chosen.delete(f.path); };
-        list.append(el('label', { className: 'leads-row' }, [cb, el('span', {}, [
-          el('strong', { textContent: `${f.city}　${f.type === 'setup' ? '設立' : '變更'}` }),
-          el('small', { className: 'muted', textContent: `${f.rows} 家${f.type === 'change' ? `，其中增資 ${f.capitalUp} 家` : ''}` }),
-        ])]));
-      });
+    host.append(el('h2', { textContent: 'Google 地圖找電話：API 金鑰' }));
+    host.append(el('p', { className: 'muted', textContent: '金鑰存在這台裝置的瀏覽器裡，不進同步檔。查詢是從你的瀏覽器直接送去 Google，只送公司名與地址。' }));
+    const input = el('input', { type: 'text', className: 'paste-box', placeholder: 'AIza…', value: placesKey(), autocomplete: 'off', spellcheck: false });
+    host.append(el('label', { className: 'rule-field' }, [el('span', { textContent: 'API 金鑰' }), input]));
+    const save = el('button', { className: 'btn btn-primary', type: 'button', textContent: '儲存' });
+    const clear = el('button', { className: 'btn', type: 'button', textContent: '清除' });
+    save.onclick = () => {
+      const v = input.value.trim();
+      if (!/^AIza[0-9A-Za-z_-]{20,}$/.test(v)) { toast('金鑰看起來不對，應該以 AIza 開頭'); return; }
+      try { localStorage.setItem(PLACES_KEY, v); } catch (e) { toast('這個瀏覽器不讓網頁存東西'); return; }
+      $('#editor').hidden = true;
+      toast('已儲存金鑰');
+      if (after) after();
     };
-    periodSel.onchange = draw;
-    draw();
-    const label = '下一步：篩選並匯入';
-    const go = el('button', { className: 'btn btn-primary', type: 'button', textContent: label });
-    go.onclick = async () => {
-      const files = ((index.periods[periodSel.value] || {}).files || []).filter((f) => chosen.has(f.path));
-      if (!files.length) { toast('先勾至少一份清冊'); return; }
-      go.disabled = true; go.textContent = '下載中…';
-      let header = null;
-      const rows = [];
+    clear.onclick = () => { try { localStorage.removeItem(PLACES_KEY); } catch (e) { /* 無痕 */ } input.value = ''; toast('已清除'); };
+    host.append(el('div', { className: 'card-actions' }, [save, clear]));
+    host.append(el('details', { className: 'sync-help' }, [
+      el('summary', { textContent: '怎麼拿金鑰（跟雲端同步用同一個 Google Cloud 專案就好）' }),
+      el('ol', {}, [
+        el('li', {}, [document.createTextNode('到 '), el('a', { href: 'https://console.cloud.google.com/apis/library/places-backend.googleapis.com', target: '_blank', rel: 'noopener', textContent: 'Google Cloud 主控台 → API 程式庫' }), document.createTextNode('，啟用 '), el('strong', { textContent: 'Places API (New)' }), document.createTextNode('（要開啟計費帳戶，每月有 US$200 免費額度）。')]),
+        el('li', { textContent: '「憑證 → 建立憑證 → API 金鑰」。' }),
+        el('li', {}, [document.createTextNode('編輯金鑰：「應用程式限制」選'), el('strong', { textContent: '網站' }), document.createTextNode('，加入這個網站的網址（例如 '), el('code', { textContent: `${location.origin}/*` }), document.createTextNode('）；「API 限制」只勾 Places API (New)。這樣金鑰被抄走也沒用。')]),
+        el('li', { textContent: '把金鑰貼到上面，儲存。' }),
+      ]),
+      el('p', { className: 'muted', textContent: '費用：含電話欄位的文字搜尋每千次約 US$32，Google 每月送 US$200 額度（約六千次）。' }),
+    ]));
+    $('#editor').hidden = false;
+  }
+
+  /** 詳細頁上的那一小塊：找、看結果、採用或刪。 */
+  function phoneFinder(r) {
+    const box = el('div', { className: 'phone-finder' });
+    const btn = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '用 Google 地圖找電話' });
+    const out = el('div', { className: 'phone-finder-out' });
+    btn.onclick = async () => {
+      if (!placesKey()) { openPlacesSetup(() => { openDetail(r.id); }); return; }
+      btn.disabled = true; btn.textContent = '查詢中…';
+      out.textContent = '';
       try {
-        for (const f of files) {
-          const res = await fetch(`leads/${f.path}?t=${Date.now()}`, { cache: 'no-store' });
-          if (!res.ok) throw new Error(`${f.path}：HTTP ${res.status}`);
-          const parsed = window.Normalize.parseCsv((await res.text()).replace(/^﻿/, ''));
-          if (!parsed.length) continue;
-          if (!header) { header = parsed[0]; rows.push(header); }
-          // 各檔表頭是同一支程式產的，理論上一樣；還是照欄名對，多一欄少一欄都不會錯位
-          const map = parsed[0].map((h) => header.indexOf(h));
-          parsed.slice(1).forEach((r) => {
-            const out = header.map(() => '');
-            r.forEach((v, i) => { if (map[i] >= 0) out[map[i]] = v; });
-            rows.push(out);
+        const { best, candidates } = await placesLookup(r);
+        if (!candidates.length) {
+          out.append(el('p', { className: 'muted', textContent: 'Google 地圖上找不到這家。' }));
+        } else {
+          candidates.forEach((p) => {
+            const line = el('div', { className: `place-cand is-${p.level}` }, [
+              el('strong', { textContent: p.name }),
+              el('span', { className: 'badge', textContent: p.level === 'sure' ? '確定' : p.level === 'maybe' ? '疑似' : '不像' }),
+              el('div', { className: 'muted', textContent: `${p.address}${p.phone ? `　☎ ${p.phone}` : '　（沒有電話）'}${p.status && p.status !== 'OPERATIONAL' ? `　${p.status === 'CLOSED_PERMANENTLY' ? '已歇業' : p.status}` : ''}` }),
+            ]);
+            const acts = el('div', { className: 'card-actions' });
+            if (p.maps) acts.append(el('a', { className: 'btn btn-tiny', href: p.maps, target: '_blank', rel: 'noopener', textContent: '開地圖' }));
+            if (p.website) acts.append(el('a', { className: 'btn btn-tiny', href: p.website, target: '_blank', rel: 'noopener', textContent: '官網' }));
+            if (p.phone) {
+              const use = el('button', { className: `btn btn-tiny${p === best ? ' btn-primary' : ''}`, type: 'button', textContent: '採用這支電話' });
+              use.onclick = async () => { await adoptPlacePhone(r, p); render(); openDetail(r.id); scheduleSync(); toast(`已填入 ${p.phone}`); };
+              acts.append(use);
+            }
+            line.append(acts);
+            out.append(line);
           });
         }
+        // 找不到就刪：使用者的規矩。放在結果下面，跟刪除鈕一樣要確認
+        const del = el('button', { className: 'btn btn-tiny danger-text', type: 'button', textContent: '找不到，刪掉這家' });
+        del.onclick = async () => {
+          if (!await askConfirm(`刪掉「${r.company}」？通話紀錄與編輯內容會一起消失，而且會同步到其他裝置。`, { danger: true, okText: '刪除' })) return;
+          await window.Store.deleteRecord(r.id);
+          await reload(); closeOverlays(); render(); scheduleSync(); toast(`已刪除 ${r.company}`);
+        };
+        out.append(el('div', { className: 'card-actions' }, [del]));
       } catch (err) {
-        toast(`下載失敗：${err.message}`);
-        go.disabled = false; go.textContent = label;
-        return;
+        out.append(el('p', { className: 'save-err', textContent: `查不到：${err.message}` }));
+        if (/金鑰/.test(err.message)) {
+          const fix = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '設定金鑰' });
+          fix.onclick = () => openPlacesSetup(() => openDetail(r.id));
+          out.append(el('div', { className: 'card-actions' }, [fix]));
+        }
       }
-      $('#editor').hidden = true;
-      // 合成一個檔案走匯入：名單來源會叫「登記清冊-11508.csv」，之後要整批刪掉也找得到
-      const file = new File([`﻿${csvText(rows)}`], `登記清冊-${periodSel.value}.csv`, { type: 'text/csv' });
-      $('#importer').hidden = false;
-      await importFiles([file]);
+      btn.disabled = false; btn.textContent = '再找一次';
     };
-    host.append(el('div', { className: 'card-actions' }, [go]));
+    box.append(el('div', { className: 'card-actions' }, [btn]), out);
+    return box;
+  }
+
+  /**
+   * 整批找：把目前名單頁上（套用篩選與搜尋之後）沒電話的一次找完。
+   *
+   * 「確定」的直接存；「疑似」列出來讓人一個一個看；找不到的列成一批，一顆鈕刪掉。
+   * 先篩再找：兩千多家全找一遍要一小時又花錢，先用篩選（增資、製造業、資本額）縮到
+   * 值得打的那一兩百家。
+   */
+  async function openPhoneHunt() {
+    const host = $('#editorBody');
+    host.textContent = '';
+    host.append(el('h2', { textContent: '幫沒電話的找電話（Google 地圖）' }));
+    const targets = visibleRecords().filter((r) => !r.phones.length && !r.blocked);
+    host.append(el('p', { className: 'muted', textContent: `「全部名單」目前篩出來的裡面有 ${targets.length} 家沒電話。想少找一點，先回名單頁用篩選（例如變更登記＝增資、產業別、客戶規模）縮小範圍再來。` }));
+    if (!placesKey()) {
+      const setup = el('button', { className: 'btn btn-primary', type: 'button', textContent: '先設定 Google 地圖金鑰' });
+      setup.onclick = () => openPlacesSetup(() => openPhoneHunt());
+      host.append(el('div', { className: 'card-actions' }, [setup]));
+      $('#editor').hidden = false;
+      return;
+    }
+    const maxIn = el('input', { type: 'number', min: '1', value: String(Math.min(200, targets.length || 1)) });
+    host.append(el('label', { className: 'rule-field' }, [el('span', { textContent: '這次最多找幾家（從名單順序開始）' }), maxIn]));
+    const start = el('button', { className: 'btn btn-primary', type: 'button', textContent: '開始找', disabled: !targets.length });
+    const stop = el('button', { className: 'btn', type: 'button', textContent: '停止', hidden: true });
+    const keyBtn = el('button', { className: 'btn', type: 'button', textContent: '金鑰設定' });
+    keyBtn.onclick = () => openPlacesSetup(() => openPhoneHunt());
+    host.append(el('div', { className: 'card-actions' }, [start, stop, keyBtn]));
+    const progress = el('p', { className: 'muted', hidden: true });
+    const result = el('div', { className: 'rule-result' });
+    host.append(progress, result);
+    let stopped = false;
+    stop.onclick = () => { stopped = true; stop.disabled = true; };
+    start.onclick = async () => {
+      start.disabled = true; stop.hidden = false; stopped = false;
+      const list = targets.slice(0, Math.max(1, Number(maxIn.value) || 1));
+      const found = [];
+      const maybe = [];
+      const none = [];
+      const failed = [];
+      progress.hidden = false;
+      for (let i = 0; i < list.length; i++) {
+        if (stopped) break;
+        const r = list[i];
+        progress.textContent = `查 ${i + 1}/${list.length}：${r.company}　（已找到 ${found.length}、疑似 ${maybe.length}、找不到 ${none.length}）`;
+        try {
+          const { best } = await placesLookup(r);
+          if (best && best.level === 'sure') { await adoptPlacePhone(r, best); found.push({ r, p: best }); }
+          else if (best) maybe.push({ r, p: best });
+          else none.push(r);
+        } catch (err) {
+          failed.push({ r, why: err.message });
+          // 金鑰壞了每一家都會失敗，不用再撞
+          if (/金鑰|API|403|400/.test(err.message) && failed.length >= 3 && !found.length && !maybe.length && !none.length) { toast(`停下來了：${err.message}`); break; }
+        }
+        await new Promise((res) => setTimeout(res, 120));
+      }
+      stop.hidden = true; progress.hidden = true;
+      render();
+      scheduleSync();
+      result.textContent = '';
+      result.append(el('p', { className: 'rule-verdict is-ok', textContent: `找到並填入 ${found.length} 家　·　疑似 ${maybe.length} 家（下面逐一確認）　·　找不到 ${none.length} 家${failed.length ? `　·　查詢失敗 ${failed.length} 家` : ''}${stopped ? '　（中途停止）' : ''}` }));
+      if (maybe.length) {
+        result.append(el('h3', { textContent: '疑似：名字或地址只對到一半，看一眼再決定' }));
+        maybe.forEach(({ r, p }) => {
+          const row = el('div', { className: 'place-cand is-maybe' }, [
+            el('strong', { textContent: r.company }), el('span', { className: 'muted', textContent: `　${r.addressActual || r.address || ''}` }),
+            el('div', { className: 'muted', textContent: `Google：${p.name}　${p.address}　☎ ${p.phone}` }),
+          ]);
+          const use = el('button', { className: 'btn btn-tiny btn-primary', type: 'button', textContent: '採用' });
+          use.onclick = async () => { await adoptPlacePhone(r, p); row.classList.add('is-done'); use.disabled = true; use.textContent = '已採用'; render(); scheduleSync(); };
+          const acts = el('div', { className: 'card-actions' }, [use]);
+          if (p.maps) acts.append(el('a', { className: 'btn btn-tiny', href: p.maps, target: '_blank', rel: 'noopener', textContent: '開地圖' }));
+          row.append(acts);
+          result.append(row);
+        });
+      }
+      if (none.length) {
+        result.append(el('h3', { textContent: `找不到（${none.length} 家）` }));
+        result.append(el('p', { className: 'muted', textContent: none.slice(0, 40).map((r) => r.company).join('、') + (none.length > 40 ? `　…共 ${none.length} 家` : '') }));
+        const del = el('button', { className: 'btn btn-primary danger', type: 'button', textContent: `刪掉這 ${none.length} 家` });
+        del.onclick = async () => {
+          if (!await askConfirm(`確定刪掉這 ${none.length} 家？通話紀錄與編輯內容一起消失，並會同步到其他裝置。`, { danger: true, okText: '刪除' })) return;
+          del.disabled = true; del.textContent = '刪除中…';
+          for (const r of none) await window.Store.deleteRecord(r.id);
+          await reload(); render(); scheduleSync();
+          del.textContent = `已刪除 ${none.length} 家`;
+          toast(`已刪除 ${none.length} 家找不到電話的`);
+        };
+        result.append(el('div', { className: 'card-actions' }, [del]));
+      }
+      if (failed.length) {
+        result.append(el('h3', { textContent: '查詢失敗' }));
+        result.append(el('p', { className: 'muted', textContent: failed.slice(0, 5).map(({ r, why }) => `${r.company}：${why}`).join('\n') }));
+      }
+      start.disabled = false; start.textContent = '再找一批';
+    };
+    $('#editor').hidden = false;
   }
 
   async function reviewCompanyNames() {
@@ -2642,6 +2830,168 @@
     }
   }
 
+  /* ---------------- 今日推薦：每天把值得打的挑出來 ---------------- */
+
+  /*
+   * 這一段做的事就是一個企金業務每天早上翻名單在做的事：誰剛增資、誰換了老闆、
+   * 誰上次說有機會、誰太久沒聯絡、誰的規模剛好可以做——挑出來、講清楚為什麼。
+   *
+   * 用規則加分，不用任何模型：
+   *   - 每一分都講得出理由，卡片上就寫「增資 9/10 ＋ 製造業 ＋ 有機會」，業務看一眼就能
+   *     判斷同不同意；模型給的分數解釋不了，錯了也不知道錯在哪。
+   *   - 全部在瀏覽器裡算，名單不用離開這台裝置——這是這個網站從第一天就守的規矩。
+   *   - 名單只有幾百到幾千筆，每次開網站重算一次都不到一秒，所以「每天自動」就是
+   *     每天打開就重算（allViews 本來就依日期快取）。
+   *
+   * 分數只用來排序與擋門檻（30 分以下不列），不存起來；規則要改直接改這裡。
+   */
+  const PICK_MIN_SCORE = 30;
+  const PICK_LIMIT = 30;
+
+  function scorePick(r) {
+    const today = todayISO();
+    const now = Date.now();
+    const ago = (iso) => (iso ? -dayDiff(iso) : null);   // 幾天前；未來是負的
+    const mine = state.userStates.get(r.id);
+    // 出局的：禁止推廣、自己標了無機會、按過略過還沒到期、已經設了回撥提醒（那是排好的事，不用再推）
+    if (r.blocked) return null;
+    if (r.chance === 'no') return null;
+    if (mine && mine.pickSkipUntil && mine.pickSkipUntil > today) return null;
+    if (r.remindAt && r.remindAt > now) return null;
+
+    let score = 0;
+    const why = [];
+    const add = (n, text) => { score += n; if (text) why.push({ n, text }); };
+
+    // 登記動態：這是「錢正在動」的訊號，最重
+    {
+      const up = r.regKindDate && r.regKindDate.capitalUp;
+      const upAgo = ago(up);
+      if (upAgo !== null && upAgo <= 120) add(40, `增資（${dateLabel(up)}）`);
+      else if (upAgo !== null && upAgo <= 365) add(20, `${Math.round(upAgo / 30)} 個月前增資`);
+      const down = ago(r.regKindDate && r.regKindDate.capitalDown);
+      if (down !== null && down <= 365) add(-15, '剛減資');
+      const owner = ago(r.regKindDate && r.regKindDate.owner);
+      if (owner !== null && owner <= 120) add(12, '負責人剛換');
+      const moved = ago(r.regKindDate && r.regKindDate.address);
+      if (moved !== null && moved <= 120) add(8, '剛變更登記地址');
+      // 從清冊匯進來的：案由寫在訪談內容的背景裡，還沒查過商工登記也認得出
+      const m = String(r.notesRaw || '').match(/(\d{3})年(\d{1,2})月變更登記：([^。\n]*)/);
+      if (m && !up) {
+        const reason = m[3];
+        if (/增資|發行新股/.test(reason)) add(35, `${m[1]}/${m[2]} 清冊：${/發行新股/.test(reason) ? '發行新股' : '增資'}`);
+        else if (/減資/.test(reason)) add(-15, '清冊：減資');
+        else if (/負責人|改推董事|改選董事/.test(reason)) add(8, '清冊：換董事／負責人');
+      }
+    }
+    // 業務自己的判斷，跟登記一樣重
+    if (r.chance === 'yes') add(30, '你標了有機會');
+    // 往來：在往來的談加碼與續約，結束過的是回頭客
+    if (r.dealingKind === 'active') add(8, '中租往來中，可談加碼／續約');
+    else if (r.dealing && r.dealing.ended) add(12, '以前往來過，回頭客');
+    // 行業與規模：租賃要有設備標的，額度要落在做得到的區間
+    {
+      const byName = window.Normalize.guessIndustry(r.company || '');
+      const items = String(r.notesRaw || '').match(/營業項目：([^\n]*)/);
+      const codes = items ? (items[1].match(/\b[A-Z]{1,2}\d{5,6}\b/g) || []) : [];
+      const assetsByItems = codes.some((c) => /^[CEG]/.test(c));
+      if (byName.industry === '投資控股' && !assetsByItems) add(-25, '投資／控股類，沒有設備標的');
+      else if ((byName.industry && byName.hasAssets) || assetsByItems || /製造|工程|營造|物流|運輸|機械|加工|工業/.test(r.industry || '')) add(12, '有設備標的（製造／營造／運輸）');
+      const cap = Number(String(r.capital || '').replace(/\D/g, '')) || 0;   // 仟元
+      if (cap >= 5000 && cap <= 60000) add(10, '資本額 500 萬～6,000 萬');
+      else if (cap > 100000) add(-20, '大企部範疇');
+      else if (cap > 0 && cap < 1000) add(-15, '資本額不到 100 萬');
+    }
+    // 聯絡狀態：沒打過的、談過沒排下次的、到期逾期的、太久沒聯絡的
+    if (r.outcome === 'new') add(8, '還沒打過');
+    else if (r.outcome === 'contacted' && !r.nextDate) add(6, '談過但沒排下次');
+    if (r.bucket === 'overdue') add(15, `逾期 ${-dayDiff(r.nextDate)} 天`);
+    else if (r.bucket === 'today') add(15, '今天到期');
+    {
+      const last = ago(r.lastDate);
+      if (last !== null && last >= 90 && r.outcome !== 'new') add(8, `${Math.round(last / 30)} 個月沒聯絡`);
+    }
+    if (r.visitKind === 'no' && r.chance === 'yes') add(8, '有機會但還沒拜訪');
+    if (r.keyman && r.keymanFrom && r.keymanFrom !== 'owner') add(5, '知道 KEYMAN');
+    if (r.groupSize > 1) add(4, `同老闆 ${r.groupSize} 家`);
+    // 打不到、不能做的往後排
+    if (!r.phones || !r.phones.length) add(-25, '沒有電話');
+    if (r.territory === '範圍外') add(-30, '範圍外，要走協銷');
+    return { score, why };
+  }
+
+  let picksKey = '';
+  let picksCache = [];
+  function dailyPicks() {
+    const key = `${dataVersion}|${todayISO()}`;
+    if (picksKey === key) return picksCache;
+    picksCache = allViews()
+      .map((r) => ({ r, pick: scorePick(r) }))
+      .filter((x) => x.pick && x.pick.score >= PICK_MIN_SCORE)
+      .sort((a, b) => b.pick.score - a.pick.score || (a.r.company || '').localeCompare(b.r.company || '', 'zh-Hant'));
+    picksKey = key;
+    return picksCache;
+  }
+
+  function renderPicks() {
+    const host = $('#panePicks');
+    host.textContent = '';
+    const picks = dailyPicks();
+    const head = el('div', { className: 'picks-head' });
+    head.append(el('div', {}, [
+      el('h2', { textContent: `今日推薦（${dateLabel(todayISO())}）` }),
+      el('p', { className: 'muted', textContent: picks.length
+        ? `名單裡 ${allViews().length} 家，今天挑出 ${picks.length} 家值得推廣，最值得的排前面；每張卡片下面寫了為什麼。禁止推廣、標了無機會、設了回撥提醒、按過略過的不列。`
+        : (state.records.length ? '今天沒有分數夠高的。匯入清冊、查商工登記、標「有機會」之後再看。' : '還沒有名單。') }),
+    ]));
+    if (picks.length) {
+      // 把前十家一次排到今天：早上按一下，今日待打就有東西了
+      const n = Math.min(10, picks.length);
+      const bulk = el('button', { className: 'btn btn-primary', type: 'button', textContent: `前 ${n} 家排到今天` });
+      bulk.onclick = async () => {
+        const today = todayISO();
+        const targets = picks.slice(0, n).filter((x) => x.r.nextDate !== today);
+        if (!await askConfirm(`把這 ${targets.length} 家的下次聯絡日都設成今天？（已經是今天的不動）`, { okText: '排到今天' })) return;
+        for (const x of targets) await saveState(x.r.id, { nextDate: today });
+        touch(); render(); scheduleSync();
+        toast(`已排 ${targets.length} 家到今天，到「全部名單」按「今天」就看得到`);
+      };
+      head.append(bulk);
+    }
+    host.append(head);
+    const list = el('div', { className: 'cards' });
+    picks.slice(0, PICK_LIMIT).forEach(({ r, pick }, i) => {
+      const node = card(r);
+      node.classList.add('is-pick');
+      const why = el('div', { className: 'pick-why' }, [
+        el('span', { className: 'pick-rank', textContent: `#${i + 1}　${pick.score} 分` }),
+        ...pick.why.filter((w) => w.n > 0).map((w) => el('span', { className: 'chip pick-chip', textContent: w.text })),
+        ...pick.why.filter((w) => w.n < 0).map((w) => el('span', { className: 'chip pick-chip is-minus', textContent: w.text })),
+      ]);
+      const actions = el('div', { className: 'card-actions pick-actions' });
+      const today = el('button', { className: 'btn btn-tiny', type: 'button', textContent: r.nextDate === todayISO() ? '已排今天' : '排今天', disabled: r.nextDate === todayISO() });
+      today.onclick = async (e) => {
+        e.stopPropagation();
+        await saveState(r.id, { nextDate: todayISO() });
+        touch(); render(); scheduleSync();
+        toast(`${r.company} 已排到今天`);
+      };
+      const skip = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '略過 30 天' });
+      skip.onclick = async (e) => {
+        e.stopPropagation();
+        await saveState(r.id, { pickSkipUntil: addDays(todayISO(), 30) });
+        touch(); render(); scheduleSync();
+        toast(`${r.company} 30 天內不再推薦`);
+      };
+      actions.append(today, skip);
+      why.onclick = (e) => e.stopPropagation();
+      node.append(why, actions);
+      list.append(node);
+    });
+    host.append(list);
+    if (picks.length > PICK_LIMIT) host.append(el('p', { className: 'muted', textContent: `只列前 ${PICK_LIMIT} 家；打完這些明天再看。` }));
+  }
+
   function bar(label, value, max) {
     return el('div', { className: 'bar' }, [
       el('span', { textContent: label }),
@@ -2726,10 +3076,13 @@
 
     const tab = state.tab;
     $('#paneList').hidden = tab !== 'all';
+    $('#panePicks').hidden = tab !== 'picks';
     $('#paneStats').hidden = tab !== 'stats';
     $('#paneRules').hidden = tab !== 'rules';
-    // 統計與規則頁用不到左側篩選，讓內容佔滿整個寬度
-    const wide = tab === 'stats' || tab === 'rules';
+    // 分頁上的數字每次都算：便宜（allViews 有快取），而且要讓人一進來就看到今天有幾家
+    $('#countPicks').textContent = String(total ? dailyPicks().length : 0);
+    // 統計、規則、今日推薦用不到左側篩選，讓內容佔滿整個寬度
+    const wide = tab === 'stats' || tab === 'rules' || tab === 'picks';
     document.querySelector('.layout').classList.toggle('is-wide', wide);
     $('#filters').hidden = wide;
     $('#btnFilters').hidden = wide;
@@ -2737,6 +3090,8 @@
     if (tab === 'stats') {
       // 統計只跟資料有關，資料沒變就不用重畫幾十根長條
       if (statsKey !== String(dataVersion)) { renderStats(); statsKey = String(dataVersion); }
+    } else if (tab === 'picks') {
+      renderPicks();
     } else if (tab === 'rules') {
       buildRules();
     } else { renderList(); renderRemindBar(); }
@@ -2851,6 +3206,14 @@
     } else if (r.phoneRaw) {
       body.append(el('p', { className: 'muted', textContent: `電話：${r.phoneRaw}` }));
     }
+    // 電話是從 Google 地圖找來的：講明是哪個店家、哪個地址，打過去講錯公司名才有得對
+    if (r.phoneSource && r.phones.length) {
+      body.append(el('p', { className: 'muted phone-source' }, [
+        document.createTextNode(`電話來自 Google 地圖：${r.phoneSource.name}（${r.phoneSource.address}）`),
+        r.phoneSource.maps ? el('a', { href: r.phoneSource.maps, target: '_blank', rel: 'noopener', textContent: '　開地圖' }) : '',
+      ].filter(Boolean)));
+    }
+    if (!r.phones.length && !r.blocked) body.append(phoneFinder(r));
 
     // 同一老闆的公司
     const members = groupMembers(r);
@@ -6055,7 +6418,7 @@ export default {
       }
       if (act === 'new-customer') openNewCustomer();
       if (act === 'registry') { openRegistryUpdate(); return; }
-      if (act === 'leads') { await openLeadsPicker(); return; }
+      if (act === 'phone-hunt') { await openPhoneHunt(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'check-names') { await reviewCompanyNames(); return; }
       if (act === 'spread-due') { await spreadDueOverWorkdays(15); return; }
