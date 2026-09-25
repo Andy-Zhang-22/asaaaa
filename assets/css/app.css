@@ -826,3 +826,17 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 .pick-chip { cursor: default; padding: 2px 9px; font-size: 12px; border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); }
 .pick-chip.is-minus { border-color: var(--border); color: var(--muted); background: transparent; text-decoration: line-through; }
 .pick-actions { margin-top: 8px; }
+
+/* ---------- 找電話（Google 地圖） ---------- */
+.phone-finder { margin-top: 6px; }
+.phone-finder-out { margin-top: 8px; }
+.phone-source { font-size: 13px; margin: 4px 0 0; }
+.place-cand { padding: 8px 10px; margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); font-size: 14px; }
+.place-cand .badge { margin-left: 8px; }
+.place-cand.is-sure { border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); }
+.place-cand.is-sure .badge { border-color: var(--ok); color: var(--ok); }
+.place-cand.is-maybe .badge { border-color: var(--warn); color: var(--warn); }
+.place-cand.is-none { opacity: .7; }
+.place-cand.is-done { opacity: .55; }
+.place-cand .card-actions { margin-top: 6px; }
+.btn.danger-text { color: var(--danger); }
