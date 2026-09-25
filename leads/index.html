@@ -100,7 +100,6 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     <h1>🏭 新公司名單</h1>
     <div class="sub" id="sub">經濟部每月公司設立／變更登記清冊</div>
   </div>
-  <button class="btn btn-tiny" id="btnTheme" type="button" title="深色／淺色">◐</button>
   <a class="back" href="../">← 電話推廣名單系統</a>
 </header>
 
@@ -337,14 +336,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
   }
 
   async function init() {
-    const saved = localStorage.getItem('leads-theme');
-    if (saved) document.documentElement.dataset.theme = saved;
-    $('#btnTheme').onclick = () => {
-      const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-      const next = cur === 'dark' ? 'light' : 'dark';
-      document.documentElement.dataset.theme = next;
-      try { localStorage.setItem('leads-theme', next); } catch (e) { /* 無痕 */ }
-    };
+    try { localStorage.removeItem('leads-theme'); } catch (e) { /* 無痕 */ }   // 深淺色跟著系統，切換鈕拿掉了
     $('#btnToggle').onclick = () => $('#filters').classList.toggle('is-collapsed');
     try {
       const res = await fetch(`index.json?t=${Date.now()}`, { cache: 'no-store' });
