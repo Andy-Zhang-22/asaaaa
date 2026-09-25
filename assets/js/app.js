@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260925-167';
+  const APP_VERSION = '20260925-168';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -2227,87 +2227,8 @@
     state.filters.dueTo = got.to || '';
   }
 
-  /*
-   * 把今天該打的平均分散到接下來幾個工作天。
-   *
-   * 為什麼要有這個：名單匯進來時下次聯絡日常常擠在同一天（或整批逾期），
-   * 一早打開看到一百多家，實際上一天打不完，剩下的又全部變成逾期，隔天更多。
-   * 業務要的是「把這批攤平到接下來兩三週，每天固定打幾家」。
-   *
-   * 刻意的幾個決定：
-   *   - 對象是「下次聯絡日 ≤ 今天」的，也就是今天到期＋已經逾期的。只算今天那一天
-   *     的話，逾期那堆還是躺在那裡，問題沒解決。
-   *   - 禁止推廣的不排：那是判定過不再打的，排進來只會每天看到它。
-   *   - 逾期越久的排越前面（照原本的下次聯絡日排序），分段切給每一天，
-   *     不是隨機灑——最該打的還是最先打。
-   *   - 只落在工作天：跳過週末與國定假日（補班日算工作天），用的是既有的行事曆。
-   */
-  function workdaysAhead(count) {
-    const out = [];
-    let d = todayISO();
-    // 一年還湊不滿就是行事曆資料有問題，不要無限迴圈
-    for (let i = 0; i < 400 && out.length < count; i++) {
-      d = addDays(d, 1);
-      if (!window.Holidays || window.Holidays.isWorkday(d)) out.push(d);
-    }
-    return out;
-  }
-
-  /** 今天該打的（今天到期＋逾期，不含禁止推廣），逾期越久排越前面。 */
-  function dueTodayViews() {
-    const today = todayISO();
-    return allViews()
-      .filter((v) => v.nextDate && v.nextDate <= today && !v.blocked)
-      .sort((a, b) => (a.nextDate === b.nextDate
-        ? a.company.localeCompare(b.company, 'zh-Hant')
-        : (a.nextDate < b.nextDate ? -1 : 1)));
-  }
-
-  // 剛才那一次分散的原始日期，讓使用者反悔得了。只留在這次開著的網站裡。
+  // 剛才那一次重排的原始日期，讓使用者反悔得了。只留在這次開著的網站裡。
   let lastSpread = null;
-
-  async function spreadDueOverWorkdays(days) {
-    const list = dueTodayViews();
-    if (!list.length) { toast('今天沒有要聯絡的客戶'); return; }
-    const slots = workdaysAhead(days);
-    if (slots.length < days) { toast('行事曆資料不夠，排不出這麼多工作天'); return; }
-
-    const per = Math.ceil(list.length / slots.length);
-    const overdue = list.filter((v) => v.nextDate < todayISO()).length;
-    const ok = await askConfirm(
-      `今天要聯絡的有 ${list.length} 家${overdue ? `（其中 ${overdue} 家已逾期）` : ''}。\n\n`
-      + `要把他們的下次聯絡日平均分散到接下來 ${slots.length} 個工作天嗎？\n`
-      + `${dateLabel(slots[0])} ～ ${dateLabel(slots[slots.length - 1])}，每天最多 ${per} 家。\n\n`
-      + '逾期越久的排越前面。週末與國定假日會跳過。\n'
-      + '原本的下次聯絡日會被蓋掉（可以馬上按選單裡的「復原剛才的分散」還原）。',
-      { okText: '分散', cancelText: '不要' },
-    );
-    if (!ok) return;
-
-    // 分段切：第 i 家 → 第 floor(i * 天數 / 家數) 天，每天家數差不會超過一家
-    const undo = [];
-    let done = 0;
-    for (let i = 0; i < list.length; i++) {
-      const slot = slots[Math.floor((i * slots.length) / list.length)];
-      const v = list[i];
-      if (v.nextDate === slot) continue;
-      try {
-        await saveState(v.id, { nextDate: slot });
-        undo.push({ id: v.id, nextDate: v.nextDate });
-        done += 1;
-      } catch (err) {
-        console.error('分散下次聯絡日失敗', err);
-        toast(`排到一半失敗：${err && err.message ? err.message : err}。已經排好 ${done} 家。`);
-        break;
-      }
-    }
-    lastSpread = undo.length ? { items: undo, at: Date.now() } : null;
-    $('#menu').querySelector('[data-act="spread-undo"]').hidden = !lastSpread;
-    await reload();
-    render();
-    toast(`已把 ${done} 家分散到 ${dateLabel(slots[0])} ～ ${dateLabel(slots[slots.length - 1])}`);
-    scheduleSync();
-  }
 
   /* ------------------------------------------------------------------
    * 一天打得完幾家
@@ -2537,7 +2458,7 @@
   }
 
   async function undoSpread() {
-    if (!lastSpread) { toast('沒有可以復原的分散'); return; }
+    if (!lastSpread) { toast('沒有可以復原的重排'); return; }
     let done = 0;
     for (const { id, nextDate } of lastSpread.items) {
       try { await saveState(id, { nextDate: nextDate || null }); done += 1; } catch (e) { /* 盡量還原 */ }
@@ -6570,7 +6491,6 @@ export default {
       if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'check-names') { await reviewCompanyNames(); return; }
       if (act === 'day-load') { openDayLoad(); return; }
-      if (act === 'spread-due') { await spreadDueOverWorkdays(15); return; }
       if (act === 'spread-undo') { await undoSpread(); return; }
       if (act === 'manage') {
         const sources = [...new Set(state.records.map((r) => r.source))];
