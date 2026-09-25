@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260925-168';
+  const APP_VERSION = '20260925-169';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1073,12 +1073,13 @@
             + `${out.stats.notUp ? `、非增資 ${out.stats.notUp} 筆` : ''}`
             + `${out.stats.dup ? `、重複 ${out.stats.dup} 筆` : ''}`
             + `${skipHolding.checked ? `、投資控股類 ${out.records.length - current.length} 筆` : ''}）` }));
-        // 已經在名單裡的先講，不然匯進去才發現重複
-        const known = new Set(state.records.map((r) => (r.taxId || '').replace(/\D/g, '')).filter(Boolean));
-        const dup = current.filter((r) => r.taxId && known.has(r.taxId)).length;
+        // 已經在名單裡的先講，不然匯進去才發現重複。
+        // 用匯入時真正的比對（findImportDuplicates）算：同檔名重匯是更新不是重複、沒統編的靠名稱比，
+        // 這裡自己只比統編的話，數字會跟實際匯進去的對不上。
+        const dup = findImportDuplicates(current, filename).length;
         if (dup) {
           preview.append(el('p', { className: 'rule-note',
-            textContent: `※ 其中 ${dup} 筆的統編已經在你的名單裡，會略過不匯入；實際會新增 ${current.length - dup} 筆。` }));
+            textContent: `※ 其中 ${dup} 筆已經在你的名單裡（統編或公司名相同），會略過不匯入；實際會新增 ${current.length - dup} 筆。` }));
         }
         current.slice(0, 5).forEach((r) => {
           preview.append(el('div', { className: 'import-preview' }, [
@@ -2295,7 +2296,8 @@
     let overdue = 0;
     let beyond = 0;
     allViews().forEach((v) => {
-      if (!v.nextDate || v.blocked) return;
+      // 今天已經在提醒列按過「完成」的不佔額度，跟 dueToday 同一條規則
+      if (!v.nextDate || v.blocked || v.dueDoneOn === today) return;
       if (v.nextDate < today) overdue += 1;
       const i = at(v.nextDate < today ? today : v.nextDate);
       if (i < 0) { beyond += 1; return; }
@@ -2357,11 +2359,12 @@
     const lastDay = [...plan.counts.entries()].filter(([, n]) => n > 0).map(([d]) => d).pop() || plan.days[0];
     const ok = await askConfirm(
       `要照「一天最多 ${cap} 家」重排嗎？\n\n`
-      + `${plan.total} 家裡有 ${plan.moves.length} 家會被往後挪，最後排到 ${dateLabel(lastDay)}。\n\n`
-      + '每天留下最該打的，其餘推到下一個上班日；只會往後、不會往前。\n'
+      + `${plan.total} 家裡有 ${plan.moves.length} 家會被往後挪，最後排到 ${dateLabel(lastDay)}。\n`
+      + (plan.leftover ? `另有 ${plan.leftover} 家連 ${dateLabel(lastDay)} 之前都排不進去，會維持原本的日期。\n` : '')
+      + '\n每天留下最該打的，其餘推到下一個上班日；只會往後、不會往前。\n'
       + '已經約好回撥時間的不會被動到，但會佔掉當天的額度。\n'
       + '週末與國定假日會跳過。原本的下次聯絡日會被蓋掉'
-      + '（可以馬上按選單裡的「復原剛才的分散」還原）。',
+      + '（可以馬上按選單裡的「復原剛才的重排」還原）。',
       { okText: `重排（${plan.moves.length} 家）`, cancelText: '不要' },
     );
     if (!ok) return false;
@@ -2427,7 +2430,7 @@
 
       const max = Math.max(cap, ...days.map((d) => counts.get(d) || 0), 1);
       const list = el('div', { className: 'day-load' });
-      days.forEach((d) => {
+      days.forEach((d, i) => {
         const n = counts.get(d) || 0;
         const row = el('button', { className: `day-row${n > cap ? ' is-over' : ''}`, type: 'button' });
         row.append(
@@ -2439,7 +2442,10 @@
         row.onclick = () => {
           state.filters.due = '';
           state.filters.dueNone = false;
-          state.filters.dueFrom = d;
+          // 這一列的數字是 bucketByWorkday 算的：逾期的算在第一天、落在週末假日的算到下一個上班日。
+          // 篩選要用同一個範圍——第一天從最早的逾期起算，之後每天涵蓋前一個上班日之後的所有日子，
+          // 不然點「今天 20 家」只看得到下次聯絡日剛好等於今天的那幾家。
+          state.filters.dueFrom = i === 0 ? '' : addDays(days[i - 1], 1);
           state.filters.dueTo = d;
           state.limit = PAGE_SIZE;
           closeOverlays();
@@ -5756,7 +5762,9 @@ export default {
     const hits = [];
     incoming.forEach((r) => {
       const byTax = taxKey(r) ? index.get(taxKey(r)) : null;
-      const old = byTax || (nameKey(r) ? index.get(nameKey(r)) : null);
+      const byName = !byTax && nameKey(r) ? index.get(nameKey(r)) : null;
+      // 兩邊都有統編而且不一樣，就是兩家不同的公司，只是名字撞了（商號常見），不算重複
+      const old = byTax || (byName && !(taxKey(r) && taxKey(byName)) ? byName : null);
       if (old) hits.push({ incoming: r, old, byTaxId: !!byTax });
     });
     return hits;
