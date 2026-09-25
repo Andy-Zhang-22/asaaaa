@@ -53,6 +53,7 @@ a { color: var(--primary); }
 .chip { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; cursor: pointer; }
 .chip[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
 .chip small { opacity: .75; margin-left: 4px; }
+.chip.is-approx small { opacity: .45; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 input[type="text"], input[type="search"], input[type="number"], select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
 .row input[type="number"] { width: 90px; }
@@ -115,6 +116,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
       </span>
     </div>
     <p class="muted toggle-note" style="font-size:12px;margin:0 0 8px">（篩選收起中）</p>
+    <p class="muted" style="font-size:12px;margin:0 0 10px">籤上的數字＝套用其他條件後這一顆會剩幾家；帶 ~ 的清冊還沒下載，勾了才會照條件算。</p>
     <div class="group"><label for="period">期別</label><select id="period"></select></div>
     <div class="group"><span class="lbl">清冊</span><div class="chips" id="fType"></div></div>
     <div class="group"><span class="lbl">縣市</span><div class="chips" id="fCity"></div></div>
@@ -266,21 +268,34 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     $('#loading').hidden = true;
   }
 
+  /*
+   * 一列過不過得了篩選；except 是「這一組先不算」，給篩選籤上的數字用：
+   * 籤上的數字要回答「勾了這顆會剩幾家」，所以要套用其他所有條件、唯獨不套自己那一組。
+   * 第一版籤上寫的是 index.json 的總數，使用者說「數字沒有跟著我篩的變」。
+   */
+  function criteria() {
+    return {
+      period: $('#period').value,
+      min: (Number($('#capMin').value) || 0) * 10000,
+      max: (Number($('#capMax').value) || 0) * 10000 || Infinity,
+      skipHolding: $('#skipHolding').checked,
+      terms: f.q.trim().toLowerCase().split(/\s+/).filter(Boolean),
+    };
+  }
+  function passes(r, c, except) {
+    return (c.period === 'all' || r['期別'] === c.period)
+      && (except === 'types' || f.types.has(r.type))
+      && (except === 'cities' || !f.cities.size || f.cities.has(r.city))
+      && (except === 'reasons' || r.type !== 'change' || !f.reasons.size || f.reasons.has(r.rk))
+      && (except === 'inds' || !f.inds.size || r.classes.some((k) => f.inds.has(k)))
+      && (except === 'branches' || !f.branches.size || f.branches.has(r.branch.key))
+      && r.capital >= c.min && r.capital <= c.max
+      && !(c.skipHolding && r.holding)
+      && c.terms.every((t) => r.blob.includes(t));
+  }
   function visible() {
-    const period = $('#period').value;
-    const min = (Number($('#capMin').value) || 0) * 10000;
-    const max = (Number($('#capMax').value) || 0) * 10000 || Infinity;
-    const skipHolding = $('#skipHolding').checked;
-    const terms = f.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const list = rows.filter((r) => (period === 'all' || r['期別'] === period)
-      && f.types.has(r.type)
-      && (!f.cities.size || f.cities.has(r.city))
-      && (r.type !== 'change' || !f.reasons.size || f.reasons.has(r.rk))
-      && (!f.inds.size || r.classes.some((c) => f.inds.has(c)))
-      && (!f.branches.size || f.branches.has(r.branch.key))
-      && r.capital >= min && r.capital <= max
-      && !(skipHolding && r.holding)
-      && terms.every((t) => r.blob.includes(t)));
+    const c = criteria();
+    const list = rows.filter((r) => passes(r, c, null));
     const sort = $('#sort').value;
     list.sort((a, b) => sort === 'capital' ? b.capital - a.capital
       : sort === 'date' ? (b.date || '').localeCompare(a.date || '')
@@ -314,30 +329,36 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     ]);
   }
 
-  function drawBranchChips() {
-    const host = $('#fBranch');
-    const period = $('#period').value;
+  /** 所有篩選籤的數字：套用其他條件之後這顆會剩幾家。還沒下載的清冊只能寫總數，前面加 ~。 */
+  function drawChips() {
+    const c = criteria();
+    const files = periodFiles();
+    const isLoaded = (subset) => subset.length > 0 && subset.every((x) => loaded.has(x.path));
+    const total = (subset) => subset.reduce((n, x) => n + x.rows, 0);
+    const facet = (except, pred) => { let n = 0; rows.forEach((r) => { if (pred(r) && passes(r, c, except)) n += 1; }); return n; };
+    chips($('#fType'), ['change', 'setup'].map((t) => {
+      const need = files.filter((x) => x.type === t && (!f.cities.size || f.cities.has(x.city)));
+      return [t, TYPE_LABEL[t], isLoaded(need) ? facet('types', (r) => r.type === t) : `~${total(need)}`];
+    }), f.types);
+    const cities = [...new Set(files.map((x) => x.city))];
+    chips($('#fCity'), cities.map((city) => {
+      const need = files.filter((x) => x.city === city && f.types.has(x.type));
+      return [city, city, isLoaded(need) ? facet('cities', (r) => r.city === city) : `~${total(need)}`];
+    }), f.cities);
+    chips($('#fReason'), REASONS.map(([k, label]) => [k, label, facet('reasons', (r) => r.type === 'change' && r.rk === k)]), f.reasons);
+    chips($('#fInd'), IND_ORDER.map((k) => [k, IND[k], facet('inds', (r) => r.classes.includes(k))]), f.inds);
+    // 分公司：籤是從載進來的列長出來的（清冊裡沒有這一欄），分公司在前、共同區在後、劃分表外最後
     const counts = new Map();
-    rows.forEach((r) => {
-      if (!(period === 'all' || r['期別'] === period) || !f.types.has(r.type) || (f.cities.size && !f.cities.has(r.city))) return;
-      if (r.branch.key) counts.set(r.branch.key, (counts.get(r.branch.key) || 0) + 1);
-    });
-    // 分公司在前、共同區在後、劃分表外最後；同類依筆數
+    rows.forEach((r) => { if (r.branch.key && passes(r, c, 'branches')) counts.set(r.branch.key, (counts.get(r.branch.key) || 0) + 1); });
     const order = (k) => (/分公司$/.test(k) ? 0 : /共同區$/.test(k) ? 1 : 2);
     const keys = [...new Set([...counts.keys(), ...f.branches])].sort((a, b) => order(a) - order(b) || (counts.get(b) || 0) - (counts.get(a) || 0));
-    host.textContent = '';
-    if (!keys.length) { host.append(el('span', { className: 'muted', textContent: '（載入清冊後才算得出來）' })); return; }
-    keys.forEach((k) => {
-      const b = el('button', { className: 'chip', type: 'button' }, [document.createTextNode(k), el('small', { textContent: String(counts.get(k) || 0) })]);
-      b.setAttribute('aria-pressed', String(f.branches.has(k)));
-      b.onclick = () => { if (f.branches.has(k)) f.branches.delete(k); else f.branches.add(k); limit = PAGE; render(); };
-      host.append(b);
-    });
+    if (!keys.length) { $('#fBranch').textContent = ''; $('#fBranch').append(el('span', { className: 'muted', textContent: '（載入清冊後才算得出來）' })); }
+    else chips($('#fBranch'), keys.map((k) => [k, k, counts.get(k) || 0]), f.branches);
   }
 
   let current = [];
   function render() {
-    drawBranchChips();
+    drawChips();
     current = visible();
     const host = $('#cards');
     host.textContent = '';
@@ -355,7 +376,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
   function chips(host, options, set, single) {
     host.textContent = '';
     options.forEach(([value, label, count]) => {
-      const b = el('button', { className: 'chip', type: 'button' }, [document.createTextNode(label), count != null ? el('small', { textContent: String(count) }) : '']);
+      const b = el('button', { className: `chip${String(count).startsWith('~') ? ' is-approx' : ''}`, type: 'button', title: String(count).startsWith('~') ? '這份清冊還沒下載，這是總數；勾了才會照條件算' : '' }, [document.createTextNode(label), count != null ? el('small', { textContent: String(count) }) : '']);
       b.setAttribute('aria-pressed', String(set.has(value)));
       b.onclick = async () => {
         if (single) set.clear();
@@ -369,15 +390,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     });
   }
 
-  function drawFilters() {
-    const files = periodFiles();
-    const cities = [...new Set(files.map((x) => x.city))];
-    const rowsOf = (city, type) => files.filter((x) => x.city === city && x.type === type).reduce((n, x) => n + x.rows, 0);
-    chips($('#fType'), [['change', '變更', files.filter((x) => x.type === 'change').reduce((n, x) => n + x.rows, 0)], ['setup', '設立', files.filter((x) => x.type === 'setup').reduce((n, x) => n + x.rows, 0)]], f.types);
-    chips($('#fCity'), cities.map((c) => [c, c, rowsOf(c, 'change') + rowsOf(c, 'setup')]), f.cities);
-    chips($('#fReason'), REASONS.map(([k, label]) => [k, label]), f.reasons);
-    chips($('#fInd'), IND_ORDER.map((k) => [k, IND[k]]), f.inds);
-  }
+  function drawFilters() { drawChips(); }
 
   async function init() {
     try { localStorage.removeItem('leads-theme'); } catch (e) { /* 無痕 */ }   // 深淺色跟著系統，切換鈕拿掉了
