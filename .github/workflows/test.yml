@@ -1,0 +1,25 @@
+# 每次推上來、每個 PR 都跑一次自動測試。
+#
+# 測試用 Node 內建的 test runner（node --test），沒有任何 npm 套件要裝，
+# 所以不需要 npm ci，checkout 完直接跑。本機一樣是 `npm test`。
+name: 自動測試
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 跑測試
+        run: npm test
