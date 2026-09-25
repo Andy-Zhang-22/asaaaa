@@ -1140,19 +1140,25 @@
   function gradePlaces(r, places) {
     const core = nameCore(r.company);
     const area = `${r.city || ''}${r.district || ''}`.replace(/台/g, '臺');
-    const addr = String(r.addressActual || r.address || '').replace(/台/g, '臺');
-    const road = (addr.match(/[一-龥]{1,8}(路|街|大道)/) || [])[0] || '';
+    // 地址正規化：台→臺、「一段」→「1段」、全形數字→半形，門牌才比得起來
+    const normAddr = (t) => String(t || '').replace(/台/g, '臺')
+      .replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0))
+      .replace(/([一二三四五六七八九十])段/g, (m, c) => `${'一二三四五六七八九十'.indexOf(c) + 1}段`)
+      .replace(/\s+/g, '');
+    const addr = normAddr(r.addressActual || r.address);
+    // 「路名＋段＋號」：同一條路不算，要同一個門牌才算地址對上——同一條路上的便利商店太多了
+    const house = (addr.match(/[\u4e00-\u9fa5]{1,8}(路|街|大道)(\d+段)?(\d+巷)?(\d+弄)?\d+(之\d+)?號/) || [])[0] || '';
     let best = null;
     const rank = { sure: 2, maybe: 1, none: 0 };
     places.forEach((p) => {
       const pn = nameCore(p.name);
-      const pa = String(p.address || '').replace(/台/g, '臺');
+      const pa = normAddr(p.address);
       const nameHit = core.length >= 2 && pn.length >= 2 && (pn.includes(core) || core.includes(pn));
       const areaHit = !!area && pa.includes(area);
-      const roadHit = !!road && pa.includes(road);
+      const houseHit = !!house && pa.includes(house);
       let level = 'none';
-      if (p.phone && nameHit && (areaHit || roadHit || !area)) level = 'sure';
-      else if (p.phone && (nameHit || (roadHit && areaHit))) level = 'maybe';
+      if (p.phone && nameHit && (areaHit || houseHit || !area)) level = 'sure';
+      else if (p.phone && (nameHit || houseHit)) level = 'maybe';
       p.level = level;
       if (!best || rank[level] > rank[best.level]) best = p;
     });
