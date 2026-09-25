@@ -1,0 +1,63 @@
+# 每月抓一次公司設立／變更登記清冊，轉成 CSV 存進 leads/，網站的「撈本月新公司」讀這裡。
+#
+# 為什麼在 GitHub Actions：政府網站沒有 CORS，瀏覽器抓不到；開發環境連不上政府網站；
+# 只有 Actions 的 runner 出得去，而且不需要任何人的電腦開著。
+#
+# 清冊在次月初產製（例如 8 月的清冊 9/5 產製），所以排在每月 8 日台灣時間 09:00
+# （UTC 01:00）。也可以手動觸發，指定期別（民國年月，例如 11508）。
+name: 每月新公司清冊
+
+on:
+  schedule:
+    - cron: '0 1 8 * *'
+  workflow_dispatch:
+    inputs:
+      period:
+        description: '期別（民國年月，例如 11508；留空＝查詢頁上最新一期）'
+        required: false
+        default: ''
+      cities:
+        description: '縣市，逗號分隔（留空＝新竹以北加宜蘭）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安裝 pdftotext
+        run: which pdftotext >/dev/null 2>&1 || sudo apt-get install -y -q poppler-utils
+
+      - name: 抓清冊並轉成 CSV
+        env:
+          PERIOD: ${{ inputs.period }}
+          CITIES: ${{ inputs.cities }}
+        run: |
+          args=()
+          [ -n "$PERIOD" ] && args+=(--period "$PERIOD")
+          [ -n "$CITIES" ] && args+=(--cities "$CITIES")
+          node tools/fetch-leads.mjs "${args[@]}" | tee fetch-leads.log
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"; cat fetch-leads.log >> "$GITHUB_STEP_SUMMARY"; printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+
+      # 只留最近 6 期：一期七個縣市約 3MB，留一年 repo 就多 36MB，網站也用不到那麼舊的
+      - name: 清掉六期以前的
+        run: node tools/fetch-leads.mjs --prune 6
+
+      - name: 存回 repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A leads
+          if git diff --cached --quiet; then echo "清冊沒有變動"; exit 0; fi
+          git commit -m "每月新公司清冊：$(date -u +%Y-%m-%d)"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
