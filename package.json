@@ -1,0 +1,11 @@
+{
+  "name": "asaaaa",
+  "private": true,
+  "description": "電話推廣名單系統：純前端網頁，測試用 Node 內建的 test runner，不需要安裝任何套件。",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

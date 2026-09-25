@@ -1,0 +1,68 @@
+# 每週日傍晚（台灣時間 18:00）檢查商工登記查詢還通不通。
+#
+# 網站每天 0:00 會在使用者的瀏覽器裡把整份名單對一次商工登記；那條路靠的是
+# 政府開放資料平臺的三個資料集編號、OData 的查詢寫法、回傳的欄位名稱——任何一個
+# 被政府改掉，網站只會安靜地變成「查了查不到」，沒有人會發現。
+#
+# 為什麼放在 GitHub Actions：開發環境連不上政府網站，只有 Actions 的 runner 出得去，
+# 而且不需要任何人的電腦開著。這支不碰任何客戶名單，查的是台積電（公開資料）。
+#
+# 壞了就開一張 issue（同一張一直更新，不會每週開新的）；修好了自動關掉。
+name: 每週商工登記查詢健檢
+
+on:
+  schedule:
+    # 台灣時間每週日 18:00 = UTC 週日 10:00
+    - cron: '0 10 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 用網站自己的查詢程式查一次
+        id: check
+        continue-on-error: true
+        run: node tools/check-registry.mjs
+
+      - name: 把報告印在執行紀錄上
+        if: always()
+        run: cat registry-check.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 壞了開 issue、好了關 issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAILED: ${{ steps.check.outcome == 'failure' }}
+        run: |
+          gh label create registry-check --description '每週商工登記查詢健檢' --color D93F0B --force >/dev/null
+          existing=$(gh issue list --label registry-check --state open --json number --jq '.[0].number // empty')
+          today=$(TZ=Asia/Taipei date +%Y-%m-%d)
+          if [ "$FAILED" = "true" ]; then
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body-file registry-check.md
+              echo "健檢仍然失敗，已更新 issue #$existing"
+            else
+              gh issue create --label registry-check --title "商工登記查詢健檢失敗（$today）" --body-file registry-check.md
+              echo "健檢失敗，已開新 issue"
+            fi
+            exit 1
+          fi
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file registry-check.md
+            gh issue close "$existing" --comment "$today 健檢通過，自動關閉。"
+            echo "健檢通過，已關閉 issue #$existing"
+          else
+            echo "健檢通過"
+          fi
