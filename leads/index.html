@@ -123,6 +123,9 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     <div class="group"><span class="lbl">歸屬分公司（依登記地址，同主站的劃分表）</span><div class="chips" id="fBranch"></div></div>
     <div class="group"><span class="lbl">案由（變更清冊）</span><div class="chips" id="fReason"></div></div>
     <div class="group"><span class="lbl">行業（依營業項目大類）</span><div class="chips" id="fInd"></div></div>
+    <div class="group"><span class="lbl">成立年數（依核准設立日期）</span><div class="chips" id="fAge"></div>
+      <p class="muted" id="ageNote" style="font-size:12px;margin:6px 0 0"></p>
+    </div>
     <div class="group"><span class="lbl">資本額（萬元）</span>
       <div class="row"><input id="capMin" type="number" min="0" step="100" placeholder="下限" value="500"> ～ <input id="capMax" type="number" min="0" step="100" placeholder="上限" value="6000"></div>
     </div>
@@ -151,13 +154,15 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
 <footer class="foot">
   資料來源：經濟部商工登記「公司所營事業項目清冊」，由 GitHub Actions 每月 8 日自動抓取、解析成 CSV。
   清冊在次月初產製（8 月的清冊 9 月初才有）。匯出的 CSV 拖進電話推廣名單系統的「新增客戶」就會匯入，
-  那邊會再問一次資本額、地區條件。這個網站不存任何資料，也不需要密碼——這些都是公開的登記資料。
+  那邊會再問一次資本額、地區條件。這個網站不需要密碼——這些都是公開的登記資料；除了「成立年數」查到的設立日期會留在這台瀏覽器裡省得重查，其他什麼都不存。
 </footer>
 <div class="toast" id="toast" hidden></div>
 
 <!-- 分公司劃分表與地址解析直接用主站那兩支：同一份規則，主站改了這邊就跟著改 -->
 <script src="../assets/js/normalize.js?v=20260925-169"></script>
 <script src="../assets/js/rules.js?v=20260925-169"></script>
+<!-- 成立年數要查商工登記（變更清冊上沒有設立日期），查詢邏輯也直接用主站的 -->
+<script src="../assets/js/registry.js?v=20260925-169"></script>
 <script>
 (function () {
   'use strict';
@@ -180,12 +185,142 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     ['other', '其他變更', null],
   ];
   const HOLDING_RE = /投資|資產|控股|創投|管理顧問|顧問/;
+  const AGE = [['lt5', '未滿 5 年'], ['ge5', '5 年以上']];
+  const AGE_YEARS = 5;
 
   let index = null;
   let rows = [];            // 目前期別載進來的全部列
   let loaded = new Set();   // 已載入的 path
   let limit = PAGE;
-  const f = { types: new Set(['change']), cities: new Set(), reasons: new Set(['up']), inds: new Set(), branches: new Set(), q: '' };
+  const f = { types: new Set(['change']), cities: new Set(), reasons: new Set(['up']), inds: new Set(), branches: new Set(), ages: new Set(), q: '' };
+
+  /*
+   * 成立年數。
+   *
+   * 設立清冊有「核准設立日期」，變更清冊只有「核准變更日期」——一家公司什麼時候成立的，
+   * 清冊上沒有。所以勾了成立年數，會拿統編去查商工登記——跟主站「從商工登記更新公司資料」
+   * 完全同一條路：同一支 registry.js、同樣先官方、再主站填的自架代理、最後 g0v 鏡像，
+   * 一次查一家、每家隔 300ms，別對政府網站造成負擔。
+   * 送出去的只有統編，查到的設立日期存在這台瀏覽器的 localStorage：設立日期不會變，
+   * 查過一次就永遠不用再查。
+   *
+   * 只查「套用其他條件後還在名單上」的公司，不會一勾就把幾萬家全查一遍。
+   */
+  const FOUNDED_KEY = 'leads-founded-v1';
+  let founded = {};   // 統編 → 'YYYY/MM/DD'（西元）；'' ＝ 查過了，登記上查不到
+  try { founded = JSON.parse(localStorage.getItem(FOUNDED_KEY) || '{}') || {}; } catch (e) { founded = {}; }
+  let saveT = null;
+  const saveFounded = () => { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(FOUNDED_KEY, JSON.stringify(founded)); } catch (e) { /* 無痕 */ } }, 500); };
+
+  /** 民國 115/08/21、西元 2026/8/21 或 2006年10月30日 → {y,m,d}；空白與「1911年0月0日」→ null */
+  function parseDate(s) {
+    const m = String(s || '').match(/^(\d{2,4})[/年.-](\d{1,2})[/月.-](\d{1,2})/);
+    if (!m) return null;
+    let y = +m[1];
+    const mo = +m[2];
+    const d = +m[3];
+    if (y < 1000) y += 1911;
+    if (y <= 1911 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return { y, m: mo, d };
+  }
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const fmtDate = (dt) => `${dt.y}/${pad2(dt.m)}/${pad2(dt.d)}`;
+  const fmtRoc = (dt) => `${dt.y - 1911}/${pad2(dt.m)}/${pad2(dt.d)}`;
+  const TODAY = new Date();
+  /** 滿幾年：生日還沒到就少算一年，跟算年齡一樣。 */
+  function yearsSince(dt) {
+    let n = TODAY.getFullYear() - dt.y;
+    if (TODAY.getMonth() + 1 < dt.m || (TODAY.getMonth() + 1 === dt.m && TODAY.getDate() < dt.d)) n -= 1;
+    return n;
+  }
+  const cachedFounded = (taxId) => (founded[taxId] ? parseDate(founded[taxId]) : null);
+  const ageOf = (r) => (r.foundedDate ? (yearsSince(r.foundedDate) >= AGE_YEARS ? 'ge5' : 'lt5') : null);
+  const needLookup = (r) => !r.foundedDate && founded[r['統一編號']] === undefined && /^\d{8}$/.test(r['統一編號'] || '');
+
+  /*
+   * 查設立日期的工人：一次一個（跟主站的批次更新一樣），佇列在每次重畫時重算（條件改了就換查別家），
+   * gen 變了就是叫它停（取消勾選、按清除）。連續三次連不上就停下來講，不要一直撞。
+   */
+  const hunt = { gen: 0, active: 0, queue: [], dirty: true, pending: new Set(), fail: 0, stopped: '' };
+  const stopHunt = () => { hunt.gen += 1; hunt.queue = []; hunt.pending.clear(); hunt.fail = 0; };
+  function ensureHunt() {
+    if (!window.Registry) { hunt.stopped = '（找不到查詢程式 registry.js，沒辦法查設立日期）'; return; }
+    hunt.dirty = true;
+    if (!hunt.active) huntWorker(hunt.gen);
+  }
+  let renderT = null;
+  const scheduleRender = () => { clearTimeout(renderT); renderT = setTimeout(render, 600); };
+  async function huntWorker(gen) {
+    hunt.active += 1;
+    let did = 0;   // 這個工人真的查到東西才在收工時重畫；沒事做的工人不重畫，不然 render → ensureHunt → 又派工人，繞不完
+    try {
+      while (gen === hunt.gen && f.ages.size) {
+        if (hunt.dirty) {
+          const c = criteria();
+          hunt.queue = [...new Set(rows.filter((r) => needLookup(r) && !hunt.pending.has(r['統一編號']) && passes(r, c, 'ages')).map((r) => r['統一編號']))];
+          hunt.dirty = false;
+        }
+        const id = hunt.queue.shift();
+        if (!id) break;
+        if (founded[id] !== undefined || hunt.pending.has(id)) continue;
+        hunt.pending.add(id);
+        let res;
+        // 主站批次更新用的就是 lookupCompany + useMirror：統編查不齊會自己用名稱補
+        const name = (rows.find((r) => r['統一編號'] === id) || {})['公司名稱'] || '';
+        try { res = await window.Registry.lookupCompany({ taxId: id, name }, { useMirror: true }); }
+        catch (err) { res = { ok: false, attempts: [], reason: String(err && err.message || err) }; }
+        hunt.pending.delete(id);
+        if (gen !== hunt.gen) break;
+        if (res.ok) {
+          const dt = parseDate(res.data && res.data.founded);
+          founded[id] = dt ? fmtDate(dt) : '';
+          hunt.fail = 0;
+        } else if (/^用名稱查到/.test(res.reason || '') || (res.attempts || []).some((a) => /查無資料|部分欄位/.test(a.reason || ''))) {
+          // 有連上、但登記上查不到（或名稱查到的統編對不上）：記下來，不要一直重查。
+          // 連不上的長相是每一次嘗試都被擋或逾時，那種才算失敗
+          founded[id] = '';
+          hunt.fail = 0;
+        } else {
+          hunt.fail += 1;
+          if (hunt.fail >= 3) {
+            hunt.stopped = '商工登記查不到（官方、自架代理、g0v 鏡像都連不上），先停下來；等一下再勾一次會從沒查到的接著查。';
+            toast(hunt.stopped);
+            stopHunt();
+            break;
+          }
+          continue;
+        }
+        rows.forEach((r) => { if (r['統一編號'] === id) r.foundedDate = cachedFounded(id); });
+        did += 1;
+        saveFounded();
+        scheduleRender();
+        await new Promise((done) => setTimeout(done, 300));
+      }
+    } finally {
+      hunt.active -= 1;
+      // 最後一個工人收工就馬上重畫，不要讓名單還停在 600ms 前的樣子
+      if (!hunt.active && did) { clearTimeout(renderT); render(); }
+      else ageNote();
+    }
+  }
+  /** 籤底下那一行：沒勾的時候講規則，勾了講進度。 */
+  function ageNote() {
+    const n = $('#ageNote');
+    if (!n) return;
+    if (!f.ages.size) { n.textContent = '設立清冊直接用清冊上的日期；變更清冊沒有設立日期，勾了會拿統編查商工登記（跟主站同一條路：官方、自架代理、g0v 鏡像），查到的存在這台瀏覽器。'; return; }
+    const c = criteria();
+    let known = 0; let none = 0; let todo = 0;
+    rows.forEach((r) => {
+      if (!passes(r, c, 'ages')) return;
+      if (r.foundedDate) known += 1;
+      else if (founded[r['統一編號']] === '' || !/^\d{8}$/.test(r['統一編號'] || '')) none += 1;
+      else todo += 1;
+    });
+    const parts = [`已知成立日期 ${known.toLocaleString()} 家`];
+    if (none) parts.push(`登記上查不到 ${none} 家`);
+    if (todo) parts.push(hunt.active && !hunt.stopped ? `還有 ${todo.toLocaleString()} 家查詢中…` : `還有 ${todo.toLocaleString()} 家沒查`);
+    n.textContent = `${parts.join('、')}${hunt.stopped ? `　${hunt.stopped}` : ''}`;
+  }
 
   /** 歸屬分公司：跟主站 view() 算 branchKey 的方式一樣，籤上才會是同一個字。 */
   function branchOf(address) {
@@ -234,6 +369,8 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
       ...obj, file, city: file.city, type: file.type, branch,
       capital: Number(String(obj['資本額'] || '').replace(/\D/g, '')) || 0,
       date: obj['核准設立日期'] || obj['核准變更日期'] || '',
+      // 設立清冊用清冊上的；變更清冊看之前查過沒有
+      foundedDate: parseDate(obj['核准設立日期']) || cachedFounded(obj['統一編號']),
       reason, rk, classes,
       holding: HOLDING_RE.test(obj['公司名稱'] || '') && !classes.some((c) => 'CEG'.includes(c)),
       blob: [obj['統一編號'], obj['公司名稱'], obj['代表人'], obj['公司所在地'], obj['營業項目'], reason].join(' ').toLowerCase(),
@@ -289,6 +426,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
       && (except === 'reasons' || r.type !== 'change' || !f.reasons.size || f.reasons.has(r.rk))
       && (except === 'inds' || !f.inds.size || r.classes.some((k) => f.inds.has(k)))
       && (except === 'branches' || !f.branches.size || f.branches.has(r.branch.key))
+      && (except === 'ages' || !f.ages.size || f.ages.has(ageOf(r)))
       && r.capital >= c.min && r.capital <= c.max
       && !(c.skipHolding && r.holding)
       && c.terms.every((t) => r.blob.includes(t));
@@ -323,6 +461,8 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
         r['代表人'] ? el('span', { textContent: `👤 ${r['代表人']}` }) : '',
         el('span', {}, ['📍 ', el('a', { href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r['公司所在地'])}`, target: '_blank', rel: 'noopener', textContent: r['公司所在地'] })]),
         el('span', { textContent: `📅 ${r.date}${r.type === 'setup' ? ' 設立' : ' 核准變更'}${$('#period').value === 'all' ? `（${r['期別'].slice(0, 3)}/${+r['期別'].slice(3)} 清冊）` : ''}` }),
+        // 變更清冊的成立日期是查商工登記來的，秀出來讓人對得上；設立清冊上面那行就是了
+        r.type !== 'setup' && r.foundedDate ? el('span', { className: 'card-founded', textContent: `🎂 成立 ${fmtRoc(r.foundedDate)}（${yearsSince(r.foundedDate)} 年）` }) : '',
         el('span', { textContent: `#${r['統一編號']}` }),
       ]),
       items.length ? el('p', { className: 'card-items', textContent: `${items.slice(0, 4).join('　')}${items.length > 4 ? `　…共 ${items.length} 項` : ''}` }) : '',
@@ -348,6 +488,9 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     }), f.cities);
     chips($('#fReason'), REASONS.map(([k, label]) => [k, label, facet('reasons', (r) => r.type === 'change' && r.rk === k)]), f.reasons);
     chips($('#fInd'), IND_ORDER.map((k) => [k, IND[k], facet('inds', (r) => r.classes.includes(k))]), f.inds);
+    // 成立年數：只算已經知道設立日期的；還沒查的寫在籤底下那行
+    chips($('#fAge'), AGE.map(([k, label]) => [k, label, facet('ages', (r) => ageOf(r) === k)]), f.ages);
+    ageNote();
     // 分公司：籤是從載進來的列長出來的（清冊裡沒有這一欄），分公司在前、共同區在後、劃分表外最後
     const counts = new Map();
     rows.forEach((r) => { if (r.branch.key && passes(r, c, 'branches')) counts.set(r.branch.key, (counts.get(r.branch.key) || 0) + 1); });
@@ -360,6 +503,9 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
   let current = [];
   function render() {
     drawChips();
+    // 勾了成立年數才去查沒有設立日期的；停下來的（連不上）要等使用者再點一次籤才重試
+    if (f.ages.size) { if (!hunt.stopped) ensureHunt(); }
+    else { stopHunt(); hunt.stopped = ''; }
     current = visible();
     const host = $('#cards');
     host.textContent = '';
@@ -420,8 +566,10 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     let qt = null;
     $('#q').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { f.q = e.target.value; limit = PAGE; render(); }, 120); };
     $('#btnMore').onclick = () => { limit += PAGE; render(); };
+    // 再點一次成立年數的籤＝「再試一次」：把「連不上」的狀態清掉，render 才會重新開查
+    $('#fAge').addEventListener('click', () => { hunt.stopped = ''; }, true);
     $('#btnReset').onclick = async () => {
-      f.types.clear(); f.types.add('change'); f.cities.clear(); f.reasons.clear(); f.reasons.add('up'); f.inds.clear(); f.branches.clear(); f.q = '';
+      f.types.clear(); f.types.add('change'); f.cities.clear(); f.reasons.clear(); f.reasons.add('up'); f.inds.clear(); f.branches.clear(); f.ages.clear(); f.q = '';
       $('#q').value = ''; $('#capMin').value = '500'; $('#capMax').value = '6000'; $('#skipHolding').checked = true;
       drawFilters(); await rerender();
     };
@@ -431,7 +579,9 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
      */
     $('#btnExport').onclick = () => {
       const head = ['統一編號', '公司名稱', '公司所在地', '代表人', '資本額', '核准設立日期', '核准變更日期', '案由或變更事項', '營業項目', '縣市', '清冊', '期別'];
-      const lines = [head, ...current.map((r) => head.map((h) => r[h] || ''))].map((row) => row.map(csvCell).join(','));
+      // 變更清冊查到的設立日期一起帶出去（民國年，跟清冊同格式），主站匯入時「成立年」就有了
+      const cell = (r, h) => r[h] || (h === '核准設立日期' && r.foundedDate ? fmtRoc(r.foundedDate) : '');
+      const lines = [head, ...current.map((r) => head.map((h) => cell(r, h)))].map((row) => row.map(csvCell).join(','));
       const blob = new Blob([`﻿${lines.join('\n')}\n`], { type: 'text/csv;charset=utf-8' });
       const a = el('a', { href: URL.createObjectURL(blob), download: `登記清冊-${$('#period').value === 'all' ? '全部期別' : $('#period').value}-${current.length}家.csv` });
       document.body.append(a); a.click(); a.remove();
