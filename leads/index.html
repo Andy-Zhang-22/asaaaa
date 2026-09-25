@@ -81,6 +81,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
 .card-items { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
 .empty { text-align: center; padding: 48px 16px; color: var(--muted); }
 .loading { padding: 12px; color: var(--muted); font-size: 13px; }
+.toggle-note { display: none; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
 .foot { padding: 14px 16px 40px; max-width: 1280px; margin: 0 auto; font-size: 12.5px; color: var(--muted); line-height: 1.7; }
 @media (max-width: 860px) {
@@ -88,7 +89,6 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
   .filters { position: static; max-height: none; }
   .filters.is-collapsed .group { display: none; }
   .filters.is-collapsed .toggle-note { display: block; }
-  .toggle-note { display: none; }
 }
 @media (min-width: 861px) { #btnToggle { display: none; } }
 </style>
