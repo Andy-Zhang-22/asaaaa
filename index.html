@@ -7,10 +7,10 @@
 <meta name="description" content="把電話推廣名單 PDF 轉成可搜尋、可撥號、可追蹤的工作台。資料只存在本機瀏覽器。">
 <meta name="theme-color" content="#0f172a">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>">
-<link rel="stylesheet" href="assets/css/app.css?v=20260924-160">
+<link rel="stylesheet" href="assets/css/app.css?v=20260925-161">
 <!-- 密碼鎖要在畫面畫出來之前就生效，不然會先閃一下內容 -->
 <style>html[data-locked] body > *:not(.lock-gate) { display: none !important; }</style>
-<script src="assets/js/lock.js?v=20260924-160"></script>
+<script src="assets/js/lock.js?v=20260925-161"></script>
 </head>
 <body data-theme="auto">
 
@@ -42,7 +42,7 @@
       <button data-act="sync-setup">雲端同步設定</button>
       <hr>
       <button data-act="theme">切換深色／淺色</button>
-      <button data-act="leads">撈本月新公司（登記清冊）</button>
+      <a class="menu-link" href="leads/" target="_blank" rel="noopener">新公司名單（獨立網站）↗</a>
       <button data-act="registry">從商工登記更新公司資料</button>
       <button data-act="check-names">檢查公司名稱</button>
       <button data-act="spread-due">把今天要聯絡的分散到未來 15 個工作天</button>
@@ -59,6 +59,7 @@
 
 <nav class="tabs" id="tabs">
   <button class="tab is-active" data-tab="all">全部名單 <span class="pill" id="countAll">0</span></button>
+  <button class="tab" data-tab="picks">今日推薦 <span class="pill" id="countPicks">0</span></button>
   <button class="tab" data-tab="stats">統計</button>
   <button class="tab" data-tab="rules">規則</button>
   <button id="btnFilters" class="tab tab-filters" aria-expanded="false">篩選 ▾</button>
@@ -149,6 +150,7 @@
       <button id="btnMore" class="btn btn-block" hidden>載入更多</button>
     </div>
 
+    <div id="panePicks" class="picks" hidden></div>
     <div id="paneStats" class="stats" hidden></div>
     <div id="paneRules" class="rules" hidden></div>
   </section>
@@ -267,17 +269,17 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="assets/vendor/pdfjs/pdf.min.js?v=20260924-160"></script>
-<script src="assets/vendor/xlsx/xlsx.min.js?v=20260924-160"></script>
+<script src="assets/vendor/pdfjs/pdf.min.js?v=20260925-161"></script>
+<script src="assets/vendor/xlsx/xlsx.min.js?v=20260925-161"></script>
 <script src="assets/vendor/tesseract/tesseract.min.js"></script>
-<script src="assets/js/pdf-table.js?v=20260924-160"></script>
-<script src="assets/js/normalize.js?v=20260924-160"></script>
-<script src="assets/js/holidays.js?v=20260924-160"></script>
-<script src="assets/js/registry.js?v=20260924-160"></script>
-<script src="assets/js/ocr.js?v=20260924-160"></script>
-<script src="assets/js/rules.js?v=20260924-160"></script>
-<script src="assets/js/store.js?v=20260924-160"></script>
-<script src="assets/js/sync.js?v=20260924-160"></script>
-<script src="assets/js/app.js?v=20260924-160"></script>
+<script src="assets/js/pdf-table.js?v=20260925-161"></script>
+<script src="assets/js/normalize.js?v=20260925-161"></script>
+<script src="assets/js/holidays.js?v=20260925-161"></script>
+<script src="assets/js/registry.js?v=20260925-161"></script>
+<script src="assets/js/ocr.js?v=20260925-161"></script>
+<script src="assets/js/rules.js?v=20260925-161"></script>
+<script src="assets/js/store.js?v=20260925-161"></script>
+<script src="assets/js/sync.js?v=20260925-161"></script>
+<script src="assets/js/app.js?v=20260925-161"></script>
 </body>
 </html>

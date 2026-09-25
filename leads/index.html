@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>新公司名單</title>
+<meta name="description" content="經濟部每月公司設立／變更登記清冊：篩出剛增資、有設備標的的中小企業，匯出成電話推廣名單系統可匯入的 CSV。">
+<meta name="theme-color" content="#0f172a">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏭</text></svg>">
+<style>
+/*
+ * 獨立的新公司名單網站。
+ *
+ * 跟電話推廣名單系統分開：那邊是「自己的客戶」，資料只在瀏覽器裡；這邊是政府的
+ * 公開清冊，誰都能看，不用密碼、不存任何東西。兩邊的交集只有一個 CSV：這裡匯出的
+ * 檔案，那邊「新增客戶」直接吃。
+ */
+:root {
+  --bg: #f5f6f8; --surface: #fff; --surface-2: #eef1f5; --border: #d8dde5; --text: #16202e; --muted: #64748b;
+  --primary: #1d4ed8; --primary-ink: #fff; --ok: #15803d; --warn: #b45309; --danger: #b91c1c; --radius: 12px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1220; --surface: #121b2b; --surface-2: #18243a; --border: #26344c; --text: #e6edf7; --muted: #93a4bd;
+    --primary: #60a5fa; --primary-ink: #0b1220; --ok: #4ade80; --warn: #fbbf24; --danger: #f87171; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0b1220; --surface: #121b2b; --surface-2: #18243a; --border: #26344c; --text: #e6edf7; --muted: #93a4bd;
+  --primary: #60a5fa; --primary-ink: #0b1220; --ok: #4ade80; --warn: #fbbf24; --danger: #f87171; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font: 15px/1.6 -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; -webkit-text-size-adjust: 100%; }
+h1, h2, h3 { margin: 0; font-weight: 650; }
+button, input, select { font: inherit; color: inherit; }
+.muted { color: var(--muted); }
+a { color: var(--primary); }
+
+.topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 14px; padding: 10px max(16px, env(safe-area-inset-left)); background: var(--surface); border-bottom: 1px solid var(--border); }
+.topbar h1 { font-size: 17px; }
+.topbar .sub { font-size: 12px; color: var(--muted); }
+.topbar .grow { flex: 1; min-width: 0; }
+.topbar a.back { font-size: 13px; white-space: nowrap; }
+
+.layout { display: grid; grid-template-columns: 280px 1fr; gap: 18px; padding: 16px; max-width: 1280px; margin: 0 auto; }
+.filters { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; align-self: start; position: sticky; top: 62px; max-height: calc(100vh - 78px); overflow: auto; }
+.group { margin-bottom: 14px; }
+.group > label, .group > .lbl { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+.chip small { opacity: .75; margin-left: 4px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+input[type="text"], input[type="search"], input[type="number"], select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
+.row input[type="number"] { width: 90px; }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); cursor: pointer; font-size: 14px; white-space: nowrap; }
+.btn:hover { border-color: var(--primary); }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); font-weight: 600; }
+.btn-tiny { padding: 3px 9px; font-size: 12px; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+.head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.head .count { font-size: 14px; }
+.head .count b { font-size: 18px; }
+.cards { display: grid; gap: 10px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.card.is-up { border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); }
+.card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card-name { font-weight: 650; font-size: 15.5px; }
+.card-name a { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--border); }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); background: var(--surface-2); }
+.badge-up { border-color: var(--ok); color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.badge-down { border-color: var(--danger); color: var(--danger); }
+.badge-new { border-color: var(--primary); color: var(--primary); }
+.badge-ind { color: var(--muted); }
+.card-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); margin-top: 4px; }
+.card-meta a { color: inherit; }
+.card-items { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.empty { text-align: center; padding: 48px 16px; color: var(--muted); }
+.loading { padding: 12px; color: var(--muted); font-size: 13px; }
+.toggle-note { display: none; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+.foot { padding: 14px 16px 40px; max-width: 1280px; margin: 0 auto; font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; padding: 12px; }
+  .filters { position: static; max-height: none; }
+  .filters.is-collapsed .group { display: none; }
+  .filters.is-collapsed .toggle-note { display: block; }
+}
+@media (min-width: 861px) { #btnToggle { display: none; } }
+</style>
+</head>
+<body data-theme="auto">
+
+<header class="topbar">
+  <div class="grow">
+    <h1>🏭 新公司名單</h1>
+    <div class="sub" id="sub">經濟部每月公司設立／變更登記清冊</div>
+  </div>
+  <button class="btn btn-tiny" id="btnTheme" type="button" title="深色／淺色">◐</button>
+  <a class="back" href="../">← 電話推廣名單系統</a>
+</header>
+
+<main class="layout">
+  <aside class="filters" id="filters">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h2 style="font-size:15px">篩選</h2>
+      <span>
+        <button class="btn btn-tiny" id="btnToggle" type="button">展開／收起</button>
+        <button class="btn btn-tiny" id="btnReset" type="button">清除</button>
+      </span>
+    </div>
+    <p class="muted toggle-note" style="font-size:12px;margin:0 0 8px">（篩選收起中）</p>
+    <div class="group"><label for="period">期別</label><select id="period"></select></div>
+    <div class="group"><span class="lbl">清冊</span><div class="chips" id="fType"></div></div>
+    <div class="group"><span class="lbl">縣市</span><div class="chips" id="fCity"></div></div>
+    <div class="group"><span class="lbl">案由（變更清冊）</span><div class="chips" id="fReason"></div></div>
+    <div class="group"><span class="lbl">行業（依營業項目大類）</span><div class="chips" id="fInd"></div></div>
+    <div class="group"><span class="lbl">資本額（萬元）</span>
+      <div class="row"><input id="capMin" type="number" min="0" step="100" placeholder="下限" value="500"> ～ <input id="capMax" type="number" min="0" step="100" placeholder="上限" value="6000"></div>
+    </div>
+    <div class="group"><label><input type="checkbox" id="skipHolding" checked> 略過投資／控股類（沒有設備標的）</label></div>
+    <div class="group"><label for="q">關鍵字</label><input id="q" type="search" placeholder="公司、統編、代表人、地址、營業項目" autocomplete="off"></div>
+    <div class="group"><label for="sort">排序</label>
+      <select id="sort"><option value="capital">資本額（高到低）</option><option value="date">日期（新到舊）</option><option value="company">公司名稱</option></select>
+    </div>
+  </aside>
+
+  <section>
+    <div class="head">
+      <div class="count" id="count">—</div>
+      <div class="row">
+        <button class="btn" id="btnCopy" type="button">複製統編</button>
+        <button class="btn btn-primary" id="btnExport" type="button">匯出 CSV（給電話推廣名單系統）</button>
+      </div>
+    </div>
+    <div class="loading" id="loading" hidden></div>
+    <div class="cards" id="cards"></div>
+    <div class="empty" id="empty" hidden></div>
+    <div class="row" style="justify-content:center;margin-top:12px"><button class="btn" id="btnMore" type="button" hidden>載入更多</button></div>
+  </section>
+</main>
+
+<footer class="foot">
+  資料來源：經濟部商工登記「公司所營事業項目清冊」，由 GitHub Actions 每月 8 日自動抓取、解析成 CSV。
+  清冊在次月初產製（8 月的清冊 9 月初才有）。匯出的 CSV 拖進電話推廣名單系統的「新增客戶」就會匯入，
+  那邊會再問一次資本額、地區條件。這個網站不存任何資料，也不需要密碼——這些都是公開的登記資料。
+</footer>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (s) => document.querySelector(s);
+  const el = (tag, props, children) => {
+    const n = document.createElement(tag);
+    Object.entries(props || {}).forEach(([k, v]) => { if (k.includes('-')) n.setAttribute(k, v); else n[k] = v; });
+    (children || []).forEach((c) => { if (c !== '' && c != null) n.append(c); });
+    return n;
+  };
+  const PAGE = 80;
+  const TYPE_LABEL = { change: '變更', setup: '設立' };
+  const IND = { C: '製造業', E: '營造業', G: '運輸倉儲', F: '批發零售', I: '專業服務', H: '金融不動產', J: '文教育樂', A: '農林漁牧', D: '水電燃氣', B: '礦業土石', Z: '其他' };
+  const IND_ORDER = ['C', 'E', 'G', 'F', 'I', 'H', 'J', 'A', 'D', 'B', 'Z'];
+  const REASONS = [
+    ['up', '增資／發行新股', /增資|發行新股/],
+    ['owner', '負責人／董事變更', /負責人|董事|代表人/],
+    ['move', '遷址', /所在地|遷/],
+    ['down', '減資', /減資/],
+    ['other', '其他變更', null],
+  ];
+  const HOLDING_RE = /投資|資產|控股|創投|管理顧問|顧問/;
+
+  let index = null;
+  let rows = [];            // 目前期別載進來的全部列
+  let loaded = new Set();   // 已載入的 path
+  let limit = PAGE;
+  const f = { types: new Set(['change']), cities: new Set(), reasons: new Set(['up']), inds: new Set(), q: '' };
+
+  function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 2600); }
+
+  /** 正規的 CSV 解析：欄位裡有逗號、引號、換行都吃得下。 */
+  function parseCsv(text) {
+    const out = [];
+    let row = [];
+    let cell = '';
+    let quoted = false;
+    const src = text.replace(/^﻿/, '');
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (quoted) {
+        if (ch === '"') { if (src[i + 1] === '"') { cell += '"'; i++; } else quoted = false; }
+        else cell += ch;
+      } else if (ch === '"') quoted = true;
+      else if (ch === ',') { row.push(cell); cell = ''; }
+      else if (ch === '\n' || ch === '\r') { if (ch === '\r' && src[i + 1] === '\n') i++; row.push(cell); out.push(row); row = []; cell = ''; }
+      else cell += ch;
+    }
+    if (cell !== '' || row.length) { row.push(cell); out.push(row); }
+    return out.filter((r) => r.length > 1 || (r[0] || '').trim());
+  }
+  const csvCell = (v) => { const s = String(v == null ? '' : v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+
+  function toRecord(obj, file) {
+    const codes = (obj['營業項目'] || '').match(/\b[A-Z]{1,2}\d{5,6}\b/g) || [];
+    const classes = [...new Set(codes.map((c) => c[0]))];
+    const reason = obj['案由或變更事項'] || '';
+    let rk = '';
+    if (file.type === 'change') { rk = 'other'; for (const [k, , re] of REASONS) { if (re && re.test(reason)) { rk = k; break; } } }
+    return {
+      ...obj, file, city: file.city, type: file.type,
+      capital: Number(String(obj['資本額'] || '').replace(/\D/g, '')) || 0,
+      date: obj['核准設立日期'] || obj['核准變更日期'] || '',
+      reason, rk, classes,
+      holding: HOLDING_RE.test(obj['公司名稱'] || '') && !classes.some((c) => 'CEG'.includes(c)),
+      blob: [obj['統一編號'], obj['公司名稱'], obj['代表人'], obj['公司所在地'], obj['營業項目'], reason].join(' ').toLowerCase(),
+    };
+  }
+
+  async function loadFile(file) {
+    if (loaded.has(file.path)) return;
+    const res = await fetch(`${file.path}?t=${index.generatedAt}`, { cache: 'force-cache' });
+    if (!res.ok) throw new Error(`${file.path}：HTTP ${res.status}`);
+    const table = parseCsv(await res.text());
+    const head = table[0];
+    table.slice(1).forEach((r) => { const o = {}; head.forEach((h, i) => { o[h] = r[i] || ''; }); rows.push(toRecord(o, file)); });
+    loaded.add(file.path);
+  }
+
+  /** 目前勾的縣市與清冊需要哪些檔；沒載的就去載。 */
+  async function ensureLoaded() {
+    const period = $('#period').value;
+    const files = ((index.periods[period] || {}).files || []).filter((x) => f.types.has(x.type) && (!f.cities.size || f.cities.has(x.city)));
+    const todo = files.filter((x) => !loaded.has(x.path));
+    if (!todo.length) return;
+    $('#loading').hidden = false;
+    $('#loading').textContent = `下載清冊… ${todo.map((x) => `${x.city}${TYPE_LABEL[x.type]}`).join('、')}`;
+    try { await Promise.all(todo.map(loadFile)); }
+    catch (err) { toast(`下載失敗：${err.message}`); }
+    $('#loading').hidden = true;
+  }
+
+  function visible() {
+    const period = $('#period').value;
+    const min = (Number($('#capMin').value) || 0) * 10000;
+    const max = (Number($('#capMax').value) || 0) * 10000 || Infinity;
+    const skipHolding = $('#skipHolding').checked;
+    const terms = f.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const list = rows.filter((r) => r['期別'] === period
+      && f.types.has(r.type)
+      && (!f.cities.size || f.cities.has(r.city))
+      && (r.type !== 'change' || !f.reasons.size || f.reasons.has(r.rk))
+      && (!f.inds.size || r.classes.some((c) => f.inds.has(c)))
+      && r.capital >= min && r.capital <= max
+      && !(skipHolding && r.holding)
+      && terms.every((t) => r.blob.includes(t)));
+    const sort = $('#sort').value;
+    list.sort((a, b) => sort === 'capital' ? b.capital - a.capital
+      : sort === 'date' ? (b.date || '').localeCompare(a.date || '')
+      : (a['公司名稱'] || '').localeCompare(b['公司名稱'] || '', 'zh-Hant'));
+    return list;
+  }
+
+  const wan = (n) => (n >= 1e8 ? `${(n / 1e8).toFixed(n % 1e8 ? 1 : 0)} 億` : `${Math.round(n / 1e4).toLocaleString()} 萬`);
+  function card(r) {
+    const reasonBadge = r.type === 'setup' ? el('span', { className: 'badge badge-new', textContent: '新設立' })
+      : r.rk === 'up' ? el('span', { className: 'badge badge-up', textContent: r.reason })
+      : r.rk === 'down' ? el('span', { className: 'badge badge-down', textContent: r.reason })
+      : el('span', { className: 'badge', textContent: r.reason || '變更' });
+    const name = el('span', { className: 'card-name' }, [r['統一編號']
+      ? el('a', { href: `https://findbiz.nat.gov.tw/fts/company/${encodeURIComponent(r['統一編號'])}`, target: '_blank', rel: 'noopener', textContent: r['公司名稱'] })
+      : document.createTextNode(r['公司名稱'])]);
+    const inds = r.classes.filter((c) => IND[c]).slice(0, 2).map((c) => el('span', { className: 'badge badge-ind', textContent: IND[c] }));
+    const items = (r['營業項目'] || '').split('；').filter(Boolean);
+    return el('article', { className: `card${r.rk === 'up' ? ' is-up' : ''}` }, [
+      el('div', { className: 'card-top' }, [name, reasonBadge, ...inds, r.holding ? el('span', { className: 'badge badge-ind', textContent: '投資／控股類' }) : '']),
+      el('div', { className: 'card-meta' }, [
+        el('span', { textContent: `💰 ${wan(r.capital)}` }),
+        r['代表人'] ? el('span', { textContent: `👤 ${r['代表人']}` }) : '',
+        el('span', {}, ['📍 ', el('a', { href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r['公司所在地'])}`, target: '_blank', rel: 'noopener', textContent: r['公司所在地'] })]),
+        el('span', { textContent: `📅 ${r.date}${r.type === 'setup' ? ' 設立' : ' 核准變更'}` }),
+        el('span', { textContent: `#${r['統一編號']}` }),
+      ]),
+      items.length ? el('p', { className: 'card-items', textContent: `${items.slice(0, 4).join('　')}${items.length > 4 ? `　…共 ${items.length} 項` : ''}` }) : '',
+    ]);
+  }
+
+  let current = [];
+  function render() {
+    current = visible();
+    const host = $('#cards');
+    host.textContent = '';
+    current.slice(0, limit).forEach((r) => host.append(card(r)));
+    const up = current.filter((r) => r.rk === 'up').length;
+    $('#count').innerHTML = `符合 <b>${current.length.toLocaleString()}</b> 家${up ? `，其中增資 ${up} 家` : ''}<span class="muted">　／ 本期已載入 ${rows.filter((r) => r['期別'] === $('#period').value).length.toLocaleString()} 家</span>`;
+    $('#btnMore').hidden = current.length <= limit;
+    $('#empty').hidden = !!current.length;
+    $('#empty').textContent = rows.length ? '沒有符合條件的公司，放寬資本額或案由試試。' : '';
+    $('#btnExport').disabled = !current.length;
+    $('#btnCopy').disabled = !current.length;
+  }
+
+  function chips(host, options, set, single) {
+    host.textContent = '';
+    options.forEach(([value, label, count]) => {
+      const b = el('button', { className: 'chip', type: 'button' }, [document.createTextNode(label), count != null ? el('small', { textContent: String(count) }) : '']);
+      b.setAttribute('aria-pressed', String(set.has(value)));
+      b.onclick = async () => {
+        if (single) set.clear();
+        if (set.has(value)) set.delete(value); else set.add(value);
+        [...host.children].forEach((c, i) => c.setAttribute('aria-pressed', String(set.has(options[i][0]))));
+        limit = PAGE;
+        await ensureLoaded();
+        render();
+      };
+      host.append(b);
+    });
+  }
+
+  function drawFilters() {
+    const period = $('#period').value;
+    const files = (index.periods[period] || {}).files || [];
+    const cities = [...new Set(files.map((x) => x.city))];
+    const rowsOf = (city, type) => (files.find((x) => x.city === city && x.type === type) || {}).rows;
+    chips($('#fType'), [['change', '變更', files.filter((x) => x.type === 'change').reduce((n, x) => n + x.rows, 0)], ['setup', '設立', files.filter((x) => x.type === 'setup').reduce((n, x) => n + x.rows, 0)]], f.types);
+    chips($('#fCity'), cities.map((c) => [c, c, (rowsOf(c, 'change') || 0) + (rowsOf(c, 'setup') || 0)]), f.cities);
+    chips($('#fReason'), REASONS.map(([k, label]) => [k, label]), f.reasons);
+    chips($('#fInd'), IND_ORDER.map((k) => [k, IND[k]]), f.inds);
+  }
+
+  async function init() {
+    const saved = localStorage.getItem('leads-theme');
+    if (saved) document.documentElement.dataset.theme = saved;
+    $('#btnTheme').onclick = () => {
+      const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      const next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = next;
+      try { localStorage.setItem('leads-theme', next); } catch (e) { /* 無痕 */ }
+    };
+    $('#btnToggle').onclick = () => $('#filters').classList.toggle('is-collapsed');
+    try {
+      const res = await fetch(`index.json?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      index = await res.json();
+    } catch (err) {
+      $('#empty').hidden = false;
+      $('#empty').textContent = '還沒有抓好的清冊。GitHub Actions 每月 8 日會自動抓，也可以到 repo 的 Actions 頁手動執行「每月新公司清冊」。';
+      $('#count').textContent = '—';
+      return;
+    }
+    const periods = Object.keys(index.periods || {}).sort().reverse();
+    periods.forEach((k) => $('#period').append(el('option', { value: k, textContent: `${k.slice(0, 3)} 年 ${+k.slice(3)} 月` })));
+    $('#sub').textContent = `經濟部每月公司設立／變更登記清冊　·　最近更新 ${String(index.generatedAt || '').slice(0, 10).replace(/-/g, '/')}`;
+    const rerender = async () => { limit = PAGE; await ensureLoaded(); render(); };
+    $('#period').onchange = async () => { drawFilters(); await rerender(); };
+    $('#capMin').oninput = () => { limit = PAGE; render(); };
+    $('#capMax').oninput = () => { limit = PAGE; render(); };
+    $('#skipHolding').onchange = () => { limit = PAGE; render(); };
+    $('#sort').onchange = () => { limit = PAGE; render(); };
+    let qt = null;
+    $('#q').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { f.q = e.target.value; limit = PAGE; render(); }, 120); };
+    $('#btnMore').onclick = () => { limit += PAGE; render(); };
+    $('#btnReset').onclick = async () => {
+      f.types.clear(); f.types.add('change'); f.cities.clear(); f.reasons.clear(); f.reasons.add('up'); f.inds.clear(); f.q = '';
+      $('#q').value = ''; $('#capMin').value = '500'; $('#capMax').value = '6000'; $('#skipHolding').checked = true;
+      drawFilters(); await rerender();
+    };
+    /*
+     * 匯出：欄位跟 Actions 產的 CSV 一模一樣，電話推廣名單系統看到「統一編號、公司名稱、
+     * 公司所在地、代表人、資本額」就認得是登記清冊，會走它的匯入流程（再問一次條件）。
+     */
+    $('#btnExport').onclick = () => {
+      const head = ['統一編號', '公司名稱', '公司所在地', '代表人', '資本額', '核准設立日期', '核准變更日期', '案由或變更事項', '營業項目', '縣市', '清冊', '期別'];
+      const lines = [head, ...current.map((r) => head.map((h) => r[h] || ''))].map((row) => row.map(csvCell).join(','));
+      const blob = new Blob([`﻿${lines.join('\n')}\n`], { type: 'text/csv;charset=utf-8' });
+      const a = el('a', { href: URL.createObjectURL(blob), download: `登記清冊-${$('#period').value}-${current.length}家.csv` });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      toast(`已匯出 ${current.length} 家，拖進電話推廣名單系統的「新增客戶」即可`);
+    };
+    $('#btnCopy').onclick = async () => {
+      const text = current.map((r) => r['統一編號']).filter(Boolean).join('\n');
+      try { await navigator.clipboard.writeText(text); toast(`已複製 ${current.length} 個統編`); }
+      catch (e) { toast('這個瀏覽器不讓網頁複製'); }
+    };
+    drawFilters();
+    // 手機上預設收起篩選，先看到名單
+    if (matchMedia('(max-width: 860px)').matches) $('#filters').classList.add('is-collapsed');
+    await rerender();
+  }
+  init().catch((err) => { console.error(err); toast(`初始化失敗：${err.message}`); });
+})();
+</script>
+</body>
+</html>
