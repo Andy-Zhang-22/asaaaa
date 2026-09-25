@@ -76,6 +76,8 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
 .badge-down { border-color: var(--danger); color: var(--danger); }
 .badge-new { border-color: var(--primary); color: var(--primary); }
 .badge-ind { color: var(--muted); }
+.badge-branch { border-color: color-mix(in srgb, var(--primary) 50%, var(--border)); color: var(--primary); }
+.badge-branch.is-common { border-style: dashed; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); margin-top: 4px; }
 .card-meta a { color: inherit; }
 .card-items { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
@@ -116,6 +118,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     <div class="group"><label for="period">期別</label><select id="period"></select></div>
     <div class="group"><span class="lbl">清冊</span><div class="chips" id="fType"></div></div>
     <div class="group"><span class="lbl">縣市</span><div class="chips" id="fCity"></div></div>
+    <div class="group"><span class="lbl">歸屬分公司（依登記地址，同主站的劃分表）</span><div class="chips" id="fBranch"></div></div>
     <div class="group"><span class="lbl">案由（變更清冊）</span><div class="chips" id="fReason"></div></div>
     <div class="group"><span class="lbl">行業（依營業項目大類）</span><div class="chips" id="fInd"></div></div>
     <div class="group"><span class="lbl">資本額（萬元）</span>
@@ -150,6 +153,9 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
 </footer>
 <div class="toast" id="toast" hidden></div>
 
+<!-- 分公司劃分表與地址解析直接用主站那兩支：同一份規則，主站改了這邊就跟著改 -->
+<script src="../assets/js/normalize.js"></script>
+<script src="../assets/js/rules.js"></script>
 <script>
 (function () {
   'use strict';
@@ -177,7 +183,19 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
   let rows = [];            // 目前期別載進來的全部列
   let loaded = new Set();   // 已載入的 path
   let limit = PAGE;
-  const f = { types: new Set(['change']), cities: new Set(), reasons: new Set(['up']), inds: new Set(), q: '' };
+  const f = { types: new Set(['change']), cities: new Set(), reasons: new Set(['up']), inds: new Set(), branches: new Set(), q: '' };
+
+  /** 歸屬分公司：跟主站 view() 算 branchKey 的方式一樣，籤上才會是同一個字。 */
+  function branchOf(address) {
+    if (!window.Rules || !window.Normalize) return { key: '', label: '' };
+    const { city, district } = window.Normalize.parseAddress(address);
+    const b = window.Rules.branchOf(city, district);
+    const key = b.kind === 'branch' ? `${b.branches[0]}分公司`
+      : b.kind === 'common' ? `${b.branches.join('／')}共同區`
+      : b.kind === 'shared' ? '全公司共同區域'
+      : (city ? '不在劃分表上' : '無登記地址');
+    return { key, label: b.label || key, kind: b.kind };
+  }
 
   function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 2600); }
 
@@ -209,8 +227,9 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     const reason = obj['案由或變更事項'] || '';
     let rk = '';
     if (file.type === 'change') { rk = 'other'; for (const [k, , re] of REASONS) { if (re && re.test(reason)) { rk = k; break; } } }
+    const branch = branchOf(obj['公司所在地']);
     return {
-      ...obj, file, city: file.city, type: file.type,
+      ...obj, file, city: file.city, type: file.type, branch,
       capital: Number(String(obj['資本額'] || '').replace(/\D/g, '')) || 0,
       date: obj['核准設立日期'] || obj['核准變更日期'] || '',
       reason, rk, classes,
@@ -258,6 +277,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
       && (!f.cities.size || f.cities.has(r.city))
       && (r.type !== 'change' || !f.reasons.size || f.reasons.has(r.rk))
       && (!f.inds.size || r.classes.some((c) => f.inds.has(c)))
+      && (!f.branches.size || f.branches.has(r.branch.key))
       && r.capital >= min && r.capital <= max
       && !(skipHolding && r.holding)
       && terms.every((t) => r.blob.includes(t)));
@@ -280,7 +300,9 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     const inds = r.classes.filter((c) => IND[c]).slice(0, 2).map((c) => el('span', { className: 'badge badge-ind', textContent: IND[c] }));
     const items = (r['營業項目'] || '').split('；').filter(Boolean);
     return el('article', { className: `card${r.rk === 'up' ? ' is-up' : ''}` }, [
-      el('div', { className: 'card-top' }, [name, reasonBadge, ...inds, r.holding ? el('span', { className: 'badge badge-ind', textContent: '投資／控股類' }) : '']),
+      el('div', { className: 'card-top' }, [name, reasonBadge, ...inds,
+        r.branch.key ? el('span', { className: `badge badge-branch${r.branch.kind === 'common' ? ' is-common' : ''}`, textContent: r.branch.key, title: r.branch.label }) : '',
+        r.holding ? el('span', { className: 'badge badge-ind', textContent: '投資／控股類' }) : '']),
       el('div', { className: 'card-meta' }, [
         el('span', { textContent: `💰 ${wan(r.capital)}` }),
         r['代表人'] ? el('span', { textContent: `👤 ${r['代表人']}` }) : '',
@@ -292,8 +314,30 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     ]);
   }
 
+  function drawBranchChips() {
+    const host = $('#fBranch');
+    const period = $('#period').value;
+    const counts = new Map();
+    rows.forEach((r) => {
+      if (!(period === 'all' || r['期別'] === period) || !f.types.has(r.type) || (f.cities.size && !f.cities.has(r.city))) return;
+      if (r.branch.key) counts.set(r.branch.key, (counts.get(r.branch.key) || 0) + 1);
+    });
+    // 分公司在前、共同區在後、劃分表外最後；同類依筆數
+    const order = (k) => (/分公司$/.test(k) ? 0 : /共同區$/.test(k) ? 1 : 2);
+    const keys = [...new Set([...counts.keys(), ...f.branches])].sort((a, b) => order(a) - order(b) || (counts.get(b) || 0) - (counts.get(a) || 0));
+    host.textContent = '';
+    if (!keys.length) { host.append(el('span', { className: 'muted', textContent: '（載入清冊後才算得出來）' })); return; }
+    keys.forEach((k) => {
+      const b = el('button', { className: 'chip', type: 'button' }, [document.createTextNode(k), el('small', { textContent: String(counts.get(k) || 0) })]);
+      b.setAttribute('aria-pressed', String(f.branches.has(k)));
+      b.onclick = () => { if (f.branches.has(k)) f.branches.delete(k); else f.branches.add(k); limit = PAGE; render(); };
+      host.append(b);
+    });
+  }
+
   let current = [];
   function render() {
+    drawBranchChips();
     current = visible();
     const host = $('#cards');
     host.textContent = '';
@@ -363,7 +407,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     $('#q').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { f.q = e.target.value; limit = PAGE; render(); }, 120); };
     $('#btnMore').onclick = () => { limit += PAGE; render(); };
     $('#btnReset').onclick = async () => {
-      f.types.clear(); f.types.add('change'); f.cities.clear(); f.reasons.clear(); f.reasons.add('up'); f.inds.clear(); f.q = '';
+      f.types.clear(); f.types.add('change'); f.cities.clear(); f.reasons.clear(); f.reasons.add('up'); f.inds.clear(); f.branches.clear(); f.q = '';
       $('#q').value = ''; $('#capMin').value = '500'; $('#capMax').value = '6000'; $('#skipHolding').checked = true;
       drawFilters(); await rerender();
     };
