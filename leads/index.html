@@ -222,6 +222,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
 
   async function loadFile(file) {
     if (loaded.has(file.path)) return;
+    // 檔案路徑帶期別（11508/新北市-change.csv），不同期不會撞
     const res = await fetch(`${file.path}?t=${index.generatedAt}`, { cache: 'force-cache' });
     if (!res.ok) throw new Error(`${file.path}：HTTP ${res.status}`);
     const table = parseCsv(await res.text());
@@ -231,9 +232,13 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
   }
 
   /** 目前勾的縣市與清冊需要哪些檔；沒載的就去載。 */
-  async function ensureLoaded() {
+  const periodFiles = () => {
     const period = $('#period').value;
-    const files = ((index.periods[period] || {}).files || []).filter((x) => f.types.has(x.type) && (!f.cities.size || f.cities.has(x.city)));
+    if (period === 'all') return Object.keys(index.periods).sort().flatMap((k) => (index.periods[k].files || []).map((x) => ({ ...x, period: k })));
+    return ((index.periods[period] || {}).files || []).map((x) => ({ ...x, period }));
+  };
+  async function ensureLoaded() {
+    const files = periodFiles().filter((x) => f.types.has(x.type) && (!f.cities.size || f.cities.has(x.city)));
     const todo = files.filter((x) => !loaded.has(x.path));
     if (!todo.length) return;
     $('#loading').hidden = false;
@@ -249,7 +254,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     const max = (Number($('#capMax').value) || 0) * 10000 || Infinity;
     const skipHolding = $('#skipHolding').checked;
     const terms = f.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const list = rows.filter((r) => r['期別'] === period
+    const list = rows.filter((r) => (period === 'all' || r['期別'] === period)
       && f.types.has(r.type)
       && (!f.cities.size || f.cities.has(r.city))
       && (r.type !== 'change' || !f.reasons.size || f.reasons.has(r.rk))
@@ -281,7 +286,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
         el('span', { textContent: `💰 ${wan(r.capital)}` }),
         r['代表人'] ? el('span', { textContent: `👤 ${r['代表人']}` }) : '',
         el('span', {}, ['📍 ', el('a', { href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r['公司所在地'])}`, target: '_blank', rel: 'noopener', textContent: r['公司所在地'] })]),
-        el('span', { textContent: `📅 ${r.date}${r.type === 'setup' ? ' 設立' : ' 核准變更'}` }),
+        el('span', { textContent: `📅 ${r.date}${r.type === 'setup' ? ' 設立' : ' 核准變更'}${$('#period').value === 'all' ? `（${r['期別'].slice(0, 3)}/${+r['期別'].slice(3)} 清冊）` : ''}` }),
         el('span', { textContent: `#${r['統一編號']}` }),
       ]),
       items.length ? el('p', { className: 'card-items', textContent: `${items.slice(0, 4).join('　')}${items.length > 4 ? `　…共 ${items.length} 項` : ''}` }) : '',
@@ -295,7 +300,8 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     host.textContent = '';
     current.slice(0, limit).forEach((r) => host.append(card(r)));
     const up = current.filter((r) => r.rk === 'up').length;
-    $('#count').innerHTML = `符合 <b>${current.length.toLocaleString()}</b> 家${up ? `，其中增資 ${up} 家` : ''}<span class="muted">　／ 本期已載入 ${rows.filter((r) => r['期別'] === $('#period').value).length.toLocaleString()} 家</span>`;
+    const period = $('#period').value;
+    $('#count').innerHTML = `符合 <b>${current.length.toLocaleString()}</b> 家${up ? `，其中增資 ${up} 家` : ''}<span class="muted">　／ ${period === 'all' ? '全部期別' : '本期'}已載入 ${rows.filter((r) => period === 'all' || r['期別'] === period).length.toLocaleString()} 家</span>`;
     $('#btnMore').hidden = current.length <= limit;
     $('#empty').hidden = !!current.length;
     $('#empty').textContent = rows.length ? '沒有符合條件的公司，放寬資本額或案由試試。' : '';
@@ -321,12 +327,11 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
   }
 
   function drawFilters() {
-    const period = $('#period').value;
-    const files = (index.periods[period] || {}).files || [];
+    const files = periodFiles();
     const cities = [...new Set(files.map((x) => x.city))];
-    const rowsOf = (city, type) => (files.find((x) => x.city === city && x.type === type) || {}).rows;
+    const rowsOf = (city, type) => files.filter((x) => x.city === city && x.type === type).reduce((n, x) => n + x.rows, 0);
     chips($('#fType'), [['change', '變更', files.filter((x) => x.type === 'change').reduce((n, x) => n + x.rows, 0)], ['setup', '設立', files.filter((x) => x.type === 'setup').reduce((n, x) => n + x.rows, 0)]], f.types);
-    chips($('#fCity'), cities.map((c) => [c, c, (rowsOf(c, 'change') || 0) + (rowsOf(c, 'setup') || 0)]), f.cities);
+    chips($('#fCity'), cities.map((c) => [c, c, rowsOf(c, 'change') + rowsOf(c, 'setup')]), f.cities);
     chips($('#fReason'), REASONS.map(([k, label]) => [k, label]), f.reasons);
     chips($('#fInd'), IND_ORDER.map((k) => [k, IND[k]]), f.inds);
   }
@@ -353,6 +358,8 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     }
     const periods = Object.keys(index.periods || {}).sort().reverse();
     periods.forEach((k) => $('#period').append(el('option', { value: k, textContent: `${k.slice(0, 3)} 年 ${+k.slice(3)} 月` })));
+    // 跨月份一次篩：找「最近半年增資的製造業」這種問題，一個月一個月切換很煩
+    if (periods.length > 1) $('#period').append(el('option', { value: 'all', textContent: `全部期別（${periods.length} 期）` }));
     $('#sub').textContent = `經濟部每月公司設立／變更登記清冊　·　最近更新 ${String(index.generatedAt || '').slice(0, 10).replace(/-/g, '/')}`;
     const rerender = async () => { limit = PAGE; await ensureLoaded(); render(); };
     $('#period').onchange = async () => { drawFilters(); await rerender(); };
@@ -376,7 +383,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
       const head = ['統一編號', '公司名稱', '公司所在地', '代表人', '資本額', '核准設立日期', '核准變更日期', '案由或變更事項', '營業項目', '縣市', '清冊', '期別'];
       const lines = [head, ...current.map((r) => head.map((h) => r[h] || ''))].map((row) => row.map(csvCell).join(','));
       const blob = new Blob([`﻿${lines.join('\n')}\n`], { type: 'text/csv;charset=utf-8' });
-      const a = el('a', { href: URL.createObjectURL(blob), download: `登記清冊-${$('#period').value}-${current.length}家.csv` });
+      const a = el('a', { href: URL.createObjectURL(blob), download: `登記清冊-${$('#period').value === 'all' ? '全部期別' : $('#period').value}-${current.length}家.csv` });
       document.body.append(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 2000);
       toast(`已匯出 ${current.length} 家，拖進電話推廣名單系統的「新增客戶」即可`);
