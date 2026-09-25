@@ -90,6 +90,8 @@ button, input, select { font: inherit; color: inherit; }
   position: absolute; right: 0; top: calc(100% + 8px); z-index: 40;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); padding: 6px; min-width: 230px;
+  /* 選單比手機螢幕還長：最下面的「檢查更新」與版本號滑不到，所以限高、自己捲 */
+  max-height: calc(100vh - 80px); max-height: calc(100dvh - 80px); overflow: auto; -webkit-overflow-scrolling: touch;
 }
 .menu button {
   display: block; width: 100%; text-align: right; background: none; border: 0;
