@@ -178,6 +178,21 @@
     return { industry: '', hasAssets: true };
   }
 
+  /*
+   * 營業項目代碼的大類（經濟部公司行號營業項目代碼表的第一碼）。
+   * 清冊 CSV 帶了營業項目時，名字看不出行業的（「XX 有限公司」）就用這個補；
+   * 有 C（製造）、E（營造）、G（運輸）項目的，看名字像投資公司也當作有設備標的。
+   */
+  const ITEM_CLASS = { A: '農林漁牧', B: '礦業土石', C: '製造業', D: '水電燃氣', E: '營造業', F: '批發零售', G: '運輸倉儲', H: '金融不動產', I: '專業服務', J: '文教育樂', Z: '其他' };
+  function industryFromItems(items) {
+    const codes = String(items || '').match(/\b[A-Z]{1,2}\d{5,6}\b/g) || [];
+    if (!codes.length) return { industry: '', hasAssets: null };
+    const first = codes[0][0];
+    // 製造業優先：只要有一項是 C 就算製造業，那才是租賃設備會落腳的地方
+    const cls = codes.some((c) => c[0] === 'C') ? 'C' : first;
+    return { industry: ITEM_CLASS[cls] || '', hasAssets: codes.some((c) => /^[CEG]/.test(c)) };
+  }
+
   /**
    * @param {Array<Array<string>>} rows 原始表格（含表頭）
    * @param {object} opt
@@ -192,12 +207,21 @@
 
     const head = (rows[0] || []).map(squash);
     const at = (name) => head.findIndex((c) => c.includes(name));
+    /*
+     * 成立年只看「核准設立日期」。
+     *
+     * 變更登記清冊的日期欄是「核准變更日期」，以前用「核准」去對，換負責人那天就變成
+     * 成立年，整批公司都變成今年才成立的。變更日期另外收，寫進訪談內容當背景。
+     */
     const idx = {
       taxId: at('統一編號'), company: at('公司名稱'), address: at('公司所在地'),
-      owner: at('代表人'), capital: at('資本額'), date: at('核准'),
+      owner: at('代表人'), capital: at('資本額'), date: at('核准設立'), changed: at('核准變更'),
+      reason: at('案由'), items: at('營業項目'), period: at('期別'),
     };
+    if (idx.date < 0 && idx.changed < 0) idx.date = at('核准');   // 舊格式：只有一欄，當成設立
+    const onlyUp = !!o.onlyCapitalUp;
 
-    const stats = { total: rows.length - 1, capitalOut: 0, cityOut: 0, dup: 0, kept: 0 };
+    const stats = { total: rows.length - 1, capitalOut: 0, cityOut: 0, dup: 0, kept: 0, notUp: 0 };
     const seen = new Set();
     const records = [];
 
@@ -208,6 +232,8 @@
       const company = cell('company');
       if (!company) continue;
 
+      const reason = cell('reason');
+      if (onlyUp && !/增資|發行新股/.test(reason)) { stats.notUp++; continue; }   // 發行新股就是增資
       const capital = Number(cell('capital').replace(/\D/g, ''));
       if (!Number.isFinite(capital) || capital < min || capital > max) { stats.capitalOut++; continue; }
 
@@ -220,7 +246,15 @@
       if (seen.has(key)) { stats.dup++; continue; }
       seen.add(key);
 
-      const { industry, hasAssets } = guessIndustry(company);
+      const byName = guessIndustry(company);
+      const byItems = industryFromItems(cell('items'));
+      const industry = byName.industry || byItems.industry;
+      const hasAssets = byItems.hasAssets === true ? true : byName.hasAssets;
+      // 期別 11508 → 「115年8月」；清冊本身的類別看有沒有變更日期
+      const period = cell('period').match(/^(\d{3})(\d{2})$/);
+      const when = period ? `${period[1]}年${+period[2]}月` : '';
+      const changed = cell('changed');
+      const items = cell('items').split(/；|;/).map((x) => x.trim()).filter(Boolean);
       records.push({
         taxId,
         company,
@@ -231,6 +265,13 @@
         founded: (cell('date').match(/^\d{3}/) ? String(+cell('date').slice(0, 3) + 1911) : ''),
         industry,
         hasAssets,
+        reason,
+        capitalUp: /增資|發行新股/.test(reason),
+        // 訪談內容裡的背景一行：不能帶「115/08/18」這種日期，parseNotes 會把它當成一通電話
+        background: [
+          changed ? `${when}變更登記：${reason || '（案由未載明）'}` : (cell('date') ? `${when}設立登記` : ''),
+          items.length ? `營業項目：${items.slice(0, 6).join('；')}${items.length > 6 ? `…共 ${items.length} 項` : ''}` : '',
+        ].filter(Boolean).join('。'),
       });
       stats.kept++;
     }
@@ -241,7 +282,7 @@
   function govToStandardRows(records) {
     const out = [STANDARD_HEADER.slice()];
     records.forEach((r) => {
-      const note = r.hasAssets ? '' : '（名稱看起來是投資／控股類，可能沒有設備標的）';
+      const note = [r.background || '', r.hasAssets ? '' : '（名稱看起來是投資／控股類，可能沒有設備標的）'].filter(Boolean).join('\n');
       out.push([r.company, r.taxId, '', r.founded, r.capitalThousands, '', r.owner,
         '', r.industry, '', '', note, r.address, '', '']);
     });
