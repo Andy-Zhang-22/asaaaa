@@ -198,8 +198,9 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
    * 成立年數。
    *
    * 設立清冊有「核准設立日期」，變更清冊只有「核准變更日期」——一家公司什麼時候成立的，
-   * 清冊上沒有。所以勾了成立年數，會拿統編去查商工登記（走主站 registry.js 那條路：
-   * g0v 鏡像有開 CORS，先打它；使用者在主站填了自架代理也會一起用）。
+   * 清冊上沒有。所以勾了成立年數，會拿統編去查商工登記——跟主站「從商工登記更新公司資料」
+   * 完全同一條路：同一支 registry.js、同樣先官方、再主站填的自架代理、最後 g0v 鏡像，
+   * 一次查一家、每家隔 300ms，別對政府網站造成負擔。
    * 送出去的只有統編，查到的設立日期存在這台瀏覽器的 localStorage：設立日期不會變，
    * 查過一次就永遠不用再查。
    *
@@ -237,7 +238,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
   const needLookup = (r) => !r.foundedDate && founded[r['統一編號']] === undefined && /^\d{8}$/.test(r['統一編號'] || '');
 
   /*
-   * 查設立日期的工人：最多三個同時查，佇列在每次重畫時重算（條件改了就換查別家），
+   * 查設立日期的工人：一次一個（跟主站的批次更新一樣），佇列在每次重畫時重算（條件改了就換查別家），
    * gen 變了就是叫它停（取消勾選、按清除）。連續三次連不上就停下來講，不要一直撞。
    */
   const hunt = { gen: 0, active: 0, queue: [], dirty: true, pending: new Set(), fail: 0, stopped: '' };
@@ -245,7 +246,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
   function ensureHunt() {
     if (!window.Registry) { hunt.stopped = '（找不到查詢程式 registry.js，沒辦法查設立日期）'; return; }
     hunt.dirty = true;
-    for (let i = hunt.active; i < 3; i++) huntWorker(hunt.gen);
+    if (!hunt.active) huntWorker(hunt.gen);
   }
   let renderT = null;
   const scheduleRender = () => { clearTimeout(renderT); renderT = setTimeout(render, 600); };
@@ -264,7 +265,9 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
         if (founded[id] !== undefined || hunt.pending.has(id)) continue;
         hunt.pending.add(id);
         let res;
-        try { res = await window.Registry.lookupByTaxId(id, { mirrorFirst: true }); }
+        // 主站批次更新用的就是 lookupCompany + useMirror：統編查不齊會自己用名稱補
+        const name = (rows.find((r) => r['統一編號'] === id) || {})['公司名稱'] || '';
+        try { res = await window.Registry.lookupCompany({ taxId: id, name }, { useMirror: true }); }
         catch (err) { res = { ok: false, attempts: [], reason: String(err && err.message || err) }; }
         hunt.pending.delete(id);
         if (gen !== hunt.gen) break;
@@ -272,13 +275,15 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
           const dt = parseDate(res.data && res.data.founded);
           founded[id] = dt ? fmtDate(dt) : '';
           hunt.fail = 0;
-        } else if ((res.attempts || []).some((a) => a.reason === '查無資料')) {
-          founded[id] = '';   // 真的查不到（例如統編是分公司），不要一直重查
+        } else if (/^用名稱查到/.test(res.reason || '') || (res.attempts || []).some((a) => /查無資料|部分欄位/.test(a.reason || ''))) {
+          // 有連上、但登記上查不到（或名稱查到的統編對不上）：記下來，不要一直重查。
+          // 連不上的長相是每一次嘗試都被擋或逾時，那種才算失敗
+          founded[id] = '';
           hunt.fail = 0;
         } else {
           hunt.fail += 1;
           if (hunt.fail >= 3) {
-            hunt.stopped = '連不上公司登記鏡像，先停下來；等一下再勾一次會從沒查到的接著查。';
+            hunt.stopped = '商工登記查不到（官方、自架代理、g0v 鏡像都連不上），先停下來；等一下再勾一次會從沒查到的接著查。';
             toast(hunt.stopped);
             stopHunt();
             break;
@@ -289,6 +294,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
         did += 1;
         saveFounded();
         scheduleRender();
+        await new Promise((done) => setTimeout(done, 300));
       }
     } finally {
       hunt.active -= 1;
@@ -301,7 +307,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
   function ageNote() {
     const n = $('#ageNote');
     if (!n) return;
-    if (!f.ages.size) { n.textContent = '設立清冊直接用清冊上的日期；變更清冊沒有設立日期，勾了會拿統編向 g0v 公司登記鏡像查，查到的存在這台瀏覽器。'; return; }
+    if (!f.ages.size) { n.textContent = '設立清冊直接用清冊上的日期；變更清冊沒有設立日期，勾了會拿統編查商工登記（跟主站同一條路：官方、自架代理、g0v 鏡像），查到的存在這台瀏覽器。'; return; }
     const c = criteria();
     let known = 0; let none = 0; let todo = 0;
     rows.forEach((r) => {
