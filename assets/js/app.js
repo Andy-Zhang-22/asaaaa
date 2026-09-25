@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260924-160';
+  const APP_VERSION = '20260925-161';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -1106,99 +1106,6 @@
 
       $('#editor').hidden = false;
     });
-  }
-
-  /**
-   * 撈本月新公司：GitHub Actions 每月抓好的設立／變更登記清冊。
-   *
-   * 政府網站沒有 CORS，瀏覽器抓不到清冊 PDF，所以由 Actions 抓下來、解析成 CSV 放在
-   * repo 的 leads/ 底下（tools/fetch-leads.mjs），網站從自己的網址讀。這裡只做兩件事：
-   * 列出有哪些期別、縣市可以抓；把勾選的合成一份 CSV 交給既有的匯入流程——
-   * 之後的資本額／地區／只要增資的篩選、重複處理、商工登記查核，全部走原本那條路。
-   */
-  const csvText = (rows) => rows.map((r) => r.map((v) => {
-    const t = String(v == null ? '' : v);
-    return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
-  }).join(',')).join('\n');
-
-  async function openLeadsPicker() {
-    const host = $('#editorBody');
-    host.textContent = '';
-    host.append(el('h2', { textContent: '本月新公司（設立／變更登記清冊）' }));
-    const note = el('p', { className: 'muted', textContent: '讀取清冊索引…' });
-    host.append(note);
-    $('#editor').hidden = false;
-    let index;
-    try {
-      const res = await fetch(`leads/index.json?t=${Date.now()}`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      index = await res.json();
-    } catch (err) {
-      note.textContent = '還沒有抓好的清冊。清冊由 GitHub Actions 每月 8 日自動抓（repo 的 Actions 頁也可以手動執行「每月新公司清冊」），抓好、部署之後這裡就會列出來。';
-      return;
-    }
-    const periods = Object.keys(index.periods || {}).sort().reverse();
-    if (!periods.length) { note.textContent = '清冊索引是空的。'; return; }
-    note.textContent = '來源：經濟部商工登記「公司所營事業項目清冊」（含案由與營業項目）。勾要匯入的，下一步會再讓你篩資本額、地區、只要增資的。'
-      + `最近更新 ${dateLabel(String(index.generatedAt || '').slice(0, 10))}。`;
-    const periodSel = el('select');
-    periods.forEach((k) => periodSel.append(el('option', { value: k, textContent: `${k.slice(0, 3)} 年 ${+k.slice(3)} 月` })));
-    host.append(el('label', { className: 'rule-field' }, [el('span', { textContent: '期別' }), periodSel]));
-    const list = el('div', { className: 'leads-list' });
-    host.append(list);
-    const chosen = new Set();
-    const draw = () => {
-      list.textContent = '';
-      chosen.clear();
-      const files = (index.periods[periodSel.value] || {}).files || [];
-      files.forEach((f) => {
-        // 預設只勾變更清冊：設立的多半是剛開的小公司，還不能貸；變更的才有增資這種訊號
-        const cb = el('input', { type: 'checkbox', checked: f.type === 'change' });
-        if (cb.checked) chosen.add(f.path);
-        cb.onchange = () => { if (cb.checked) chosen.add(f.path); else chosen.delete(f.path); };
-        list.append(el('label', { className: 'leads-row' }, [cb, el('span', {}, [
-          el('strong', { textContent: `${f.city}　${f.type === 'setup' ? '設立' : '變更'}` }),
-          el('small', { className: 'muted', textContent: `${f.rows} 家${f.type === 'change' ? `，其中增資 ${f.capitalUp} 家` : ''}` }),
-        ])]));
-      });
-    };
-    periodSel.onchange = draw;
-    draw();
-    const label = '下一步：篩選並匯入';
-    const go = el('button', { className: 'btn btn-primary', type: 'button', textContent: label });
-    go.onclick = async () => {
-      const files = ((index.periods[periodSel.value] || {}).files || []).filter((f) => chosen.has(f.path));
-      if (!files.length) { toast('先勾至少一份清冊'); return; }
-      go.disabled = true; go.textContent = '下載中…';
-      let header = null;
-      const rows = [];
-      try {
-        for (const f of files) {
-          const res = await fetch(`leads/${f.path}?t=${Date.now()}`, { cache: 'no-store' });
-          if (!res.ok) throw new Error(`${f.path}：HTTP ${res.status}`);
-          const parsed = window.Normalize.parseCsv((await res.text()).replace(/^﻿/, ''));
-          if (!parsed.length) continue;
-          if (!header) { header = parsed[0]; rows.push(header); }
-          // 各檔表頭是同一支程式產的，理論上一樣；還是照欄名對，多一欄少一欄都不會錯位
-          const map = parsed[0].map((h) => header.indexOf(h));
-          parsed.slice(1).forEach((r) => {
-            const out = header.map(() => '');
-            r.forEach((v, i) => { if (map[i] >= 0) out[map[i]] = v; });
-            rows.push(out);
-          });
-        }
-      } catch (err) {
-        toast(`下載失敗：${err.message}`);
-        go.disabled = false; go.textContent = label;
-        return;
-      }
-      $('#editor').hidden = true;
-      // 合成一個檔案走匯入：名單來源會叫「登記清冊-11508.csv」，之後要整批刪掉也找得到
-      const file = new File([`﻿${csvText(rows)}`], `登記清冊-${periodSel.value}.csv`, { type: 'text/csv' });
-      $('#importer').hidden = false;
-      await importFiles([file]);
-    };
-    host.append(el('div', { className: 'card-actions' }, [go]));
   }
 
   async function reviewCompanyNames() {
@@ -2642,6 +2549,168 @@
     }
   }
 
+  /* ---------------- 今日推薦：每天把值得打的挑出來 ---------------- */
+
+  /*
+   * 這一段做的事就是一個企金業務每天早上翻名單在做的事：誰剛增資、誰換了老闆、
+   * 誰上次說有機會、誰太久沒聯絡、誰的規模剛好可以做——挑出來、講清楚為什麼。
+   *
+   * 用規則加分，不用任何模型：
+   *   - 每一分都講得出理由，卡片上就寫「增資 9/10 ＋ 製造業 ＋ 有機會」，業務看一眼就能
+   *     判斷同不同意；模型給的分數解釋不了，錯了也不知道錯在哪。
+   *   - 全部在瀏覽器裡算，名單不用離開這台裝置——這是這個網站從第一天就守的規矩。
+   *   - 名單只有幾百到幾千筆，每次開網站重算一次都不到一秒，所以「每天自動」就是
+   *     每天打開就重算（allViews 本來就依日期快取）。
+   *
+   * 分數只用來排序與擋門檻（30 分以下不列），不存起來；規則要改直接改這裡。
+   */
+  const PICK_MIN_SCORE = 30;
+  const PICK_LIMIT = 30;
+
+  function scorePick(r) {
+    const today = todayISO();
+    const now = Date.now();
+    const ago = (iso) => (iso ? -dayDiff(iso) : null);   // 幾天前；未來是負的
+    const mine = state.userStates.get(r.id);
+    // 出局的：禁止推廣、自己標了無機會、按過略過還沒到期、已經設了回撥提醒（那是排好的事，不用再推）
+    if (r.blocked) return null;
+    if (r.chance === 'no') return null;
+    if (mine && mine.pickSkipUntil && mine.pickSkipUntil > today) return null;
+    if (r.remindAt && r.remindAt > now) return null;
+
+    let score = 0;
+    const why = [];
+    const add = (n, text) => { score += n; if (text) why.push({ n, text }); };
+
+    // 登記動態：這是「錢正在動」的訊號，最重
+    {
+      const up = r.regKindDate && r.regKindDate.capitalUp;
+      const upAgo = ago(up);
+      if (upAgo !== null && upAgo <= 120) add(40, `增資（${dateLabel(up)}）`);
+      else if (upAgo !== null && upAgo <= 365) add(20, `${Math.round(upAgo / 30)} 個月前增資`);
+      const down = ago(r.regKindDate && r.regKindDate.capitalDown);
+      if (down !== null && down <= 365) add(-15, '剛減資');
+      const owner = ago(r.regKindDate && r.regKindDate.owner);
+      if (owner !== null && owner <= 120) add(12, '負責人剛換');
+      const moved = ago(r.regKindDate && r.regKindDate.address);
+      if (moved !== null && moved <= 120) add(8, '剛變更登記地址');
+      // 從清冊匯進來的：案由寫在訪談內容的背景裡，還沒查過商工登記也認得出
+      const m = String(r.notesRaw || '').match(/(\d{3})年(\d{1,2})月變更登記：([^。\n]*)/);
+      if (m && !up) {
+        const reason = m[3];
+        if (/增資|發行新股/.test(reason)) add(35, `${m[1]}/${m[2]} 清冊：${/發行新股/.test(reason) ? '發行新股' : '增資'}`);
+        else if (/減資/.test(reason)) add(-15, '清冊：減資');
+        else if (/負責人|改推董事|改選董事/.test(reason)) add(8, '清冊：換董事／負責人');
+      }
+    }
+    // 業務自己的判斷，跟登記一樣重
+    if (r.chance === 'yes') add(30, '你標了有機會');
+    // 往來：在往來的談加碼與續約，結束過的是回頭客
+    if (r.dealingKind === 'active') add(8, '中租往來中，可談加碼／續約');
+    else if (r.dealing && r.dealing.ended) add(12, '以前往來過，回頭客');
+    // 行業與規模：租賃要有設備標的，額度要落在做得到的區間
+    {
+      const byName = window.Normalize.guessIndustry(r.company || '');
+      const items = String(r.notesRaw || '').match(/營業項目：([^\n]*)/);
+      const codes = items ? (items[1].match(/\b[A-Z]{1,2}\d{5,6}\b/g) || []) : [];
+      const assetsByItems = codes.some((c) => /^[CEG]/.test(c));
+      if (byName.industry === '投資控股' && !assetsByItems) add(-25, '投資／控股類，沒有設備標的');
+      else if ((byName.industry && byName.hasAssets) || assetsByItems || /製造|工程|營造|物流|運輸|機械|加工|工業/.test(r.industry || '')) add(12, '有設備標的（製造／營造／運輸）');
+      const cap = Number(String(r.capital || '').replace(/\D/g, '')) || 0;   // 仟元
+      if (cap >= 5000 && cap <= 60000) add(10, '資本額 500 萬～6,000 萬');
+      else if (cap > 100000) add(-20, '大企部範疇');
+      else if (cap > 0 && cap < 1000) add(-15, '資本額不到 100 萬');
+    }
+    // 聯絡狀態：沒打過的、談過沒排下次的、到期逾期的、太久沒聯絡的
+    if (r.outcome === 'new') add(8, '還沒打過');
+    else if (r.outcome === 'contacted' && !r.nextDate) add(6, '談過但沒排下次');
+    if (r.bucket === 'overdue') add(15, `逾期 ${-dayDiff(r.nextDate)} 天`);
+    else if (r.bucket === 'today') add(15, '今天到期');
+    {
+      const last = ago(r.lastDate);
+      if (last !== null && last >= 90 && r.outcome !== 'new') add(8, `${Math.round(last / 30)} 個月沒聯絡`);
+    }
+    if (r.visitKind === 'no' && r.chance === 'yes') add(8, '有機會但還沒拜訪');
+    if (r.keyman && r.keymanFrom && r.keymanFrom !== 'owner') add(5, '知道 KEYMAN');
+    if (r.groupSize > 1) add(4, `同老闆 ${r.groupSize} 家`);
+    // 打不到、不能做的往後排
+    if (!r.phones || !r.phones.length) add(-25, '沒有電話');
+    if (r.territory === '範圍外') add(-30, '範圍外，要走協銷');
+    return { score, why };
+  }
+
+  let picksKey = '';
+  let picksCache = [];
+  function dailyPicks() {
+    const key = `${dataVersion}|${todayISO()}`;
+    if (picksKey === key) return picksCache;
+    picksCache = allViews()
+      .map((r) => ({ r, pick: scorePick(r) }))
+      .filter((x) => x.pick && x.pick.score >= PICK_MIN_SCORE)
+      .sort((a, b) => b.pick.score - a.pick.score || (a.r.company || '').localeCompare(b.r.company || '', 'zh-Hant'));
+    picksKey = key;
+    return picksCache;
+  }
+
+  function renderPicks() {
+    const host = $('#panePicks');
+    host.textContent = '';
+    const picks = dailyPicks();
+    const head = el('div', { className: 'picks-head' });
+    head.append(el('div', {}, [
+      el('h2', { textContent: `今日推薦（${dateLabel(todayISO())}）` }),
+      el('p', { className: 'muted', textContent: picks.length
+        ? `名單裡 ${allViews().length} 家，今天挑出 ${picks.length} 家值得推廣，最值得的排前面；每張卡片下面寫了為什麼。禁止推廣、標了無機會、設了回撥提醒、按過略過的不列。`
+        : (state.records.length ? '今天沒有分數夠高的。匯入清冊、查商工登記、標「有機會」之後再看。' : '還沒有名單。') }),
+    ]));
+    if (picks.length) {
+      // 把前十家一次排到今天：早上按一下，今日待打就有東西了
+      const n = Math.min(10, picks.length);
+      const bulk = el('button', { className: 'btn btn-primary', type: 'button', textContent: `前 ${n} 家排到今天` });
+      bulk.onclick = async () => {
+        const today = todayISO();
+        const targets = picks.slice(0, n).filter((x) => x.r.nextDate !== today);
+        if (!await askConfirm(`把這 ${targets.length} 家的下次聯絡日都設成今天？（已經是今天的不動）`, { okText: '排到今天' })) return;
+        for (const x of targets) await saveState(x.r.id, { nextDate: today });
+        touch(); render(); scheduleSync();
+        toast(`已排 ${targets.length} 家到今天，到「全部名單」按「今天」就看得到`);
+      };
+      head.append(bulk);
+    }
+    host.append(head);
+    const list = el('div', { className: 'cards' });
+    picks.slice(0, PICK_LIMIT).forEach(({ r, pick }, i) => {
+      const node = card(r);
+      node.classList.add('is-pick');
+      const why = el('div', { className: 'pick-why' }, [
+        el('span', { className: 'pick-rank', textContent: `#${i + 1}　${pick.score} 分` }),
+        ...pick.why.filter((w) => w.n > 0).map((w) => el('span', { className: 'chip pick-chip', textContent: w.text })),
+        ...pick.why.filter((w) => w.n < 0).map((w) => el('span', { className: 'chip pick-chip is-minus', textContent: w.text })),
+      ]);
+      const actions = el('div', { className: 'card-actions pick-actions' });
+      const today = el('button', { className: 'btn btn-tiny', type: 'button', textContent: r.nextDate === todayISO() ? '已排今天' : '排今天', disabled: r.nextDate === todayISO() });
+      today.onclick = async (e) => {
+        e.stopPropagation();
+        await saveState(r.id, { nextDate: todayISO() });
+        touch(); render(); scheduleSync();
+        toast(`${r.company} 已排到今天`);
+      };
+      const skip = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '略過 30 天' });
+      skip.onclick = async (e) => {
+        e.stopPropagation();
+        await saveState(r.id, { pickSkipUntil: addDays(todayISO(), 30) });
+        touch(); render(); scheduleSync();
+        toast(`${r.company} 30 天內不再推薦`);
+      };
+      actions.append(today, skip);
+      why.onclick = (e) => e.stopPropagation();
+      node.append(why, actions);
+      list.append(node);
+    });
+    host.append(list);
+    if (picks.length > PICK_LIMIT) host.append(el('p', { className: 'muted', textContent: `只列前 ${PICK_LIMIT} 家；打完這些明天再看。` }));
+  }
+
   function bar(label, value, max) {
     return el('div', { className: 'bar' }, [
       el('span', { textContent: label }),
@@ -2726,10 +2795,13 @@
 
     const tab = state.tab;
     $('#paneList').hidden = tab !== 'all';
+    $('#panePicks').hidden = tab !== 'picks';
     $('#paneStats').hidden = tab !== 'stats';
     $('#paneRules').hidden = tab !== 'rules';
-    // 統計與規則頁用不到左側篩選，讓內容佔滿整個寬度
-    const wide = tab === 'stats' || tab === 'rules';
+    // 分頁上的數字每次都算：便宜（allViews 有快取），而且要讓人一進來就看到今天有幾家
+    $('#countPicks').textContent = String(total ? dailyPicks().length : 0);
+    // 統計、規則、今日推薦用不到左側篩選，讓內容佔滿整個寬度
+    const wide = tab === 'stats' || tab === 'rules' || tab === 'picks';
     document.querySelector('.layout').classList.toggle('is-wide', wide);
     $('#filters').hidden = wide;
     $('#btnFilters').hidden = wide;
@@ -2737,6 +2809,8 @@
     if (tab === 'stats') {
       // 統計只跟資料有關，資料沒變就不用重畫幾十根長條
       if (statsKey !== String(dataVersion)) { renderStats(); statsKey = String(dataVersion); }
+    } else if (tab === 'picks') {
+      renderPicks();
     } else if (tab === 'rules') {
       buildRules();
     } else { renderList(); renderRemindBar(); }
@@ -6055,7 +6129,6 @@ export default {
       }
       if (act === 'new-customer') openNewCustomer();
       if (act === 'registry') { openRegistryUpdate(); return; }
-      if (act === 'leads') { await openLeadsPicker(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
       if (act === 'check-names') { await reviewCompanyNames(); return; }
       if (act === 'spread-due') { await spreadDueOverWorkdays(15); return; }

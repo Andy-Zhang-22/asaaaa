@@ -811,8 +811,18 @@ body.has-registry-bar .update-bar { bottom: 60px; }
   @page { margin: 12mm; }
 }
 
-/* ---------- 撈本月新公司：清冊清單 ---------- */
-.leads-list { margin: 4px 0 12px; }
-.leads-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px dashed var(--border); cursor: pointer; }
-.leads-row input { margin-top: 5px; flex: none; }
-.leads-row small { display: block; font-size: 12px; }
+/* 選單裡連到獨立網站的那一列：長得跟按鈕一樣，才不會在一排按鈕裡顯得突兀 */
+.menu a.menu-link { display: block; width: 100%; text-align: right; padding: 9px 12px; border-radius: 8px; color: inherit; text-decoration: none; }
+.menu a.menu-link:hover { background: var(--surface-2); }
+
+/* ---------- 今日推薦 ---------- */
+.picks-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.picks-head h2 { font-size: 18px; margin-bottom: 4px; }
+.picks-head .muted { font-size: 13px; line-height: 1.6; max-width: 640px; }
+.card.is-pick { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+/* 為什麼推薦：每個理由一顆小籤，扣分的灰掉，一眼看出這家強在哪、弱在哪 */
+.pick-why { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+.pick-rank { font-size: 12px; font-weight: 600; color: var(--primary); margin-right: 2px; font-variant-numeric: tabular-nums; }
+.pick-chip { cursor: default; padding: 2px 9px; font-size: 12px; border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); }
+.pick-chip.is-minus { border-color: var(--border); color: var(--muted); background: transparent; text-decoration: line-through; }
+.pick-actions { margin-top: 8px; }
