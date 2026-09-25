@@ -1,5 +1,109 @@
 {
  "periods": {
+  "11505": {
+   "generatedAt": "2026-09-25T02:23:39.222Z",
+   "period": "11505",
+   "files": [
+    {
+     "city": "宜蘭縣",
+     "type": "change",
+     "path": "11505/宜蘭縣-change.csv",
+     "rows": 118,
+     "capitalUp": 6
+    },
+    {
+     "city": "宜蘭縣",
+     "type": "setup",
+     "path": "11505/宜蘭縣-setup.csv",
+     "rows": 39,
+     "capitalUp": 0
+    },
+    {
+     "city": "桃園市",
+     "type": "change",
+     "path": "11505/桃園市-change.csv",
+     "rows": 1237,
+     "capitalUp": 156
+    },
+    {
+     "city": "桃園市",
+     "type": "setup",
+     "path": "11505/桃園市-setup.csv",
+     "rows": 296,
+     "capitalUp": 0
+    },
+    {
+     "city": "基隆市",
+     "type": "change",
+     "path": "11505/基隆市-change.csv",
+     "rows": 87,
+     "capitalUp": 6
+    },
+    {
+     "city": "基隆市",
+     "type": "setup",
+     "path": "11505/基隆市-setup.csv",
+     "rows": 21,
+     "capitalUp": 0
+    },
+    {
+     "city": "新北市",
+     "type": "change",
+     "path": "11505/新北市-change.csv",
+     "rows": 2100,
+     "capitalUp": 238
+    },
+    {
+     "city": "新北市",
+     "type": "setup",
+     "path": "11505/新北市-setup.csv",
+     "rows": 582,
+     "capitalUp": 0
+    },
+    {
+     "city": "新竹市",
+     "type": "change",
+     "path": "11505/新竹市-change.csv",
+     "rows": 229,
+     "capitalUp": 20
+    },
+    {
+     "city": "新竹市",
+     "type": "setup",
+     "path": "11505/新竹市-setup.csv",
+     "rows": 81,
+     "capitalUp": 0
+    },
+    {
+     "city": "新竹縣",
+     "type": "change",
+     "path": "11505/新竹縣-change.csv",
+     "rows": 371,
+     "capitalUp": 35
+    },
+    {
+     "city": "新竹縣",
+     "type": "setup",
+     "path": "11505/新竹縣-setup.csv",
+     "rows": 80,
+     "capitalUp": 0
+    },
+    {
+     "city": "臺北市",
+     "type": "change",
+     "path": "11505/臺北市-change.csv",
+     "rows": 3498,
+     "capitalUp": 268
+    },
+    {
+     "city": "臺北市",
+     "type": "setup",
+     "path": "11505/臺北市-setup.csv",
+     "rows": 429,
+     "capitalUp": 0
+    }
+   ]
+  },
   "11506": {
    "generatedAt": "2026-09-25T02:22:22.334Z",
    "period": "11506",
@@ -314,5 +418,5 @@
   }
  },
  "latest": "11508",
- "generatedAt": "2026-09-25T02:22:22.334Z"
+ "generatedAt": "2026-09-25T02:23:39.222Z"
 }
