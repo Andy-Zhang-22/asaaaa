@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260926-170';
+  const APP_VERSION = '20260926-171';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -3289,11 +3289,12 @@
     $('#panePicks').hidden = tab !== 'picks';
     $('#paneStats').hidden = tab !== 'stats';
     $('#paneRules').hidden = tab !== 'rules';
+    $('#paneLeads').hidden = tab !== 'leads';
     // 分頁上的數字每次都算：便宜（allViews 有快取），而且要讓人一進來就看到今天有幾家
     // 分頁上的數字要跟真的列出來的一樣：顯示 12 家卻寫 256，那個 256 沒有任何意義
     $('#countPicks').textContent = String(total ? Math.min(PICK_LIMIT, dailyPicks().length) : 0);
-    // 統計、規則、今日推薦用不到左側篩選，讓內容佔滿整個寬度
-    const wide = tab === 'stats' || tab === 'rules' || tab === 'picks';
+    // 統計、規則、今日推薦、新公司用不到左側篩選（新公司有自己的一組），讓內容佔滿整個寬度
+    const wide = tab === 'stats' || tab === 'rules' || tab === 'picks' || tab === 'leads';
     document.querySelector('.layout').classList.toggle('is-wide', wide);
     $('#filters').hidden = wide;
     $('#btnFilters').hidden = wide;
@@ -3305,6 +3306,9 @@
       renderPicks();
     } else if (tab === 'rules') {
       buildRules();
+    } else if (tab === 'leads') {
+      // 新公司分頁自己管自己（leads.js）：第一次切過去才抓清冊
+      if (window.Leads) window.Leads.show();
     } else { renderList(); renderRemindBar(); }
   }
 
@@ -6461,10 +6465,7 @@ export default {
     $('#tabs').onclick = (e) => {
       const btn = e.target.closest('.tab');
       if (!btn || btn.id === 'btnFilters' || btn.classList.contains('tab-link') || btn.classList.contains('nav-link')) return;
-      state.tab = btn.dataset.tab;
-      state.limit = PAGE_SIZE;
-      [...$('#tabs').children].forEach((b) => b.classList.toggle('is-active', b === btn));
-      render();
+      switchTab(btn.dataset.tab);
     };
 
     $('#btnImport').onclick = () => { $('#importer').hidden = false; };
@@ -6492,6 +6493,11 @@ export default {
       if (act === 'paste-customer') { $('#importer').hidden = true; openPasteImport(); }
       if (act === 'new-customer') { $('#importer').hidden = true; openNewCustomer(); }
     });
+    /*
+     * 「新公司」分頁的「加入客戶名單」：把篩好的清冊組成 CSV 檔，走跟拖檔案進來一模一樣的
+     * 匯入流程（認出是登記清冊 → 問條件 → 略過重複）。只開這一個口，不另寫匯入邏輯。
+     */
+    window.importLeadsFile = (file) => { $('#importer').hidden = false; return importFiles([file]); };
     $('#btnPick').onclick = () => $('#filePick').click();
     $('#filePick').onchange = (e) => {
       const files = [...e.target.files];
@@ -6542,6 +6548,7 @@ export default {
         });
       }
       if (act === 'new-customer') openNewCustomer();
+      if (act === 'leads') { switchTab('leads'); return; }
       if (act === 'registry') { openRegistryUpdate(); return; }
       if (act === 'phone-hunt') { await openPhoneHunt(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
@@ -6660,6 +6667,16 @@ export default {
     });
   }
 
+  /** 切分頁：分頁列、選單、網址（?tab=leads）都從這裡走，狀態才會一致。 */
+  function switchTab(tab) {
+    const btn = $(`#tabs .tab[data-tab="${tab}"]`);
+    if (!btn) return;
+    state.tab = tab;
+    state.limit = PAGE_SIZE;
+    [...$('#tabs').children].forEach((b) => b.classList.toggle('is-active', b === btn));
+    render();
+  }
+
   async function init() {
     // 深淺色切換拿掉了（使用者說用不到），一律跟著系統；以前手動選過的清掉，不然會永遠卡在那一色
     try { localStorage.removeItem('theme'); } catch (e) { /* 無痕模式 */ }
@@ -6715,6 +6732,11 @@ export default {
       autoRegistryTick();   // 手機鎖了一整晚，解鎖回來就該補跑
     });
     if (!state.records.length) $('#importer').hidden = false;
+    // 舊的獨立網站網址（leads/）轉過來會帶 ?tab=leads：直接開到新公司分頁
+    if (new URLSearchParams(location.search).get('tab') === 'leads' || location.hash === '#leads') {
+      $('#importer').hidden = true;
+      switchTab('leads');
+    }
   }
 
   init().catch((err) => {
