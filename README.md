@@ -2456,3 +2456,10 @@ https://data.ntpc.gov.tw/datasets/5a6fda8d-c383-42de-a309-67df68d85495
 使用者：「今日推薦的頁面請移除，我用不到」。分頁、卡片、「排今天」「略過 30 天」都刪了。
 打分的 `scorePick` 留著：「每天打得完幾家」重排時，同一天的要靠它決定誰排前面（兩邊本來就
 用同一把尺）。之前按過「略過 30 天」留在狀態裡的 `pickSkipUntil` 不清，30 天內自己過期。
+
+## 成立年填了卻看不到：時間戳沒推，瀏覽器用舊快取
+
+使用者：「沒看到成立年」。兩份清冊的成立年都填進 CSV 了，但 `index.json` 的 `generatedAt` 沒動，
+而網站抓 CSV 用 `?t=<generatedAt>` 當快取鍵、`cache: 'force-cache'`，時間戳不變就一直讀以前存
+下來的舊 CSV。`fill-founded.mjs` 現在動到 CSV 就把 `generatedAt`（與 `foundedAt`）推到當下；
+這一次的兩份 index.json 手動推了。

@@ -225,5 +225,20 @@ for (const { file, rows, iTax, iSetup } of parsed) {
   if (changed) { await fs.writeFile(file, toCsv(rows), 'utf8'); touched += 1; }
 }
 console.log(`填了 ${filled.toLocaleString()} 列的${COLS.fill}，動到 ${touched} 個檔`);
+/*
+ * CSV 動了就把 index.json 的 generatedAt 一起往前推。
+ * 網站抓 CSV 是用 `?t=<generatedAt>` 當快取鍵、而且 force-cache：時間戳不變，瀏覽器就一直
+ * 用以前存下來的舊 CSV，成立年填了也看不到（使用者：「沒看到成立年」）。
+ */
+if (touched) {
+  const indexPath = CHATTEL ? path.join(OUT, 'chattel', 'index.json') : path.join(OUT, 'index.json');
+  try {
+    const idx = JSON.parse(await fs.readFile(indexPath, 'utf8'));
+    idx.generatedAt = new Date().toISOString();
+    idx.foundedAt = idx.generatedAt;
+    await fs.writeFile(indexPath, `${JSON.stringify(idx, null, 1)}\n`, 'utf8');
+    console.log(`${indexPath} 的 generatedAt 推到 ${idx.generatedAt}，網站才會重新抓 CSV`);
+  } catch (e) { console.log(`沒能更新 ${indexPath}：${e.message}`); }
+}
 console.log(`快取 ${CACHE}：${Object.keys(cache).length.toLocaleString()} 個統編`);
 console.log(stopped ? `\n沒查完，還剩 ${remaining.toLocaleString()} 家，下次跑會從沒查到的接著查。` : '\n完成');
