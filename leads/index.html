@@ -140,11 +140,13 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     <div class="head">
       <div class="count" id="count">—</div>
       <div class="row">
+        <button class="btn" id="btnFounded" type="button" title="變更清冊上沒有設立日期，用統編逐家查商工登記（跟主站「從商工登記更新公司資料」同一條路）">查成立年（商工登記）</button>
         <button class="btn" id="btnCopy" type="button">複製統編</button>
         <button class="btn btn-primary" id="btnExport" type="button">匯出 CSV（給電話推廣名單系統）</button>
       </div>
     </div>
     <div class="loading" id="loading" hidden></div>
+    <div class="loading row" id="foundedBar" hidden><span id="foundedText"></span><button class="btn btn-tiny" id="btnFoundedStop" type="button">停止</button></div>
     <div class="cards" id="cards"></div>
     <div class="empty" id="empty" hidden></div>
     <div class="row" style="justify-content:center;margin-top:12px"><button class="btn" id="btnMore" type="button" hidden>載入更多</button></div>
@@ -241,27 +243,34 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
    * 查設立日期的工人：一次一個（跟主站的批次更新一樣），佇列在每次重畫時重算（條件改了就換查別家），
    * gen 變了就是叫它停（取消勾選、按清除）。連續三次連不上就停下來講，不要一直撞。
    */
-  const hunt = { gen: 0, active: 0, queue: [], dirty: true, pending: new Set(), fail: 0, stopped: '' };
-  const stopHunt = () => { hunt.gen += 1; hunt.queue = []; hunt.pending.clear(); hunt.fail = 0; };
+  /*
+   * 兩種啟動方式：勾成立年數的籤（查到就能篩），或按名單上方的「查成立年」（manual，
+   * 跟主站「從商工登記更新公司資料」一樣是明確的動作，不用先勾籤；手機上篩選欄收起時
+   * 也看得到）。兩種查的都是「套用其他條件後還在名單上」的公司。
+   */
+  const hunt = { gen: 0, active: 0, queue: [], dirty: true, pending: new Set(), fail: 0, stopped: '', manual: false };
+  const stopHunt = () => { hunt.gen += 1; hunt.queue = []; hunt.pending.clear(); hunt.fail = 0; hunt.manual = false; };
   function ensureHunt() {
     if (!window.Registry) { hunt.stopped = '（找不到查詢程式 registry.js，沒辦法查設立日期）'; return; }
     hunt.dirty = true;
     if (!hunt.active) huntWorker(hunt.gen);
   }
+  // 節流不是防抖：結果每 300ms 來一筆，「有新的就重新計時」會讓畫面到整批查完才動一次
   let renderT = null;
-  const scheduleRender = () => { clearTimeout(renderT); renderT = setTimeout(render, 600); };
+  const scheduleRender = () => { if (renderT) return; renderT = setTimeout(() => { renderT = null; render(); }, 600); };
   async function huntWorker(gen) {
     hunt.active += 1;
     let did = 0;   // 這個工人真的查到東西才在收工時重畫；沒事做的工人不重畫，不然 render → ensureHunt → 又派工人，繞不完
+    let finished = false;   // 按鈕啟動的那種查到底了，收工時講一聲
     try {
-      while (gen === hunt.gen && f.ages.size) {
+      while (gen === hunt.gen && (f.ages.size || hunt.manual)) {
         if (hunt.dirty) {
           const c = criteria();
           hunt.queue = [...new Set(rows.filter((r) => needLookup(r) && !hunt.pending.has(r['統一編號']) && passes(r, c, 'ages')).map((r) => r['統一編號']))];
           hunt.dirty = false;
         }
         const id = hunt.queue.shift();
-        if (!id) break;
+        if (!id) { if (hunt.manual) { hunt.manual = false; finished = true; } break; }
         if (founded[id] !== undefined || hunt.pending.has(id)) continue;
         hunt.pending.add(id);
         let res;
@@ -283,7 +292,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
         } else {
           hunt.fail += 1;
           if (hunt.fail >= 3) {
-            hunt.stopped = '商工登記查不到（官方、自架代理、g0v 鏡像都連不上），先停下來；等一下再勾一次會從沒查到的接著查。';
+            hunt.stopped = '商工登記查不到（官方、自架代理、g0v 鏡像都連不上），先停下來；等一下再按一次「查成立年」會從沒查到的接著查。';
             toast(hunt.stopped);
             stopHunt();
             break;
@@ -299,15 +308,13 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     } finally {
       hunt.active -= 1;
       // 最後一個工人收工就馬上重畫，不要讓名單還停在 600ms 前的樣子
-      if (!hunt.active && did) { clearTimeout(renderT); render(); }
+      if (!hunt.active && (did || finished)) { clearTimeout(renderT); renderT = null; render(); }
       else ageNote();
+      if (finished) { const st = foundedStatus(); toast(`成立年查完了：已知 ${st.known.toLocaleString()} 家${st.none ? `、登記上查不到 ${st.none} 家` : ''}`); }
     }
   }
-  /** 籤底下那一行：沒勾的時候講規則，勾了講進度。 */
-  function ageNote() {
-    const n = $('#ageNote');
-    if (!n) return;
-    if (!f.ages.size) { n.textContent = '設立清冊直接用清冊上的日期；變更清冊沒有設立日期，勾了會拿統編查商工登記（跟主站同一條路：官方、自架代理、g0v 鏡像），查到的存在這台瀏覽器。'; return; }
+  /** 目前名單（套用成立年數以外的條件）的成立年：已知幾家、登記上查不到幾家、還有幾家沒查。 */
+  function foundedStatus() {
     const c = criteria();
     let known = 0; let none = 0; let todo = 0;
     rows.forEach((r) => {
@@ -316,6 +323,24 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
       else if (founded[r['統一編號']] === '' || !/^\d{8}$/.test(r['統一編號'] || '')) none += 1;
       else todo += 1;
     });
+    return { known, none, todo };
+  }
+  /** 名單上方的進度列：查的時候才出現，跟籤底下那行講一樣的話（手機上篩選欄收起時只看得到這裡）。 */
+  function foundedBar() {
+    const bar = $('#foundedBar');
+    const running = hunt.active > 0 && !hunt.stopped;
+    bar.hidden = !running;
+    if (!running) return;
+    const st = foundedStatus();
+    $('#foundedText').textContent = `查成立年中… 已知 ${st.known.toLocaleString()} 家${st.none ? `、登記上查不到 ${st.none} 家` : ''}、還有 ${st.todo.toLocaleString()} 家`;
+  }
+  /** 籤底下那一行：沒勾的時候講規則，勾了講進度。 */
+  function ageNote() {
+    const n = $('#ageNote');
+    if (!n) return;
+    foundedBar();
+    if (!f.ages.size && !hunt.active) { n.textContent = '設立清冊直接用清冊上的日期；變更清冊沒有設立日期，按名單上方「查成立年」或勾這裡的籤，會拿統編查商工登記（跟主站同一條路：官方、自架代理、g0v 鏡像），查到的存在這台瀏覽器。'; return; }
+    const { known, none, todo } = foundedStatus();
     const parts = [`已知成立日期 ${known.toLocaleString()} 家`];
     if (none) parts.push(`登記上查不到 ${none} 家`);
     if (todo) parts.push(hunt.active && !hunt.stopped ? `還有 ${todo.toLocaleString()} 家查詢中…` : `還有 ${todo.toLocaleString()} 家沒查`);
@@ -502,10 +527,11 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
 
   let current = [];
   function render() {
-    drawChips();
-    // 勾了成立年數才去查沒有設立日期的；停下來的（連不上）要等使用者再點一次籤才重試
-    if (f.ages.size) { if (!hunt.stopped) ensureHunt(); }
+    // 勾了成立年數、或按了「查成立年」才去查沒有設立日期的；停下來的（連不上）要等使用者再按一次才重試。
+    // 先派工人再畫籤：工人一派下去 hunt.active 就是 1，進度列這一輪就畫得出來
+    if (f.ages.size || hunt.manual) { if (!hunt.stopped) ensureHunt(); }
     else { stopHunt(); hunt.stopped = ''; }
+    drawChips();
     current = visible();
     const host = $('#cards');
     host.textContent = '';
@@ -518,6 +544,7 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     $('#empty').textContent = rows.length ? '沒有符合條件的公司，放寬資本額或案由試試。' : '';
     $('#btnExport').disabled = !current.length;
     $('#btnCopy').disabled = !current.length;
+    $('#btnFounded').disabled = !current.length || (hunt.active > 0 && !hunt.stopped);
   }
 
   function chips(host, options, set, single) {
@@ -568,6 +595,17 @@ input[type="text"], input[type="search"], input[type="number"], select { width: 
     $('#btnMore').onclick = () => { limit += PAGE; render(); };
     // 再點一次成立年數的籤＝「再試一次」：把「連不上」的狀態清掉，render 才會重新開查
     $('#fAge').addEventListener('click', () => { hunt.stopped = ''; }, true);
+    // 名單上方的「查成立年」：對目前名單逐家查，跟主站的批次更新一樣有進度、可停止
+    $('#btnFounded').onclick = () => {
+      if (!window.Registry) { toast('找不到查詢程式 registry.js，沒辦法查設立日期'); return; }
+      const st = foundedStatus();
+      if (!st.todo) { toast(`目前名單的成立年都查過了：已知 ${st.known.toLocaleString()} 家${st.none ? `、登記上查不到 ${st.none} 家` : ''}`); return; }
+      hunt.stopped = '';
+      hunt.manual = true;
+      render();
+    };
+    // 停：籤還勾著的話 render 會馬上再派工人，所以要留一句「停了」擋住，等使用者再按或再點籤
+    $('#btnFoundedStop').onclick = () => { stopHunt(); hunt.stopped = '已停止；查到的都留著，再按一次「查成立年」會接著查。'; render(); toast(hunt.stopped); };
     $('#btnReset').onclick = async () => {
       f.types.clear(); f.types.add('change'); f.cities.clear(); f.reasons.clear(); f.reasons.add('up'); f.inds.clear(); f.branches.clear(); f.ages.clear(); f.q = '';
       $('#q').value = ''; $('#capMin').value = '500'; $('#capMax').value = '6000'; $('#skipHolding').checked = true;
