@@ -894,5 +894,20 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 .badge-new { border-color: var(--primary); color: var(--primary); }
 .badge-ind { color: var(--muted); }
 .leads-foot { font-size: 12.5px; line-height: 1.7; margin: 8px 0 24px; }
+
+/* ---------- 快到期（動保清冊） ---------- */
+.chattel-card.is-mine { border-left-color: var(--ok); }
+.chattel-card.is-hidden { opacity: .55; }
+.badge-due { color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); font-weight: 600; }
+.badge-overdue { color: var(--danger); border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); font-weight: 600; }
+.badge-expired { color: var(--muted); border-style: dashed; }
+.badge-mine { color: var(--ok); border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.badge-peer { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 50%, var(--border)); }
+.badge-own { color: var(--muted); text-decoration: line-through; }
+.chattel-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+.chattel-legend .swatch { display: inline-block; width: 4px; height: 14px; border-radius: 2px; vertical-align: -2px; background: var(--border); }
+.chattel-legend .swatch.is-overdue { background: var(--danger); }
+.chattel-legend .swatch.is-due { background: var(--warn); }
+.chattel-legend .swatch.is-mine { background: var(--ok); }
 /* 手機：五個分頁要塞得下，間距縮小，「新公司」不會被擠到看不見 */
 @media (max-width: 520px) { .tab { padding: 8px 8px; font-size: 14px; } .tabs { padding-left: 8px; gap: 0; } .pill { margin-right: 0; padding: 0 5px; } }

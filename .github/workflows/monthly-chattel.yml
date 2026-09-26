@@ -1,0 +1,42 @@
+# 每月抓一次新北市「動產擔保登記清冊」，整理成 CSV 存進 leads/chattel/，
+# 網站的「快到期」分頁讀這裡：同業的動產抵押、附條件買賣案件，契約快到期的就是換約時機。
+#
+# 為什麼在 GitHub Actions：政府網站沒有 CORS，瀏覽器抓不到；開發環境連不上政府網站；
+# 只有 Actions 的 runner 出得去，而且不需要任何人的電腦開著。
+#
+# 資料每月更新（上一版截到 7 月初，9 月底看到的是「8 月更新」那版），排在每月 10 日
+# 台灣時間 10:00（UTC 02:00）。也可以手動觸發。
+name: 每月動保清冊
+
+on:
+  schedule:
+    - cron: '0 2 10 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 抓清冊並整理成 CSV
+        run: |
+          node tools/fetch-chattel.mjs | tee fetch-chattel.log
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"; cat fetch-chattel.log >> "$GITHUB_STEP_SUMMARY"; printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 存回 repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A leads/chattel
+          if git diff --cached --quiet; then echo "清冊沒有變動"; exit 0; fi
+          git commit -m "動保清冊：$(date -u +%Y-%m-%d)"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
