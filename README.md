@@ -55,8 +55,20 @@
 
 1. 到 repo 的 **Settings → Pages**。
 2. Source 選 **Deploy from a branch**，Branch 選 `main`、資料夾 `/ (root)`，Save。
-3. 等一兩分鐘，網址是 `https://<帳號>.github.io/asaaaa/`。手機瀏覽器開這個網址，
+3. 等一兩分鐘，網址是 `https://<帳號>.github.io/<repo 名稱>/`，目前是
+   **https://andy-zhang-22.github.io/chailease-work/**。手機瀏覽器開這個網址，
    再「加入主畫面」就跟 App 一樣。
+
+> **repo 改名，網址就會跟著變，而且舊網址不會轉址。**
+> 這個 repo 從 `asaaaa` 改名成 `chailease-work` 之後，`…github.io/asaaaa/` 就直接 404，
+> 使用者看到的是 GitHub 的「There isn't a GitHub Pages site here.」——git push 會收到
+> 「This repository moved」的提示並且照樣成功，所以很容易以為沒事。
+>
+> 改名之後要做的：更新書籤與手機主畫面捷徑（包含 `…/leads/` 那個新公司名單）；
+> 如果新網址也 404，到 **Settings → Pages** 把分支重選一次再存檔。
+>
+> **資料不會不見。** IndexedDB 與 localStorage 是綁在「網域」（`帳號.github.io`）上的，
+> 不是綁路徑，兩個網址同一個網域，名單、通話紀錄、排除名單、密碼鎖都還在。
 
 網址是公開的，但**網站本身不含任何名單資料**——PDF 是每個人在自己瀏覽器裡匯入的，
 不會上傳。別人打開只會看到空白的匯入畫面。
