@@ -20,6 +20,15 @@ on:
         description: '縣市，逗號分隔（留空＝新竹以北加宜蘭）'
         required: false
         default: ''
+      skip_fetch:
+        description: '只補成立年，不抓清冊（補舊期別時用）'
+        type: boolean
+        required: false
+        default: false
+      founded_minutes:
+        description: '查成立年最多跑幾分鐘（查不完下次接著查）'
+        required: false
+        default: '300'
 
 permissions:
   contents: write
@@ -38,6 +47,7 @@ jobs:
         run: which pdftotext >/dev/null 2>&1 || sudo apt-get install -y -q poppler-utils
 
       - name: 抓清冊並轉成 CSV
+        if: inputs.skip_fetch != true
         env:
           PERIOD: ${{ inputs.period }}
           CITIES: ${{ inputs.cities }}
@@ -50,7 +60,20 @@ jobs:
 
       # 只留最近 6 期：一期七個縣市約 3MB，留一年 repo 就多 36MB，網站也用不到那麼舊的
       - name: 清掉六期以前的
+        if: inputs.skip_fetch != true
         run: node tools/fetch-leads.mjs --prune 6
+
+      # 變更清冊上只有核准變更日期，沒有設立日期。這一步在這裡一次查好填進 CSV，
+      # 使用者打開分頁就有「成立幾年」可以篩，不用自己的瀏覽器再跑十幾個小時。
+      # 查到的存在 leads/founded.json，下個月只查新出現的那幾千家。
+      # 時間到了就收工、把進度存起來，下次跑接著查——與其被砍掉什麼都沒有，不如每次都有進展。
+      - name: 補上成立年
+        continue-on-error: true
+        env:
+          MINUTES: ${{ inputs.founded_minutes || '300' }}
+        run: |
+          node tools/fill-founded.mjs --minutes "$MINUTES" --concurrency 6 | tee fill-founded.log
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"; cat fill-founded.log >> "$GITHUB_STEP_SUMMARY"; printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
 
       - name: 存回 repo
         run: |
@@ -58,6 +81,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A leads
           if git diff --cached --quiet; then echo "清冊沒有變動"; exit 0; fi
-          git commit -m "每月新公司清冊：$(date -u +%Y-%m-%d)"
+          git commit -m "新公司清冊與成立年：$(date -u +%Y-%m-%d)"
           git pull --rebase origin "$GITHUB_REF_NAME"
           git push origin "HEAD:$GITHUB_REF_NAME"
