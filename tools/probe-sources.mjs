@@ -1,96 +1,77 @@
 /**
- * 探路第二輪：動產擔保、工廠登記到底有沒有開放資料。
+ * 探路第三輪：動保清冊裡到底有什麼欄位、下載得到嗎。
  *
- * 第一輪知道的事：
- *   - runner 出得去（data.gov.tw、data.gcis 都 200）
- *   - data.gov.tw 的 /api/v2/rest/dataset 回 405「Must be one of: POST」→ 存在，要 POST
- *   - 經濟部開放資料目錄 /od/datacategory 整頁抓得到（191KB HTML）→ 直接在裡面找
- *   - serv.gcis.nat.gov.tw 那組網址是我猜的，404，不再猜
+ * 第二輪找到的（經濟部開放資料目錄 /od/datacategory 裡確實有）：
+ *   動產擔保交易公示登記清冊(月份)  oid=07C2AB4A-4A73-402C-B8EE-2D04A56FA75E
+ *   動產擔保交易公示變更清冊(月份)  oid=A14C70AF-F019-4695-93DF-C0763E2E08B4
+ *   動產擔保交易公示註銷清冊(月份)  oid=1492458C-C729-45A2-9F55-CC5EF0C2E264
+ * 另外三筆「動產擔保交易登記統計」只有總額、沒有公司，用不上。
  *
- * 這一輪只做兩件事：把經濟部目錄整頁翻一遍找關鍵字；用 POST 問 data.gov.tw。
+ * 順便看三個原本不知道的：公司負責人資料查詢、公司登記董監事資料、公司資料異動查詢。
+ *
+ * 這一輪要回答的就一件事：清冊下載得到嗎？裡面有沒有統編、公司名、債權人、金額、日期？
  * 不碰任何客戶名單。
  */
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
-const get = async (url, init = {}) => fetch(url, {
+const get = (url, init = {}) => fetch(url, {
   ...init,
   headers: { 'User-Agent': UA, ...(init.headers || {}) },
-  signal: AbortSignal.timeout(60000),
+  signal: AbortSignal.timeout(90000),
   redirect: 'follow',
 });
+const strip = (h) => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+  .replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 
-console.log('=========== 一、經濟部開放資料目錄裡有什麼 ===========');
+const SETS = [
+  ['動保：登記清冊(月份)', '07C2AB4A-4A73-402C-B8EE-2D04A56FA75E'],
+  ['動保：變更清冊(月份)', 'A14C70AF-F019-4695-93DF-C0763E2E08B4'],
+  ['動保：註銷清冊(月份)', '1492458C-C729-45A2-9F55-CC5EF0C2E264'],
+  ['公司負責人資料查詢', ''],
+  ['公司登記董監事資料', ''],
+];
+
+for (const [label, oid] of SETS) {
+  if (!oid) continue;
+  console.log(`\n\n=========== ${label} ===========`);
+  const url = `https://data.gcis.nat.gov.tw/od/detail?oid=${oid}`;
+  try {
+    const res = await get(url);
+    const html = await res.text();
+    console.log(`detail 頁 HTTP ${res.status}　${html.length} bytes`);
+    // 說明文字：欄位清單通常就寫在這裡
+    console.log(`\n【頁面文字（前 1800 字）】\n${strip(html).slice(0, 1800)}`);
+    // 下載／API 連結
+    const links = [...new Set([...html.matchAll(/(?:href|action)="([^"]+)"/gi)].map((m) => m[1]))]
+      .filter((h) => /download|\.csv|\.zip|\.json|\.xml|\/od\/data\/api|file/i.test(h));
+    console.log(`\n【可能的下載／API 連結 ${links.length} 個】`);
+    links.slice(0, 20).forEach((h) => console.log(`   ${h.startsWith('http') ? h : `https://data.gcis.nat.gov.tw${h.startsWith('/') ? '' : '/od/'}${h}`}`));
+  } catch (e) {
+    console.log(`✗ ${e.message}`);
+  }
+}
+
+console.log('\n\n=========== 直接試 API 端點（跟公司登記同一種寫法） ===========');
+for (const [label, oid] of SETS.filter(([, o]) => o)) {
+  const url = `https://data.gcis.nat.gov.tw/od/data/api/${oid}?$format=json&$skip=0&$top=2`;
+  try {
+    const res = await get(url);
+    const text = await res.text();
+    console.log(`\n── ${label}\n   ${url}\n   HTTP ${res.status}　${res.headers.get('content-type')}　${text.length} bytes`);
+    console.log(`   ${text.slice(0, 900).replace(/\s+/g, ' ')}`);
+  } catch (e) {
+    console.log(`\n── ${label}　✗ ${e.message}`);
+  }
+}
+
+console.log('\n\n=========== 目錄裡這幾個的 oid 是多少 ===========');
 {
   const res = await get('https://data.gcis.nat.gov.tw/od/datacategory');
   const html = await res.text();
-  console.log(`目錄頁 HTML ${res.status}　${html.length} bytes`);
-
-  // 目錄是一張表：把每個連結的文字與網址抓出來，再挑關鍵字
-  const links = [...html.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)]
-    .map(([, href, text]) => ({ href, text: text.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() }))
-    .filter((x) => x.text);
-  console.log(`頁面上共 ${links.length} 個連結`);
-
-  const KEYS = ['動產擔保', '動保', '抵押', '附條件', '工廠', '設立登記', '變更登記', '停業', '解散', '分公司', '商業登記'];
-  for (const k of KEYS) {
-    const hit = links.filter((x) => x.text.includes(k));
-    console.log(`\n【${k}】${hit.length} 筆`);
-    hit.slice(0, 12).forEach((x) => console.log(`   ${x.text}\n      ${x.href}`));
-  }
-
-  // 目錄頁上的 UUID（資料集編號）全部列出來，對照標題
-  const ids = [...new Set([...html.matchAll(/[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}/gi)].map((m) => m[0]))];
-  console.log(`\n頁面上出現的資料集編號共 ${ids.length} 個（前 40 個）：`);
-  ids.slice(0, 40).forEach((id) => console.log(`   ${id}`));
-
-  // 標題附近就是編號的話，把「標題 → 編號」配起來印出來
-  const rows = [...html.matchAll(/<tr[\s\S]{0,4000}?<\/tr>/gi)]
-    .map((m) => m[0])
-    .map((tr) => ({
-      text: tr.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
-      id: (tr.match(/[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}/i) || [])[0] || '',
-    }))
-    .filter((r) => r.text);
-  console.log(`\n表格列共 ${rows.length}；含關鍵字的：`);
-  rows.filter((r) => /動產擔保|動保|抵押|附條件|工廠/.test(r.text))
-    .slice(0, 20).forEach((r) => console.log(`   ${r.id || '(無編號)'}　${r.text.slice(0, 120)}`));
+  const links = [...html.matchAll(/<a\b[^>]*href="([^"]*oid=([0-9A-F-]{36})[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)]
+    .map(([, , oid, text]) => ({ oid, text: text.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() }));
+  ['負責人', '董監事', '異動', '資本額', '設立'].forEach((k) => {
+    console.log(`\n【${k}】`);
+    links.filter((x) => x.text.includes(k)).slice(0, 8).forEach((x) => console.log(`   ${x.oid}　${x.text}`));
+  });
 }
-
-console.log('\n\n=========== 二、data.gov.tw 用 POST 問 ===========');
-{
-  const BODIES = [
-    ['{q}', { q: '動產擔保' }],
-    ['{keyword}', { keyword: '動產擔保' }],
-    ['{query}', { query: '動產擔保' }],
-    ['{q,size}', { q: '動產擔保', size: 20, page: 1 }],
-  ];
-  for (const [label, body] of BODIES) {
-    try {
-      const res = await get('https://data.gov.tw/api/v2/rest/dataset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const text = await res.text();
-      console.log(`\n── POST ${label}　HTTP ${res.status}　${text.length} bytes`);
-      console.log(`   ${text.slice(0, 600).replace(/\s+/g, ' ')}`);
-    } catch (e) {
-      console.log(`\n── POST ${label}　✗ ${e.message}`);
-    }
-  }
-}
-
-console.log('\n\n=========== 三、經濟部目錄的分類頁 ===========');
-// 目錄首頁可能只是分類，逐一看有沒有「動產擔保」那一類
-for (const path of ['/od/datacategory?category=1', '/od/datacategory?category=2', '/od/datacategory?category=3']) {
-  try {
-    const res = await get(`https://data.gcis.nat.gov.tw${path}`);
-    const html = await res.text();
-    const titles = [...html.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/gi)]
-      .map((m) => m[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim())
-      .filter((t) => t && /登記|資料|清冊|擔保|工廠/.test(t));
-    console.log(`\n── ${path}　HTTP ${res.status}　符合的標題 ${titles.length} 個`);
-    [...new Set(titles)].slice(0, 25).forEach((t) => console.log(`   ${t}`));
-  } catch (e) { console.log(`\n── ${path}　✗ ${e.message}`); }
-}
-
 console.log('\n\n完成。');
