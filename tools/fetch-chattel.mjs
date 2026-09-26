@@ -33,7 +33,7 @@ const API = `https://data.ntpc.gov.tw/api/datasets/${ID}/json`;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
 const SIZE = 500;
 const NAP_MS = 700;
-const HEAD = ['案件類別', '登記編號', '客戶統編', '客戶名稱', '金主統編', '金主名稱', '契約起', '契約迄', '擔保金額', '標的物所在地', '標的物', '登記核准日', '註銷日'];
+const HEAD = ['案件類別', '登記編號', '客戶統編', '客戶名稱', '金主統編', '金主名稱', '契約起', '契約迄', '擔保金額', '標的物所在地', '標的物件數', '登記核准日', '註銷日'];
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => { const i = args.indexOf(`--${name}`); return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : dflt; };
@@ -82,7 +82,8 @@ export function toRow(r) {
     start: ymd(r.casesyyyymmddroc), end: ymd(r.caseeyyyymmddroc),
     amount: String(r.casetatol || '').replace(/[^\d]/g, ''),
     addr: String(r.caseaddr || '').replace(/\s+/g, ' ').trim(),
-    items: String(r.caseitemno || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+    // caseitemno 是標的物「件數」（0、1、2…），不是標的物內容；清冊上沒有標的物內容
+    items: String(r.caseitemno || '').replace(/\D/g, ''),
     approved: ymd(r.caseayyyymmddroc),
     cancelled: ymd(r.casecanyyyymmddroc),
   };

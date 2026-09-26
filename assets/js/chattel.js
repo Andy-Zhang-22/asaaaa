@@ -23,8 +23,9 @@
   // 金主家族：同一家的分公司、舊名都歸一起，籤才不會一長串
   const LENDERS = [
     ['chailease', '中租', /中租/], ['sinxin', '新鑫', /新鑫/], ['hotai', '和潤', /和潤/], ['hedi', '合迪', /合迪/],
-    ['jih', '日盛', /日盛/], ['yulon', '裕融', /裕融|裕隆/], ['bank', '銀行', /銀行|商銀|農會|漁會|信用合作社|信合社/],
-    ['other', '其他', null],
+    ['jih', '日盛', /日盛/], ['orix', '歐力士', /歐力士/], ['taishin', '台新', /台新/], ['first', '第一', /第一租賃|一銀租賃/],
+    ['yulon', '裕融', /裕融|裕隆/], ['bank', '銀行', /銀行|商銀|農會|漁會|信用合作社|信合社/], ['insure', '保險／資融', /人壽|保險|資融/],
+    ['other', '其他（含設備商）', null],
   ];
   const LENDER_RE = /租賃|銀行|商銀|融資|資融|金融|信託|保險|資產管理|信用合作社|信合社|農會|漁會|票券|中租|和潤|新鑫|合迪|裕融|日盛|租賃業/;
   const CSV_HEAD = ['公司名稱', '統編', '電話', '地址', '訪談內容'];
@@ -85,7 +86,7 @@
     const dash = (s) => String(s || '').replace(/\//g, '-');
     return [`動保：${r.lender.name || '不明'}（${typeShort(r.type)}）擔保 ${wan(r.amount)}`,
       `契約 ${dash(r.start)}～${dash(r.end)}${r.days != null ? `（${dueText(r.days)}）` : ''}`,
-      r.items ? `標的：${r.items}` : '', r.addr ? `標的物所在地：${r.addr}` : '', r.no ? `登記 ${r.no}` : ''].filter(Boolean).join('，');
+      r.items ? `標的 ${r.items} 件` : '', r.addr ? `標的物所在地：${r.addr}` : '', r.no ? `登記 ${r.no}` : ''].filter(Boolean).join('，');
   }
 
   /** 正規的 CSV 解析：欄位裡有逗號、引號、換行都吃得下。 */
@@ -125,7 +126,7 @@
       lender: { id: (o['金主統編'] || '').trim(), name: (o['金主名稱'] || '').trim() },
       start: o['契約起'] || '', end: o['契約迄'] || '',
       amount: Number(String(o['擔保金額'] || '').replace(/\D/g, '')) || 0,
-      addr: o['標的物所在地'] || '', items: o['標的物'] || '', approved: o['登記核准日'] || '',
+      addr: o['標的物所在地'] || '', items: Number(o['標的物件數'] || o['標的物'] || 0) || 0, approved: o['登記核准日'] || '',
     };
     r.days = daysLeft(r.end, today);
     r.due = dueOf(r.days);
@@ -133,7 +134,7 @@
     r.custIsFin = LENDER_RE.test(r.cust.name);
     r.branch = branchOf(r.addr);
     r.key = r.no || `${r.cust.id}|${r.lender.id}|${r.end}`;
-    r.blob = [r.cust.id, r.cust.name, r.lender.name, r.addr, r.items, r.no, r.type].join(' ').toLowerCase();
+    r.blob = [r.cust.id, r.cust.name, r.lender.name, r.addr, r.no, r.type].join(' ').toLowerCase();
     return r;
   }
 
@@ -231,11 +232,11 @@
       el('div', { className: 'card-meta' }, [
         el('span', { textContent: `💰 擔保 ${wan(r.amount)}` }),
         el('span', { textContent: `📅 契約 ${r.start || '？'} → ${r.end || '？'}` }),
+        r.items ? el('span', { textContent: `📦 標的 ${r.items} 件`, title: '清冊只有件數，沒有標的物內容' }) : '',
         r.addr ? el('span', {}, ['📍 ', el('a', { href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.addr)}`, target: '_blank', rel: 'noopener', textContent: r.addr })]) : '',
         r.no ? el('span', { textContent: `🧾 登記 ${r.no}` }) : '',
         r.cust.id ? el('span', { textContent: `#${r.cust.id}` }) : '',
       ]),
-      r.items ? el('p', { className: 'leads-items', textContent: `標的物：${r.items}` }) : '',
       el('div', { className: 'card-actions' }, actions),
     ]);
   }
@@ -273,7 +274,7 @@
     chips($('#chattel-fBranch'), bkeys.map((k) => [k, k, bc.get(k) || 0]), f.branches);
     const dc = count((r) => r.branch.district, 'districts');
     const dkeys = [...new Set([...dc.keys(), ...f.districts])].sort((a, b) => (dc.get(b) || 0) - (dc.get(a) || 0)).slice(0, 24);
-    chips($('#chattel-fDistrict'), dkeys.map((k) => [k, k.replace(/^新北市/, ''), dc.get(k) || 0]), f.districts);
+    chips($('#chattel-fDistrict'), dkeys.map((k) => [k, k.replace(/^新北市(.)/, '$1'), dc.get(k) || 0]), f.districts);
   }
 
   let current = [];
@@ -339,7 +340,7 @@
         el('input', { id: 'chattel-amtMin', type: 'number', min: '0', step: '100', placeholder: '下限', value: '100' }), '～',
         el('input', { id: 'chattel-amtMax', type: 'number', min: '0', step: '100', placeholder: '上限' })])),
       el('div', { className: 'leads-group' }, [el('label', {}, [el('input', { type: 'checkbox', id: 'chattel-hideFin', checked: true }), ' 藏起客戶那一方也是租賃／銀行的案件（同業之間的融資，不是要打的對象）'])]),
-      group('關鍵字', el('input', { id: 'chattel-q', type: 'search', placeholder: '公司、統編、金主、地址、標的物、登記編號', autocomplete: 'off' }), 'chattel-q'),
+      group('關鍵字', el('input', { id: 'chattel-q', type: 'search', placeholder: '公司、統編、金主、地址、登記編號', autocomplete: 'off' }), 'chattel-q'),
       group('排序', el('select', { id: 'chattel-sort' }, [
         el('option', { value: 'end', textContent: '到期日（近的在前）' }),
         el('option', { value: 'amount', textContent: '擔保金額（高到低）' }),
