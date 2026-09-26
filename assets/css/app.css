@@ -860,3 +860,39 @@ body.has-registry-bar .update-bar { bottom: 60px; }
 .place-cand.is-done { opacity: .55; }
 .place-cand .card-actions { margin-top: 6px; }
 .btn.danger-text { color: var(--danger); }
+
+/* ---------- 新公司分頁（經濟部登記清冊，leads.js） ---------- */
+.leads { display: grid; gap: 10px; }
+.leads-sub { margin: 0; font-size: 12.5px; }
+.leads-filters { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
+.leads-filters > summary { cursor: pointer; display: flex; gap: 10px; align-items: baseline; font-size: 15px; }
+.leads-filters[open] > summary { margin-bottom: 8px; }
+.leads-hint { font-size: 12px; margin: 0 0 10px; }
+.leads-group { margin-bottom: 12px; }
+.leads-group > label, .leads-group > .lbl { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.leads-group > label:has(input[type="checkbox"]) { color: var(--text); font-size: 13px; }
+.leads-group input[type="search"], .leads-group input[type="number"], .leads-group select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit;
+}
+.leads-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.leads-row input[type="number"] { width: 100px; }
+.leads-more { justify-content: center; margin-top: 4px; }
+.leads-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.leads-count { font-size: 14px; }
+.leads-count b { font-size: 18px; }
+.leads-loading, .leads-founded { padding: 8px 12px; color: var(--muted); font-size: 13px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.leads-founded { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.leads-card { cursor: default; }
+.leads-card.is-up { border-left-color: var(--ok); }
+.leads-card .card-name a { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--border); }
+.leads-card .card-meta a { color: inherit; }
+.leads-items { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.leads .chip.is-approx small { opacity: .45; }
+.leads .chip small { margin-right: 0; margin-left: 4px; }
+.badge-up { border-color: var(--ok); color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.badge-down { border-color: var(--danger); color: var(--danger); }
+.badge-new { border-color: var(--primary); color: var(--primary); }
+.badge-ind { color: var(--muted); }
+.leads-foot { font-size: 12.5px; line-height: 1.7; margin: 8px 0 24px; }
+/* 手機：五個分頁要塞得下，間距縮小，「新公司」不會被擠到看不見 */
+@media (max-width: 520px) { .tab { padding: 8px 8px; font-size: 14px; } .tabs { padding-left: 8px; gap: 0; } .pill { margin-right: 0; padding: 0 5px; } }
