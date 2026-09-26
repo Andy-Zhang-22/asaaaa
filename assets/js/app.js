@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260926-174';
+  const APP_VERSION = '20260926-175';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -2996,7 +2996,10 @@
     }
   }
 
-  /* ---------------- 今日推薦：每天把值得打的挑出來 ---------------- */
+  /* ---------------- 誰比較值得打：給「每天打得完幾家」排順序用 ---------------- */
+
+  // 「今日推薦」分頁拿掉了（使用者：「今日推薦的頁面請移除，我用不到」），
+  // 打分的規則留著，因為重排每天的名單時同一天的要靠它決定誰排前面。
 
   /*
    * 這一段做的事就是一個企金業務每天早上翻名單在做的事：誰剛增資、誰換了老闆、
@@ -3009,25 +3012,10 @@
    *   - 名單只有幾百到幾千筆，每次開網站重算一次都不到一秒，所以「每天自動」就是
    *     每天打開就重算（allViews 本來就依日期快取）。
    *
-   * 分數只用來排序與擋門檻（30 分以下不列），不存起來；規則要改直接改這裡。
+   * 分數只用來排序，不存起來；規則要改直接改這裡。
    */
-  const PICK_MIN_SCORE = 30;
-  /*
-   * 只列 12 家。
-   *
-   * 原本列 30 家、門檻 30 分放過 770 家裡的 256 家——挑出三分之一等於沒挑，
-   * 使用者還要自己再挑一次。「今天最值得打的」就該是今天打得完的量。
-   */
-  const PICK_LIMIT = 12;
-
-  /*
-   * 卡片上只寫「會變的」理由。
-   *
-   * 「有設備標的」「資本額 500 萬～6,000 萬」「知道 KEYMAN」這種是靜態屬性，名單裡
-   * 一大半都符合，七個標籤並排的結果是把唯一有鑑別力的那一個（剛變更登記 9/22）埋掉。
-   * 靜態的照樣算分、只是不顯示；分數怎麼來的在「N 分」上長按（title）看得到全部。
-   */
-  const PICK_QUIET = false;   // 傳這個給 add() 代表只算分、不上卡片
+  // 靜態屬性（有設備標的、資本額區間、知道 KEYMAN）照樣算分，只是理由裡標成 quiet；以前卡片上不顯示這些
+  const PICK_QUIET = false;
 
   function scorePick(r) {
     const today = todayISO();
@@ -3099,107 +3087,6 @@
     if (!r.phones || !r.phones.length) add(-25, '沒有電話');
     if (r.territory === '範圍外') add(-30, '範圍外，要走協銷');
     return { score, why };
-  }
-
-  let picksKey = '';
-  let picksCache = [];
-  function dailyPicks() {
-    const key = `${dataVersion}|${todayISO()}`;
-    if (picksKey === key) return picksCache;
-    picksCache = allViews()
-      .map((r) => ({ r, pick: scorePick(r) }))
-      .filter((x) => x.pick && x.pick.score >= PICK_MIN_SCORE)
-      .sort((a, b) => b.pick.score - a.pick.score || (a.r.company || '').localeCompare(b.r.company || '', 'zh-Hant'));
-    picksKey = key;
-    return picksCache;
-  }
-
-  function renderPicks() {
-    const host = $('#panePicks');
-    host.textContent = '';
-    const picks = dailyPicks();
-    const head = el('div', { className: 'picks-head' });
-    head.append(el('div', {}, [
-      el('h2', { textContent: `今日推薦（${dateLabel(todayISO())}）` }),
-      el('p', { className: 'muted', textContent: picks.length
-        ? `從名單裡 ${allViews().length} 家挑出今天最值得打的 ${Math.min(PICK_LIMIT, picks.length)} 家。`
-          + '卡片上只寫「會變的」理由（剛增資、剛換負責人、逾期、很久沒聯絡）；'
-          + '產業、資本額、KEYMAN 這種不會變的照樣算分，長按「分」看得到全部。'
-          + '禁止推廣、標了無機會、設了回撥提醒、按過略過的不列。'
-        : (state.records.length ? '今天沒有分數夠高的。匯入清冊、查商工登記、標「有機會」之後再看。' : '還沒有名單。') }),
-    ]));
-    if (picks.length) {
-      /*
-       * 一次排到今天，但要守「一天打得完幾家」的上限。
-       *
-       * 原本固定排十家，完全不看今天已經有幾家——按下去就把剛排好的額度撐爆，
-       * 推薦跟排程又各講各的。現在只補到今天還剩的額度為止。
-       */
-      const today = todayISO();
-      const cap = dailyCap();
-      const load = dayLoad(1);
-      const used = load.counts.get(load.days[0]) || 0;
-      const room = Math.max(0, cap - used);
-      const n = Math.min(PICK_LIMIT, picks.length, room);
-      const bulk = el('button', { className: 'btn btn-primary', type: 'button' });
-      if (!room) {
-        bulk.textContent = `今天已經排滿 ${cap} 家`;
-        bulk.disabled = true;
-        bulk.title = '上限在 ⋯ 選單的「每天打得完幾家」裡改';
-      } else {
-        bulk.textContent = `前 ${n} 家排到今天`;
-        bulk.title = `今天已經有 ${used} 家，上限 ${cap} 家，還能再補 ${room} 家`;
-        bulk.onclick = async () => {
-          const targets = picks.slice(0, n).filter((x) => x.r.nextDate !== today);
-          if (!targets.length) { toast('這幾家本來就排在今天了'); return; }
-          if (!await askConfirm(`把這 ${targets.length} 家的下次聯絡日都設成今天？\n\n`
-            + `今天目前有 ${used} 家，補完會變成 ${used + targets.length} 家（上限 ${cap} 家）。`,
-          { okText: '排到今天' })) return;
-          for (const x of targets) await saveState(x.r.id, { nextDate: today });
-          touch(); render(); scheduleSync();
-          toast(`已排 ${targets.length} 家到今天，到「全部名單」按「今天」就看得到`);
-        };
-      }
-      head.append(bulk);
-    }
-    host.append(head);
-    const list = el('div', { className: 'cards' });
-    picks.slice(0, PICK_LIMIT).forEach(({ r, pick }, i) => {
-      const node = card(r);
-      node.classList.add('is-pick');
-      const shown = pick.why.filter((w) => w.show);
-      const why = el('div', { className: 'pick-why' }, [
-        // 分數怎麼算出來的（含不顯示的那幾項）長按就看得到
-        el('span', { className: 'pick-rank', textContent: `#${i + 1}　${pick.score} 分`,
-          title: pick.why.map((w) => `${w.n > 0 ? '+' : ''}${w.n}　${w.text}`).join('\n') }),
-        ...shown.filter((w) => w.n > 0).map((w) => el('span', { className: 'chip pick-chip', textContent: w.text })),
-        ...shown.filter((w) => w.n < 0).map((w) => el('span', { className: 'chip pick-chip is-minus', textContent: w.text })),
-      ]);
-      const actions = el('div', { className: 'card-actions pick-actions' });
-      const today = el('button', { className: 'btn btn-tiny', type: 'button', textContent: r.nextDate === todayISO() ? '已排今天' : '排今天', disabled: r.nextDate === todayISO() });
-      today.onclick = async (e) => {
-        e.stopPropagation();
-        await saveState(r.id, { nextDate: todayISO() });
-        touch(); render(); scheduleSync();
-        toast(`${r.company} 已排到今天`);
-      };
-      const skip = el('button', { className: 'btn btn-tiny', type: 'button', textContent: '略過 30 天' });
-      skip.onclick = async (e) => {
-        e.stopPropagation();
-        await saveState(r.id, { pickSkipUntil: addDays(todayISO(), 30) });
-        touch(); render(); scheduleSync();
-        toast(`${r.company} 30 天內不再推薦`);
-      };
-      actions.append(today, skip);
-      why.onclick = (e) => e.stopPropagation();
-      node.append(why, actions);
-      list.append(node);
-    });
-    host.append(list);
-    if (picks.length > PICK_LIMIT) {
-      host.append(el('p', { className: 'muted',
-        textContent: `只列前 ${PICK_LIMIT} 家；打完這些明天再看。排程那邊（⋯ 選單「每天打得完幾家」）也是用同一個分數決定誰排前面。` }));
-    }
   }
 
   function bar(label, value, max) {
@@ -3286,16 +3173,12 @@
 
     const tab = state.tab;
     $('#paneList').hidden = tab !== 'all';
-    $('#panePicks').hidden = tab !== 'picks';
     $('#paneStats').hidden = tab !== 'stats';
     $('#paneRules').hidden = tab !== 'rules';
     $('#paneLeads').hidden = tab !== 'leads';
     $('#paneChattel').hidden = tab !== 'chattel';
-    // 分頁上的數字每次都算：便宜（allViews 有快取），而且要讓人一進來就看到今天有幾家
-    // 分頁上的數字要跟真的列出來的一樣：顯示 12 家卻寫 256，那個 256 沒有任何意義
-    $('#countPicks').textContent = String(total ? Math.min(PICK_LIMIT, dailyPicks().length) : 0);
-    // 統計、規則、今日推薦、新公司用不到左側篩選（新公司有自己的一組），讓內容佔滿整個寬度
-    const wide = tab === 'stats' || tab === 'rules' || tab === 'picks' || tab === 'leads' || tab === 'chattel';
+    // 統計、規則、新公司、動產擔保用不到左側篩選（後兩個有自己的一組），讓內容佔滿整個寬度
+    const wide = tab === 'stats' || tab === 'rules' || tab === 'leads' || tab === 'chattel';
     document.querySelector('.layout').classList.toggle('is-wide', wide);
     $('#filters').hidden = wide;
     $('#btnFilters').hidden = wide;
@@ -3303,8 +3186,6 @@
     if (tab === 'stats') {
       // 統計只跟資料有關，資料沒變就不用重畫幾十根長條
       if (statsKey !== String(dataVersion)) { renderStats(); statsKey = String(dataVersion); }
-    } else if (tab === 'picks') {
-      renderPicks();
     } else if (tab === 'rules') {
       buildRules();
     } else if (tab === 'leads') {

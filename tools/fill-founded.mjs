@@ -15,8 +15,10 @@
  * 查到的存進 leads/founded.json（統編 → 民國日期；空字串＝查過了、登記上沒有），
  * 跟著 repo 走。下個月只要查新出現的那幾千家，不用重查四萬多。
  *
- * 時間預算：--minutes 到了就收工，把查到的寫檔、正常結束。Actions 的工作有時限，
- * 與其跑到一半被砍掉什麼都沒有，不如每次都有進展、下次接著查。
+ * 時間預算：--minutes 到了就收工，把查到的寫檔、正常結束。GitHub Actions 一個工作最多 6 小時，
+ * 時間到會被直接砍掉、什麼都存不到，所以留一小時給存檔。使用者說「請跑到完為止」：收工時
+ * 把「還剩幾家、是不是時間到」寫進 $GITHUB_OUTPUT，workflow 看到時間到還有剩，就自己再排
+ * 下一輪接著查，直到沒有剩的為止。
  *
  * 動產擔保名單也用這一支（--source chattel）：leads/chattel/ntpc.csv 的「客戶統編」查成立日期，
  * 填進「成立日期」欄。快取另外放 leads/chattel/founded.json，只讀 leads/founded.json 當種子
@@ -201,6 +203,11 @@ console.log(`\n查完 ${done.toLocaleString()} 家：查到 ${hit.toLocaleString
 
 /* ---------------- 填回 CSV ---------------- */
 
+const remaining = todo.length - done;
+// 給 workflow 看：時間到還有剩，就自己再排一輪
+if (process.env.GITHUB_OUTPUT) {
+  await fs.appendFile(process.env.GITHUB_OUTPUT, `remaining=${remaining}\ntimeout=${/^時間到/.test(stopped) && remaining > 0}\nreason=${stopped.replace(/\n/g, ' ')}\n`);
+}
 if (DRY) { console.log('--dry：不寫檔'); process.exit(0); }
 await fs.writeFile(CACHE, `${JSON.stringify(cache)}\n`, 'utf8');
 
@@ -219,4 +226,4 @@ for (const { file, rows, iTax, iSetup } of parsed) {
 }
 console.log(`填了 ${filled.toLocaleString()} 列的${COLS.fill}，動到 ${touched} 個檔`);
 console.log(`快取 ${CACHE}：${Object.keys(cache).length.toLocaleString()} 個統編`);
-console.log(stopped ? '\n沒查完，下次跑會從沒查到的接著查。' : '\n完成');
+console.log(stopped ? `\n沒查完，還剩 ${remaining.toLocaleString()} 家，下次跑會從沒查到的接著查。` : '\n完成');
