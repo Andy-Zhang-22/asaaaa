@@ -32,6 +32,7 @@ on:
 
 permissions:
   contents: write
+  actions: write   # 時間到還沒查完，自己再排下一輪
 
 jobs:
   fetch:
@@ -68,6 +69,7 @@ jobs:
       # 查到的存在 leads/founded.json，下個月只查新出現的那幾千家。
       # 時間到了就收工、把進度存起來，下次跑接著查——與其被砍掉什麼都沒有，不如每次都有進展。
       - name: 補上成立年
+        id: founded
         continue-on-error: true
         env:
           MINUTES: ${{ inputs.founded_minutes || '300' }}
@@ -84,3 +86,14 @@ jobs:
           git commit -m "新公司清冊與成立年：$(date -u +%Y-%m-%d)"
           git pull --rebase origin "$GITHUB_REF_NAME"
           git push origin "HEAD:$GITHUB_REF_NAME"
+
+      # GitHub 一個工作最多 6 小時。時間到還有剩的，存好之後自己再排一輪接著查，跑到完為止。
+      # （連不上政府網站而收工的不在此列：那種情況重排也只是再撞一次，等下個月的排程。）
+      - name: 還沒查完，再排一輪
+        if: steps.founded.outputs.timeout == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MINUTES: ${{ inputs.founded_minutes || '300' }}
+        run: |
+          echo "還剩 ${{ steps.founded.outputs.remaining }} 家，再排一輪"
+          gh workflow run monthly-leads.yml --ref "$GITHUB_REF_NAME" -f skip_fetch=true -f founded_minutes="$MINUTES"
