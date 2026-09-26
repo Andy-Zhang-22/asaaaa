@@ -41,7 +41,7 @@ test('CSV 的一列變成卡片資料：到期、金主、分公司、客戶那�
     '案件類別': '附條件買賣登記', '登記編號': '112新經動字第004821號',
     '客戶統編': '28451237', '客戶名稱': '禾泰精密工業有限公司', '金主統編': '05072925', '金主名稱': '新鑫股份有限公司',
     '契約起': '2023/10/15', '契約迄': '2026/10/14', '擔保金額': '12000000',
-    '標的物所在地': '新北市新莊區五權一路12號', '標的物件數': '3', '登記核准日': '2023/10/20',
+    '標的物所在地': '新北市新莊區五權一路12號', '標的物件數': '3', '登記核准日': '2023/10/20', '成立日期': '101/10/01',
   }, TODAY);
   assert.equal(r.days, 18);
   assert.equal(r.due, 'm3');
@@ -51,9 +51,22 @@ test('CSV 的一列變成卡片資料：到期、金主、分公司、客戶那�
   assert.equal(r.branch.district, '新北市新莊區');
   assert.equal(r.custIsFin, false);
   assert.equal(r.items, 3);
+  assert.deepEqual(r.founded, { y: 2012, m: 10, d: 1 });
+  assert.equal(r.years, 13, '生日還沒到就少算一年');
   const fin = C.toRecord({ '客戶名稱': '合迪股份有限公司', '金主名稱': '中租迪和股份有限公司', '契約迄': '2027/01/01' }, TODAY);
   assert.equal(fin.custIsFin, true);
   assert.equal(fin.family, 'chailease');
+  assert.equal(fin.founded, null);
+  assert.equal(fin.years, null);
+});
+
+test('成立日期：民國、西元都吃，1911 年 0 月是登記上沒有', () => {
+  assert.deepEqual(C.parseFounded('115/08/18'), { y: 2026, m: 8, d: 18 });
+  assert.deepEqual(C.parseFounded('2006年10月30日'), { y: 2006, m: 10, d: 30 });
+  assert.equal(C.parseFounded('1911年0月0日'), null);
+  assert.equal(C.parseFounded(''), null);
+  assert.equal(C.yearsSince({ y: 2021, m: 9, d: 26 }, TODAY), 5);
+  assert.equal(C.yearsSince({ y: 2021, m: 9, d: 27 }, TODAY), 4);
 });
 
 test('寫進訪談內容的那一行：主站不會把契約日期當成一筆通話', () => {
@@ -69,7 +82,9 @@ test('寫進訪談內容的那一行：主站不會把契約日期當成一筆�
   assert.equal(entries[0].date, null, '沒有日期，才不會變成最近聯絡日');
   assert.equal(w.Normalize.guessOutcome(note), 'new');
   const csv = C.toCsv([r]);
-  assert.match(csv.split('\n')[0], /公司名稱,統編,電話,地址,訪談內容/);
+  assert.match(csv.split('\n')[0], /公司名稱,統編,成立,電話,地址,訪談內容/);
+  const withYear = C.toCsv([C.toRecord({ '客戶名稱': '乙公司', '客戶統編': '12345678', '金主名稱': '新鑫股份有限公司', '契約迄': '2026/12/01', '成立日期': '101/10/01' }, TODAY)]);
+  assert.match(withYear.split('\n')[1], /^乙公司,12345678,2012,/, '成立欄給西元年，主站的成立欄就是這個格式');
   assert.equal(w.Normalize.isGovRegistry(w.Normalize.parseCsv(csv)), false, '不能被當成經濟部登記清冊再問一次條件');
 });
 
