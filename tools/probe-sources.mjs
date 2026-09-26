@@ -14,15 +14,31 @@
 const URL = 'https://data.ntpc.gov.tw/api/datasets/5a6fda8d-c383-42de-a309-67df68d85495/json';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
 
+/*
+ * 一次抓 1000 筆、連抓四頁會被對方斷線（第四頁 UND_ERR_SOCKET：other side closed）。
+ * 改成一頁 500 筆、每頁之間停一下、失敗重試兩次；抓到多少就分析多少，不要整支掛掉。
+ */
+const SIZE = 500;
+const nap = (ms) => new Promise((r) => setTimeout(r, ms));
 const rows = [];
-for (let page = 0; page < 4; page++) {
-  const res = await fetch(`${URL}?page=${page}&size=1000`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(90000) });
-  const text = await res.text();
-  if (!res.ok || !text.trim().startsWith('[')) { console.log(`page ${page}：HTTP ${res.status}，回的不是陣列，停`); break; }
-  const batch = JSON.parse(text);
+for (let page = 0; page < 8; page++) {
+  let batch = null;
+  for (let attempt = 1; attempt <= 3 && !batch; attempt++) {
+    try {
+      const res = await fetch(`${URL}?page=${page}&size=${SIZE}`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(90000) });
+      const text = await res.text();
+      if (!res.ok || !text.trim().startsWith('[')) { console.log(`page ${page}：HTTP ${res.status}，回的不是陣列`); break; }
+      batch = JSON.parse(text);
+    } catch (e) {
+      console.log(`page ${page} 第 ${attempt} 次失敗：${e.message}`);
+      await nap(2000 * attempt);
+    }
+  }
+  if (!batch) { console.log(`page ${page} 放棄，就用已經抓到的 ${rows.length} 筆分析`); break; }
   rows.push(...batch);
   console.log(`page ${page}：${batch.length} 筆（累計 ${rows.length}）`);
-  if (batch.length < 1000) break;
+  if (batch.length < SIZE) break;
+  await nap(800);
 }
 console.log(`\n共抓到 ${rows.length} 筆`);
 
