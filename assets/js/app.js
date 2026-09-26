@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260926-171';
+  const APP_VERSION = '20260926-172';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -3290,11 +3290,12 @@
     $('#paneStats').hidden = tab !== 'stats';
     $('#paneRules').hidden = tab !== 'rules';
     $('#paneLeads').hidden = tab !== 'leads';
+    $('#paneChattel').hidden = tab !== 'chattel';
     // 分頁上的數字每次都算：便宜（allViews 有快取），而且要讓人一進來就看到今天有幾家
     // 分頁上的數字要跟真的列出來的一樣：顯示 12 家卻寫 256，那個 256 沒有任何意義
     $('#countPicks').textContent = String(total ? Math.min(PICK_LIMIT, dailyPicks().length) : 0);
     // 統計、規則、今日推薦、新公司用不到左側篩選（新公司有自己的一組），讓內容佔滿整個寬度
-    const wide = tab === 'stats' || tab === 'rules' || tab === 'picks' || tab === 'leads';
+    const wide = tab === 'stats' || tab === 'rules' || tab === 'picks' || tab === 'leads' || tab === 'chattel';
     document.querySelector('.layout').classList.toggle('is-wide', wide);
     $('#filters').hidden = wide;
     $('#btnFilters').hidden = wide;
@@ -3309,6 +3310,9 @@
     } else if (tab === 'leads') {
       // 新公司分頁自己管自己（leads.js）：第一次切過去才抓清冊
       if (window.Leads) window.Leads.show();
+    } else if (tab === 'chattel') {
+      // 快到期分頁自己管自己（chattel.js）：第一次切過去才抓清冊，之後每次切過來重比對名單
+      if (window.Chattel) window.Chattel.show();
     } else { renderList(); renderRemindBar(); }
   }
 
@@ -6498,6 +6502,12 @@ export default {
      * 匯入流程（認出是登記清冊 → 問條件 → 略過重複）。只開這一個口，不另寫匯入邏輯。
      */
     window.importLeadsFile = (file) => { $('#importer').hidden = false; return importFiles([file]); };
+    /*
+     * 快到期分頁（chattel.js）要知道哪些公司已經在名單上、以及點一下打開那一筆。
+     * 只給它讀 allViews（有快取）與 openDetail，名單的邏輯還是全在這裡。
+     */
+    window.customerViews = () => allViews();
+    window.openCustomer = (id) => openDetail(id);
     $('#btnPick').onclick = () => $('#filePick').click();
     $('#filePick').onchange = (e) => {
       const files = [...e.target.files];
@@ -6549,6 +6559,7 @@ export default {
       }
       if (act === 'new-customer') openNewCustomer();
       if (act === 'leads') { switchTab('leads'); return; }
+      if (act === 'chattel') { switchTab('chattel'); return; }
       if (act === 'registry') { openRegistryUpdate(); return; }
       if (act === 'phone-hunt') { await openPhoneHunt(); return; }
       if (act === 'check-update') { await checkForUpdate(true); return; }
@@ -6733,9 +6744,10 @@ export default {
     });
     if (!state.records.length) $('#importer').hidden = false;
     // 舊的獨立網站網址（leads/）轉過來會帶 ?tab=leads：直接開到新公司分頁
-    if (new URLSearchParams(location.search).get('tab') === 'leads' || location.hash === '#leads') {
+    const want = new URLSearchParams(location.search).get('tab') || location.hash.replace(/^#/, '');
+    if (want === 'leads' || want === 'chattel') {
       $('#importer').hidden = true;
-      switchTab('leads');
+      switchTab(want);
     }
   }
 
