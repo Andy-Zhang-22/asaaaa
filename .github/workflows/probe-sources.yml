@@ -1,0 +1,22 @@
+# 探路：新北市動保清冊涵蓋哪幾個月。一次性的，看完就連同腳本一起刪掉。不碰任何客戶名單。
+name: 探路：公開名單來源
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/telemarketing-website-hf2uwj]
+    paths: ['tools/probe-sources.mjs', '.github/workflows/probe-sources.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: 探路
+        run: node tools/probe-sources.mjs 2>&1 | tee probe.txt
+      - name: 把結果印在執行紀錄上
+        if: always()
+        run: |
+          { echo '```'; cat probe.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
