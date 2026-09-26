@@ -9,7 +9,7 @@
    * 靜態主機會把 js/css 快取起來，沒有版本號的話使用者更新後還是拿到舊檔案。
    * index.html 的每個 assets 網址都帶 ?v=，改版時一起換掉這個字串即可。
    */
-  const APP_VERSION = '20260926-172';
+  const APP_VERSION = '20260926-173';
   const TAX_LABEL = { yes: '有統編', no: '無統編' };
   const PHONE_LABEL = { yes: '有電話', no: '無電話' };
   // 變更登記：商工登記查核時發現的異動。一家公司可以同時有好幾種（增資＋負責人異動）
@@ -3311,7 +3311,7 @@
       // 新公司分頁自己管自己（leads.js）：第一次切過去才抓清冊
       if (window.Leads) window.Leads.show();
     } else if (tab === 'chattel') {
-      // 快到期分頁自己管自己（chattel.js）：第一次切過去才抓清冊，之後每次切過來重比對名單
+      // 動產擔保名單分頁自己管自己（chattel.js）：第一次切過去才抓清冊，之後每次切過來重比對名單
       if (window.Chattel) window.Chattel.show();
     } else { renderList(); renderRemindBar(); }
   }
@@ -6503,7 +6503,7 @@ export default {
      */
     window.importLeadsFile = (file) => { $('#importer').hidden = false; return importFiles([file]); };
     /*
-     * 快到期分頁（chattel.js）要知道哪些公司已經在名單上、以及點一下打開那一筆。
+     * 動產擔保名單分頁（chattel.js）要知道哪些公司已經在名單上、以及點一下打開那一筆。
      * 只給它讀 allViews（有快取）與 openDetail，名單的邏輯還是全在這裡。
      */
     window.customerViews = () => allViews();

@@ -1,5 +1,5 @@
 /*
- * 「快到期」分頁：新北市動產擔保登記清冊，找同業契約快到期的客戶。
+ * 「動產擔保名單」分頁：新北市動產擔保登記清冊，找同業契約快到期的客戶。
  *
  * 動產抵押、附條件買賣都要向新北市經發局登記，清冊是公開的，上面有債務人與債權人的
  * 統編、契約起迄、擔保金額、標的物。同業（新鑫、和潤、合迪、日盛…）的客戶契約快到期，
@@ -311,7 +311,7 @@
     return `﻿${lines.join('\n')}\n`;
   }
   const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-  const csvName = (n) => `動保快到期-${todayIso()}-${n}家.csv`;
+  const csvName = (n) => `動產擔保名單-${todayIso()}-${n}家.csv`;
 
   async function addToList(list) {
     if (typeof global.importLeadsFile !== 'function') { toast('主站還沒準備好匯入，請重新整理再試'); return; }
@@ -436,12 +436,12 @@
     rerender();
   }
 
-  /** 主站切到「快到期」分頁時叫這個；第一次才真的去抓資料，之後每次切過來重畫（名單可能變了）。 */
+  /** 主站切到「動產擔保名單」分頁時叫這個；第一次才真的去抓資料，之後每次切過來重畫（名單可能變了）。 */
   function show() {
     if (!root) root = document.getElementById('paneChattel');
     if (!root) return;
     if (started) { render(); return; }
-    start().catch((err) => { console.error(err); toast(`快到期名單載入失敗：${err.message}`); });
+    start().catch((err) => { console.error(err); toast(`動產擔保名單載入失敗：${err.message}`); });
   }
 
   global.Chattel = { show, parseYmd, daysLeft, dueOf, lenderFamily, lenderLabel, typeShort, noteFor, toRecord, toCsv, LENDER_RE };
