@@ -28,7 +28,9 @@
     ['other', '其他（含設備商）', null],
   ];
   const LENDER_RE = /租賃|銀行|商銀|融資|資融|金融|信託|保險|資產管理|信用合作社|信合社|農會|漁會|票券|中租|和潤|新鑫|合迪|裕融|日盛|租賃業/;
-  const CSV_HEAD = ['公司名稱', '統編', '電話', '地址', '訪談內容'];
+  const CSV_HEAD = ['公司名稱', '統編', '成立', '電話', '地址', '訪談內容'];
+  const AGE = [['lt5', '未滿 5 年'], ['ge5', '5 年以上'], ['unknown', '還不知道']];
+  const AGE_YEARS = 5;
 
   let root = null;
   const $ = (sel) => root.querySelector(sel);
@@ -55,6 +57,27 @@
     return Number.isNaN(d.getTime()) ? null : d;
   }
   const dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  /** 民國 115/08/18、西元 2026/8/18 → {y,m,d}；空白與「1911年0月0日」→ null。 */
+  function parseFounded(s) {
+    const m = String(s || '').match(/^(\d{2,4})[/年.-](\d{1,2})[/月.-](\d{1,2})/);
+    if (!m) return null;
+    let y = +m[1];
+    const mo = +m[2];
+    const d = +m[3];
+    if (y < 1000) y += 1911;
+    if (y <= 1911 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return { y, m: mo, d };
+  }
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const fmtRoc = (dt) => `${dt.y - 1911}/${pad2(dt.m)}/${pad2(dt.d)}`;
+  /** 滿幾年：生日還沒到就少算一年，跟算年齡一樣。 */
+  function yearsSince(dt, today) {
+    const t = today || new Date();
+    let n = t.getFullYear() - dt.y;
+    if (t.getMonth() + 1 < dt.m || (t.getMonth() + 1 === dt.m && t.getDate() < dt.d)) n -= 1;
+    return Math.max(0, n);
+  }
+  const ageOf = (r) => (!r.founded ? 'unknown' : r.years < AGE_YEARS ? 'lt5' : 'ge5');
   /** 契約迄日離今天幾天：正＝還有幾天、0＝今天、負＝過期幾天；沒日期＝null。 */
   function daysLeft(end, today) {
     const e = parseYmd(end);
@@ -127,7 +150,9 @@
       start: o['契約起'] || '', end: o['契約迄'] || '',
       amount: Number(String(o['擔保金額'] || '').replace(/\D/g, '')) || 0,
       addr: o['標的物所在地'] || '', items: Number(o['標的物件數'] || o['標的物'] || 0) || 0, approved: o['登記核准日'] || '',
+      founded: parseFounded(o['成立日期']),
     };
+    r.years = r.founded ? yearsSince(r.founded, today) : null;
     r.days = daysLeft(r.end, today);
     r.due = dueOf(r.days);
     r.family = lenderFamily(r.lender.name);
@@ -146,7 +171,7 @@
   let started = false;
   let ready = false;
   let showHidden = false;
-  const f = { due: 'm6', lenders: new Set(), types: new Set(), branches: new Set(), districts: new Set(), mine: new Set(), q: '' };
+  const f = { due: 'm6', lenders: new Set(), types: new Set(), branches: new Set(), districts: new Set(), mine: new Set(), ages: new Set(), q: '' };
   let hidden = new Set();
   try { hidden = new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]')); } catch (e) { hidden = new Set(); }
   const saveHidden = () => { try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden])); } catch (e) { /* 無痕 */ } };
@@ -188,6 +213,7 @@
       && (except === 'branches' || !f.branches.size || f.branches.has(r.branch.key))
       && (except === 'districts' || !f.districts.size || f.districts.has(r.branch.district))
       && (except === 'mine' || !f.mine.size || f.mine.has(mine ? (declined(mine) ? 'declined' : 'in') : 'out'))
+      && (except === 'ages' || !f.ages.size || f.ages.has(ageOf(r)))
       && r.amount >= c.min && r.amount <= c.max
       && !(c.hideFin && r.custIsFin)
       && (showHidden || !hidden.has(r.key))
@@ -234,6 +260,7 @@
         el('span', { textContent: `📅 契約 ${r.start || '？'} → ${r.end || '？'}` }),
         r.items ? el('span', { textContent: `📦 標的 ${r.items} 件`, title: '清冊只有件數，沒有標的物內容' }) : '',
         r.addr ? el('span', {}, ['📍 ', el('a', { href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.addr)}`, target: '_blank', rel: 'noopener', textContent: r.addr })]) : '',
+        r.founded ? el('span', { textContent: `🎂 成立 ${fmtRoc(r.founded)}（${r.years} 年）`, title: '查商工登記來的' }) : '',
         r.no ? el('span', { textContent: `🧾 登記 ${r.no}` }) : '',
         r.cust.id ? el('span', { textContent: `#${r.cust.id}` }) : '',
       ]),
@@ -264,6 +291,7 @@
     chips($('#chattel-fLender'), LENDERS.map(([k, label]) => [k, k === 'chailease' ? '中租（自家，預設藏起來）' : label, facet('lenders', (r) => r.family === k)]), f.lenders);
     const types = [...new Set(rows.map((r) => r.type))].sort();
     chips($('#chattel-fType'), types.map((t) => [t, typeShort(t), facet('types', (r) => r.type === t)]), f.types);
+    chips($('#chattel-fAge'), AGE.map(([k, label]) => [k, label, facet('ages', (r) => ageOf(r) === k)]), f.ages);
     chips($('#chattel-fMine'), [['out', '名單裡沒有'], ['in', '已在我的名單裡'], ['declined', '名單上禁止推廣']].map(([k, label]) => [k, label,
       facet('mine', (r) => { const m = mineOf(r, c.cm); return k === 'out' ? !m : k === 'in' ? (m && !declined(m)) : (m && declined(m)); })]), f.mine);
     // 分公司與區：籤是從資料長出來的，分公司在前、共同區在後、劃分表外最後
@@ -287,8 +315,9 @@
     host.textContent = '';
     current.slice(0, limit).forEach((r) => host.append(card(r, c)));
     const soon = current.filter((r) => r.days != null && r.days >= 0 && r.days <= 92).length;
+    const unknown = current.filter((r) => !r.founded).length;
     const inList = current.filter((r) => mineOf(r, c.cm)).length;
-    $('#chattel-count').innerHTML = `符合 <b>${current.length.toLocaleString()}</b> 家<span class="muted">　／ ${soon ? `3 個月內到期 ${soon} 家` : ''}${inList ? `${soon ? '、' : ''}已在名單 ${inList} 家` : ''}${!soon && !inList ? `清冊未註銷共 ${rows.length.toLocaleString()} 筆` : ''}</span>`;
+    $('#chattel-count').innerHTML = `符合 <b>${current.length.toLocaleString()}</b> 家<span class="muted">　／ ${soon ? `3 個月內到期 ${soon} 家` : ''}${inList ? `${soon ? '、' : ''}已在名單 ${inList} 家` : ''}${!soon && !inList ? `清冊未註銷共 ${rows.length.toLocaleString()} 筆` : ''}${unknown ? `　·　${unknown} 家還沒查到成立年` : ''}</span>`;
     const hid = rows.filter((r) => hidden.has(r.key)).length;
     const hb = $('#chattel-hidden');
     hb.hidden = !hid;
@@ -307,7 +336,7 @@
 
   /** 標準欄位的 CSV：主站匯入認得「公司名稱、統編、地址、訪談內容」，不會當成登記清冊再問一次條件。 */
   function toCsv(list) {
-    const lines = [CSV_HEAD, ...list.map((r) => [r.cust.name, r.cust.id, '', r.addr, noteFor(r)])].map((row) => row.map(csvCell).join(','));
+    const lines = [CSV_HEAD, ...list.map((r) => [r.cust.name, r.cust.id, r.founded ? String(r.founded.y) : '', '', r.addr, noteFor(r)])].map((row) => row.map(csvCell).join(','));
     return `﻿${lines.join('\n')}\n`;
   }
   const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -335,6 +364,7 @@
       group('案件類別', el('div', { className: 'chips', id: 'chattel-fType' })),
       group('歸屬分公司（依標的物所在地，同「規則」的劃分表）', el('div', { className: 'chips', id: 'chattel-fBranch' })),
       group('標的物所在地', el('div', { className: 'chips', id: 'chattel-fDistrict' })),
+      group('成立年數（查商工登記來的，Actions 每月補）', el('div', { className: 'chips', id: 'chattel-fAge' })),
       group('跟我的名單比對', el('div', { className: 'chips', id: 'chattel-fMine' })),
       group('擔保債權金額（萬元）', el('div', { className: 'leads-row' }, [
         el('input', { id: 'chattel-amtMin', type: 'number', min: '0', step: '100', placeholder: '下限', value: '100' }), '～',
@@ -369,7 +399,7 @@
         el('span', {}, [el('i', { className: 'swatch is-overdue' }), ' 30 天內到期']),
         el('span', {}, [el('i', { className: 'swatch is-due' }), ' 90 天內到期']),
         el('span', {}, [el('i', { className: 'swatch is-mine' }), ' 已在你的名單裡'])]),
-      el('p', { className: 'muted leads-foot', textContent: '資料來源：新北市政府經濟發展局「動產擔保登記清冊」（每月更新，是從 1995 年累積到現在的全部案件），GitHub Actions 每月 10 日自動抓、只留未註銷的。動產抵押的客戶在債務人欄、附條件買賣的客戶在債權人欄，抓的時候已經翻正，畫面上一律寫「金主」。「已在名單」是在這台瀏覽器裡比對的，名單不會上傳；「這家不用了」也只記在這台裝置。' }),
+      el('p', { className: 'muted leads-foot', textContent: '資料來源：新北市政府經濟發展局「動產擔保登記清冊」（每月更新，是從 1995 年累積到現在的全部案件），GitHub Actions 每月 10 日自動抓、只留未註銷的。動產抵押的客戶在債務人欄、附條件買賣的客戶在債權人欄，抓的時候已經翻正，畫面上一律寫「金主」。成立年是 Actions 拿統編查商工登記補的（快到期的先查，每月接著查），清冊本身沒有。「已在名單」是在這台瀏覽器裡比對的，名單不會上傳；「這家不用了」也只記在這台裝置。' }),
     );
   }
 
@@ -415,7 +445,7 @@
     $('#chattel-more').onclick = () => { limit += PAGE; render(); };
     $('#chattel-hidden').onclick = () => { showHidden = !showHidden; rerender(); };
     $('#chattel-reset').onclick = () => {
-      f.due = 'm6'; f.lenders.clear(); f.types.clear(); f.branches.clear(); f.districts.clear(); f.mine.clear(); f.q = '';
+      f.due = 'm6'; f.lenders.clear(); f.types.clear(); f.branches.clear(); f.districts.clear(); f.mine.clear(); f.ages.clear(); f.q = '';
       $('#chattel-q').value = ''; $('#chattel-amtMin').value = '100'; $('#chattel-amtMax').value = ''; $('#chattel-hideFin').checked = true; $('#chattel-sort').value = 'end';
       showHidden = false;
       rerender();
@@ -444,5 +474,5 @@
     start().catch((err) => { console.error(err); toast(`動產擔保名單載入失敗：${err.message}`); });
   }
 
-  global.Chattel = { show, parseYmd, daysLeft, dueOf, lenderFamily, lenderLabel, typeShort, noteFor, toRecord, toCsv, LENDER_RE };
+  global.Chattel = { show, parseYmd, daysLeft, dueOf, lenderFamily, lenderLabel, typeShort, noteFor, toRecord, toCsv, parseFounded, yearsSince, LENDER_RE };
 })(window);

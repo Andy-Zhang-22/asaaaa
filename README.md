@@ -2431,4 +2431,17 @@ https://data.ntpc.gov.tw/datasets/5a6fda8d-c383-42de-a309-67df68d85495
 主站只多開兩個口給它：`window.customerViews()`（allViews，有快取）與 `window.openCustomer(id)`；
 名單的邏輯還是全在 app.js。網址 `?tab=chattel` 直接開這一頁。
 
-測試：`tests/chattel.test.js`（日期、金主歸類、訪談內容那一行不會變成通話、腳本的角色判定）。
+**成立年**（使用者：「幫我把這些名單像成立年一樣，尋找這些公司的成立年」）：清冊上沒有設立日期，
+`tools/fill-founded.mjs --source chattel` 拿「客戶統編」查商工登記，填進 `ntpc.csv` 的「成立日期」欄
+（民國），`monthly-chattel.yml` 抓完清冊接著跑（也可以 `skip_fetch` 只補成立年）。
+跟新公司清冊那支是同一支腳本，差在：
+
+- 快取另外放 `leads/chattel/founded.json`，只讀 `leads/founded.json` 當種子、不寫回——兩支 workflow
+  各自 commit 自己的檔，才不會在 main 上撞
+- **照契約迄日排，快到期的先查**，已過期的排最後：時間到了沒查完，先有的也是最要緊的那幾家
+- 10,717 列、4,937 個不重複統編
+
+分頁上：卡片多一行「🎂 成立 101/10/01（13 年）」，篩選多一組「成立年數」（未滿 5 年／5 年以上／
+還不知道），數量那一行寫還有幾家沒查到；加入客戶名單時「成立」欄一起帶過去（西元年）。
+
+測試：`tests/chattel.test.js`（日期、金主歸類、成立年、訪談內容那一行不會變成通話、腳本的角色判定）。

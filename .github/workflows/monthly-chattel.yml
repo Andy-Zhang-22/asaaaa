@@ -12,6 +12,16 @@ on:
   schedule:
     - cron: '0 2 10 * *'
   workflow_dispatch:
+    inputs:
+      skip_fetch:
+        description: '只補成立年，不抓清冊'
+        type: boolean
+        required: false
+        default: false
+      founded_minutes:
+        description: '查成立年最多跑幾分鐘（查不完下次接著查）'
+        required: false
+        default: '300'
 
 permissions:
   contents: write
@@ -27,9 +37,21 @@ jobs:
           node-version: '22'
 
       - name: 抓清冊並整理成 CSV
+        if: inputs.skip_fetch != true
         run: |
           node tools/fetch-chattel.mjs | tee fetch-chattel.log
           printf '```\n' >> "$GITHUB_STEP_SUMMARY"; cat fetch-chattel.log >> "$GITHUB_STEP_SUMMARY"; printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+
+      # 清冊上沒有成立日期。這一步拿客戶統編查商工登記填進「成立日期」欄，快到期的先查；
+      # 查到的存在 leads/chattel/founded.json（另外一份快取，跟新公司清冊的分開 commit 才不會撞），
+      # 時間到就收工存檔，下次接著查。
+      - name: 補上成立年
+        continue-on-error: true
+        env:
+          MINUTES: ${{ inputs.founded_minutes || '300' }}
+        run: |
+          node tools/fill-founded.mjs --source chattel --minutes "$MINUTES" --concurrency 6 | tee fill-founded.log
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"; cat fill-founded.log >> "$GITHUB_STEP_SUMMARY"; printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
 
       - name: 存回 repo
         run: |
@@ -37,6 +59,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A leads/chattel
           if git diff --cached --quiet; then echo "清冊沒有變動"; exit 0; fi
-          git commit -m "動保清冊：$(date -u +%Y-%m-%d)"
+          git commit -m "動保清冊與成立年：$(date -u +%Y-%m-%d)"
           git pull --rebase origin "$GITHUB_REF_NAME"
           git push origin "HEAD:$GITHUB_REF_NAME"

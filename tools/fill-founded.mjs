@@ -18,8 +18,13 @@
  * 時間預算：--minutes 到了就收工，把查到的寫檔、正常結束。Actions 的工作有時限，
  * 與其跑到一半被砍掉什麼都沒有，不如每次都有進展、下次接著查。
  *
- * 用法：node tools/fill-founded.mjs [--out leads] [--minutes 240] [--concurrency 6]
- *                                   [--limit N] [--dry]
+ * 動產擔保名單也用這一支（--source chattel）：leads/chattel/ntpc.csv 的「客戶統編」查成立日期，
+ * 填進「成立日期」欄。快取另外放 leads/chattel/founded.json，只讀 leads/founded.json 當種子
+ * 不寫回去——兩支 workflow 各自 commit 自己的檔，才不會在 main 上互相衝突。
+ * 查的順序照契約迄日，快到期的先查：時間到了沒查完，先有的也是最要緊的那幾家。
+ *
+ * 用法：node tools/fill-founded.mjs [--source leads|chattel] [--out leads] [--minutes 240]
+ *                                   [--concurrency 6] [--limit N] [--dry]
  */
 import { createRequire } from 'node:module';
 import fs from 'node:fs/promises';
@@ -31,11 +36,14 @@ const { loadModules } = require('../tests/load.js');
 const args = process.argv.slice(2);
 const opt = (n, d) => { const i = args.indexOf(`--${n}`); return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : d; };
 const OUT = opt('out', 'leads');
+const SOURCE = opt('source', 'leads');
 const MINUTES = Number(opt('minutes', '240')) || 240;
 const CONC = Math.max(1, Math.min(12, Number(opt('concurrency', '6')) || 6));
 const LIMIT = Number(opt('limit', '0')) || 0;
 const DRY = args.includes('--dry');
-const CACHE = path.join(OUT, 'founded.json');
+const CHATTEL = SOURCE === 'chattel';
+const CACHE = CHATTEL ? path.join(OUT, 'chattel', 'founded.json') : path.join(OUT, 'founded.json');
+const SEED = CHATTEL ? path.join(OUT, 'founded.json') : '';   // 只讀、不寫回
 const DEADLINE = Date.now() + MINUTES * 60000;
 
 // 政府網站對沒有瀏覽器 UA 的請求有時直接回空白，跟每週健檢用同一個
@@ -84,26 +92,46 @@ function toRoc(raw) {
 /* ---------------- 先看要查哪些 ---------------- */
 
 let cache = {};
-try { cache = JSON.parse(await fs.readFile(CACHE, 'utf8')) || {}; } catch (e) { console.log('還沒有 founded.json，這次從頭建'); }
+try { cache = JSON.parse(await fs.readFile(CACHE, 'utf8')) || {}; } catch (e) { console.log(`還沒有 ${CACHE}，這次從頭建`); }
+let seeded = 0;
+if (SEED) {
+  try {
+    const seed = JSON.parse(await fs.readFile(SEED, 'utf8')) || {};
+    Object.entries(seed).forEach(([k, v]) => { if (cache[k] === undefined) { cache[k] = v; seeded += 1; } });
+  } catch (e) { /* 沒有種子就算了 */ }
+  if (seeded) console.log(`從 ${SEED} 先拿到 ${seeded.toLocaleString()} 個查過的統編`);
+}
 
+// 每種來源：哪些檔、統編／名稱在哪一欄、填哪一欄、查的先後
+const COLS = CHATTEL
+  ? { tax: '客戶統編', name: '客戶名稱', fill: '成立日期', order: '契約迄', label: '動產擔保名單' }
+  : { tax: '統一編號', name: '公司名稱', fill: '核准設立日期', order: '', label: '變更清冊' };
 const files = [];
-for (const period of (await fs.readdir(OUT, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name).sort()) {
-  for (const name of (await fs.readdir(path.join(OUT, period))).filter((f) => f.endsWith('-change.csv'))) {
-    files.push(path.join(OUT, period, name));
+if (CHATTEL) {
+  files.push(path.join(OUT, 'chattel', 'ntpc.csv'));
+} else {
+  for (const period of (await fs.readdir(OUT, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name).sort()) {
+    for (const name of (await fs.readdir(path.join(OUT, period))).filter((f) => f.endsWith('-change.csv'))) {
+      files.push(path.join(OUT, period, name));
+    }
   }
 }
-console.log(`變更清冊 ${files.length} 個檔`);
+console.log(`${COLS.label} ${files.length} 個檔`);
 
-const need = new Map();   // 統編 → 公司名（統編查不齊時用名稱補）
+const need = new Map();   // 統編 → { name, order }（統編查不齊時用名稱補；order 決定先查誰）
 let rowsTotal = 0;
 const parsed = [];
 for (const file of files) {
-  const rows = parseCsv(await fs.readFile(file, 'utf8'));
+  let rows;
+  try { rows = parseCsv(await fs.readFile(file, 'utf8')); } catch (e) { console.log(`跳過 ${file}：${e.message}`); continue; }
   const head = rows[0] || [];
-  const iTax = head.indexOf('統一編號');
-  const iName = head.indexOf('公司名稱');
-  const iSetup = head.indexOf('核准設立日期');
-  if (iTax < 0 || iSetup < 0) { console.log(`跳過 ${file}：欄位對不上`); continue; }
+  const iTax = head.indexOf(COLS.tax);
+  const iName = head.indexOf(COLS.name);
+  let iSetup = head.indexOf(COLS.fill);
+  const iOrder = COLS.order ? head.indexOf(COLS.order) : -1;
+  if (iTax < 0) { console.log(`跳過 ${file}：欄位對不上`); continue; }
+  // 動產擔保名單的「成立日期」是這支加上去的欄，清冊剛抓下來時沒有
+  if (iSetup < 0) { head.push(COLS.fill); iSetup = head.length - 1; rows.forEach((r, i) => { if (i) r[iSetup] = ''; }); }
   parsed.push({ file, rows, iTax, iName, iSetup });
   for (let i = 1; i < rows.length; i++) {
     rowsTotal += 1;
@@ -111,15 +139,22 @@ for (const file of files) {
     if ((rows[i][iSetup] || '').trim()) continue;
     if (!/^\d{8}$/.test(tax)) continue;
     if (cache[tax] !== undefined) continue;
-    if (!need.has(tax)) need.set(tax, (rows[i][iName] || '').trim());
+    const order = iOrder >= 0 ? (rows[i][iOrder] || '9999') : '';
+    const prev = need.get(tax);
+    if (!prev) need.set(tax, { name: (rows[i][iName] || '').trim(), order });
+    else if (order < prev.order) prev.order = order;
   }
 }
 const known = Object.values(cache).filter(Boolean).length;
-console.log(`變更清冊共 ${rowsTotal.toLocaleString()} 列；快取已有 ${Object.keys(cache).length.toLocaleString()} 個統編（查到日期的 ${known.toLocaleString()}）；這次要查 ${need.size.toLocaleString()} 個`);
+console.log(`${COLS.label}共 ${rowsTotal.toLocaleString()} 列；快取已有 ${Object.keys(cache).length.toLocaleString()} 個統編（查到日期的 ${known.toLocaleString()}）；這次要查 ${need.size.toLocaleString()} 個`);
 
 /* ---------------- 查 ---------------- */
 
-const todo = [...need.entries()].slice(0, LIMIT || undefined);
+// 動產擔保名單照契約迄日排：已過期的排最後，快到期的先查
+const today = new Date().toISOString().slice(0, 10).replace(/-/g, '/');
+const rank = (o) => (!o ? '' : o < today ? `z${o}` : o);
+const todo = [...need.entries()].sort((a, b) => rank(a[1].order).localeCompare(rank(b[1].order))).map(([tax, v]) => [tax, v.name]).slice(0, LIMIT || undefined);
+if (DRY) console.log(`先查這幾家：${todo.slice(0, 5).map(([t]) => `${t}（${need.get(t).order || '－'}）`).join('、')}`);
 let done = 0; let hit = 0; let miss = 0; let fail = 0; let stopped = '';
 const started = Date.now();
 if (!DRY && todo.length) {
@@ -182,6 +217,6 @@ for (const { file, rows, iTax, iSetup } of parsed) {
   }
   if (changed) { await fs.writeFile(file, toCsv(rows), 'utf8'); touched += 1; }
 }
-console.log(`填了 ${filled.toLocaleString()} 列的核准設立日期，動到 ${touched} 個檔`);
+console.log(`填了 ${filled.toLocaleString()} 列的${COLS.fill}，動到 ${touched} 個檔`);
 console.log(`快取 ${CACHE}：${Object.keys(cache).length.toLocaleString()} 個統編`);
 console.log(stopped ? '\n沒查完，下次跑會從沒查到的接著查。' : '\n完成');

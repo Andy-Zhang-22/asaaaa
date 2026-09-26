@@ -33,7 +33,8 @@ const API = `https://data.ntpc.gov.tw/api/datasets/${ID}/json`;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
 const SIZE = 500;
 const NAP_MS = 700;
-const HEAD = ['案件類別', '登記編號', '客戶統編', '客戶名稱', '金主統編', '金主名稱', '契約起', '契約迄', '擔保金額', '標的物所在地', '標的物件數', '登記核准日', '註銷日'];
+const HEAD = ['案件類別', '登記編號', '客戶統編', '客戶名稱', '金主統編', '金主名稱', '契約起', '契約迄', '擔保金額', '標的物所在地', '標的物件數', '登記核准日', '註銷日', '成立日期'];
+// 成立日期是抓完之後由 tools/fill-founded.mjs --source chattel 查商工登記填的（民國），這裡留空
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => { const i = args.indexOf(`--${name}`); return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : dflt; };
@@ -90,7 +91,7 @@ export function toRow(r) {
 }
 
 const csvCell = (v) => { const s = String(v == null ? '' : v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-const toCsv = (rows) => `﻿${[HEAD, ...rows.map((x) => [x.type, x.no, x.cust.id, x.cust.name, x.lender.id, x.lender.name, x.start, x.end, x.amount, x.addr, x.items, x.approved, x.cancelled])]
+const toCsv = (rows) => `﻿${[HEAD, ...rows.map((x) => [x.type, x.no, x.cust.id, x.cust.name, x.lender.id, x.lender.name, x.start, x.end, x.amount, x.addr, x.items, x.approved, x.cancelled, ''])]
   .map((row) => row.map(csvCell).join(',')).join('\n')}\n`;
 
 async function fetchAll() {
