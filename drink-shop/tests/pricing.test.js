@@ -1,19 +1,22 @@
 'use strict';
 /*
- * 飲料店系統（drink-shop/）的計價測試：菜單資料合法、單價、加料、買5送1。
- * 這些模組跟主站一樣是 (function (global) {...})(window) 的寫法，這裡用同樣的方式把它們載進來。
+ * 計價測試：菜單資料合法、單價、加料、買5送1。
+ *
+ * js/ 底下的模組是 (function (global) {...})(window) 的寫法，把 API 掛在 window 上，
+ * 這裡把整支檔案包成函式、餵一個假的 window 進去，就能在 Node 跑。
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { ROOT } = require('./load');
+
+const ROOT = path.resolve(__dirname, '..');
 
 function load() {
   const window = {};
   window.window = window;
   for (const name of ['menu', 'pricing']) {
-    const file = path.join(ROOT, 'drink-shop', 'js', `${name}.js`);
+    const file = path.join(ROOT, 'js', `${name}.js`);
     // eslint-disable-next-line no-new-func
     new Function('window', `${fs.readFileSync(file, 'utf8')}\n//# sourceURL=${file}`)(window);
   }

@@ -3,8 +3,19 @@
 飲料店用的點餐／結帳／報表工具。純前端網頁，不用安裝、不用伺服器，
 手機、平板、電腦的瀏覽器開網址就能用。**所有資料只存在該裝置的瀏覽器裡**。
 
-網址：`https://andy-zhang-22.github.io/asaaaa/drink-shop/`（GitHub Pages 開啟後）。
-本機試用：在 repo 根目錄 `python3 -m http.server 8000`，開 `http://localhost:8000/drink-shop/`。
+這是一個獨立專案：不依賴任何其他程式碼，整個資料夾搬到哪裡都能用。
+
+## 啟動方式
+
+- **本機試用**：在這個資料夾裡 `npm start`（或 `python3 -m http.server 8000`），開 `http://localhost:8000/`。
+- **給店裡用（GitHub Pages）**：把這個資料夾放進自己的 repo，到 repo 的 Settings → Pages，
+  Source 選「Deploy from a branch」、分支選 main、資料夾選 `/ (root)`，一兩分鐘後就有網址
+  `https://<帳號>.github.io/<repo 名>/`。手機開這個網址，加到主畫面就像 App。
+- 目前暫時放在 `asaaaa` repo 的 `drink-shop/` 資料夾，網址是 `https://andy-zhang-22.github.io/asaaaa/drink-shop/`。
+
+## 測試
+
+`npm test`（Node 20 以上，不用裝任何套件）。`.github/workflows/test.yml` 會在每次推送時自動跑。
 
 ## 怎麼用
 
@@ -27,6 +38,6 @@
 ## 檔案
 
 - `js/menu.js`：預設菜單與價格（照店內價目表抄，含手寫的檸檬烏龍、青梅烏龍、鮮奶烏龍、百香果系列）。
-- `js/pricing.js`：計價與買5送1 的算法，純函式，`npm test` 會跑 `tests/drink-pricing.test.js` 驗證。
+- `js/pricing.js`：計價與買5送1 的算法，純函式，`tests/pricing.test.js` 驗證。
 - `js/store.js`：localStorage 存取、每日單號、備份還原。
 - `js/app.js`：畫面。

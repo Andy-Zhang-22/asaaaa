@@ -23,3 +23,7 @@ jobs:
 
       - name: 跑測試
         run: npm test
+
+      - name: 跑飲料店系統的測試（drink-shop/ 是獨立專案，只是暫放在這個 repo）
+        run: npm test
+        working-directory: drink-shop

@@ -1,0 +1,12 @@
+{
+  "name": "drink-shop",
+  "private": true,
+  "description": "紅茶洋行 飲料店點餐系統：純前端網頁，測試用 Node 內建的 test runner，不需要安裝任何套件。",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "start": "python3 -m http.server 8000"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
